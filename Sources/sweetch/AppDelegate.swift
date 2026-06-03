@@ -49,10 +49,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "unknown"
         log.info("convert hotkey received, frontmost=\(frontmost, privacy: .public)")
 
+        let userWasTyping = !buffer.isEmpty
+
         // Dispatch to background so the event-tap callback returns immediately and
         // WindowServer can process the user's modifier-release events.
         DispatchQueue.global(qos: .userInteractive).async { [weak self] in
-            let result = SelectionConverter.tryConvert()
+            let result = SelectionConverter.tryConvert(userWasTyping: userWasTyping)
 
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -60,7 +62,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 switch result {
                 case .converted:
                     self.buffer.clear(reason: "after selection convert")
-                case .noSelection:
+                case .noSelection, .autocompleteDismissed:
                     Replayer.convertLastWord(buffer: self.buffer)
                 }
             }

@@ -5,6 +5,11 @@ enum SelectionConverter {
     enum Result {
         case converted
         case noSelection
+        /// A selection exists but the user was just typing (keystroke buffer non-empty),
+        /// so it's almost certainly an inline-autocomplete artifact (e.g. Chrome omnibox
+        /// highlights its suggested completion). We dismissed it with one Backspace;
+        /// the caller should proceed with last-word conversion.
+        case autocompleteDismissed
     }
 
     /// Read selection via AX, write replacement by typing keys.
@@ -17,7 +22,7 @@ enum SelectionConverter {
     /// Must be called off the event-tap thread (the background dispatch in
     /// handleConvert): we wait for the user's hotkey modifiers to release using
     /// CGEventSource.flagsState, which is only live when the tap callback has returned.
-    static func tryConvert() -> Result {
+    static func tryConvert(userWasTyping: Bool) -> Result {
         guard let element = focusedElement() else {
             log.info("convert-selection: no focused element")
             return .noSelection
@@ -25,6 +30,17 @@ enum SelectionConverter {
         guard let selectedText = readAXSelectedText(element), !selectedText.isEmpty else {
             log.info("convert-selection: empty AX selection — falling back to last-word")
             return .noSelection
+        }
+
+        // Real selections are made with the mouse / Shift+arrows / Cmd+A — all of which
+        // clear the keystroke buffer. If the buffer still has content, the user was just
+        // typing and this "selection" is an inline-autocomplete highlight. Dismiss it.
+        if userWasTyping {
+            log.info("convert-selection: selection '\(selectedText, privacy: .public)' while typing — autocomplete artifact, dismissing")
+            waitForModifierRelease()
+            Replayer.postKeyPair(keyCode: 51, flags: [])  // Backspace removes the highlighted completion
+            usleep(30_000)
+            return .autocompleteDismissed
         }
 
         let (converted, targetIDs) = translate(selectedText)
