@@ -22,7 +22,7 @@ enum SelectionConverter {
     /// Must be called off the event-tap thread (the background dispatch in
     /// handleConvert): we wait for the user's hotkey modifiers to release using
     /// CGEventSource.flagsState, which is only live when the tap callback has returned.
-    static func tryConvert(userWasTyping: Bool) -> Result {
+    static func tryConvert(typedText: String) -> Result {
         guard let element = focusedElement() else {
             log.info("convert-selection: no focused element")
             return .noSelection
@@ -32,11 +32,14 @@ enum SelectionConverter {
             return .noSelection
         }
 
-        // Real selections are made with the mouse / Shift+arrows / Cmd+A — all of which
-        // clear the keystroke buffer. If the buffer still has content, the user was just
-        // typing and this "selection" is an inline-autocomplete highlight. Dismiss it.
-        if userWasTyping {
-            log.info("convert-selection: selection '\(selectedText, privacy: .public)' while typing — autocomplete artifact, dismissing")
+        // Distinguish a real selection from an inline-autocomplete highlight (Chrome's
+        // omnibox selects its suggested completion). The autocomplete tail is text the
+        // user did NOT type, so: if the keystroke buffer has content and the selection
+        // is not a substring of it, it's an autocomplete artifact — dismiss and let the
+        // caller convert the last typed word instead. A selection that matches what was
+        // just typed (e.g. made via Shift+Home) is real and gets converted as such.
+        if !typedText.isEmpty && !typedText.contains(selectedText) {
+            log.info("convert-selection: selection '\(selectedText, privacy: .public)' not part of typed text — autocomplete artifact, dismissing")
             waitForModifierRelease()
             Replayer.postKeyPair(keyCode: 51, flags: [])  // Backspace removes the highlighted completion
             usleep(30_000)

@@ -49,12 +49,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "unknown"
         log.info("convert hotkey received, frontmost=\(frontmost, privacy: .public)")
 
-        let userWasTyping = !buffer.isEmpty
+        let typedText = buffer.snapshot().map { $0.chars }.joined()
 
         // Dispatch to background so the event-tap callback returns immediately and
         // WindowServer can process the user's modifier-release events.
         DispatchQueue.global(qos: .userInteractive).async { [weak self] in
-            let result = SelectionConverter.tryConvert(userWasTyping: userWasTyping)
+            let result = SelectionConverter.tryConvert(typedText: typedText)
 
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -88,6 +88,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         case 123, 124, 125, 126:         // arrow keys
             buffer.clear(reason: "arrow keys")
+            return
+        case 115, 116, 119, 121:         // Home, PageUp, End, PageDown
+            buffer.clear(reason: "Home/End/Page keys")
             return
         default:
             break
