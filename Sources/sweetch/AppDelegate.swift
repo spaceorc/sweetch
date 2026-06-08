@@ -1,7 +1,8 @@
 import Cocoa
 import ApplicationServices
+import ServiceManagement
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem?
     private var eventTap: EventTapManager?
     private let buffer = KeystrokeBuffer()
@@ -10,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusItem()
         observeAppActivation()
+        enableLoginItemIfNeeded()
 
         guard ensureAccessibilityPermission() else {
             log.error("Accessibility permission not granted. Grant it in System Settings and relaunch.")
@@ -137,9 +139,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         image?.isTemplate = true
         item.button?.image = image
         let menu = NSMenu()
+        let loginItem = NSMenuItem(title: "Start at Login", action: #selector(toggleLoginItem), keyEquivalent: "")
+        loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        menu.addItem(loginItem)
+        menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit sweetch", action: #selector(quit), keyEquivalent: "q"))
+        menu.delegate = self
         item.menu = menu
         self.statusItem = item
+    }
+
+    /// Register as a login item on first run so the app survives a reboot. macOS shows
+    /// it in System Settings → General → Login Items, where the user can also turn it off.
+    private func enableLoginItemIfNeeded() {
+        let service = SMAppService.mainApp
+        guard service.status != .enabled else { return }
+        do {
+            try service.register()
+            log.info("registered as login item")
+        } catch {
+            log.error("login item register failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    @objc private func toggleLoginItem() {
+        let service = SMAppService.mainApp
+        do {
+            if service.status == .enabled {
+                try service.unregister()
+                log.info("unregistered login item")
+            } else {
+                try service.register()
+                log.info("registered login item")
+            }
+        } catch {
+            log.error("login item toggle failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     private func ensureAccessibilityPermission() -> Bool {
@@ -150,5 +185,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func quit() {
         NSApp.terminate(nil)
+    }
+
+    // Refresh the "Start at Login" checkmark when the menu opens, in case the user
+    // changed it from System Settings.
+    func menuWillOpen(_ menu: NSMenu) {
+        guard let item = menu.items.first(where: { $0.action == #selector(toggleLoginItem) }) else { return }
+        item.state = SMAppService.mainApp.status == .enabled ? .on : .off
     }
 }
