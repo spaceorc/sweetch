@@ -149,14 +149,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         self.statusItem = item
     }
 
-    /// Register as a login item on first run so the app survives a reboot. macOS shows
-    /// it in System Settings → General → Login Items, where the user can also turn it off.
+    /// Register as a login item once, on first launch only, so the app survives a reboot.
+    /// We must NOT re-register on every launch: that would override the user turning it off
+    /// (from the menu or System Settings → General → Login Items).
     private func enableLoginItemIfNeeded() {
+        let key = "didRegisterLoginItem"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
         let service = SMAppService.mainApp
-        guard service.status != .enabled else { return }
         do {
-            try service.register()
-            log.info("registered as login item")
+            if service.status != .enabled {
+                try service.register()
+            }
+            UserDefaults.standard.set(true, forKey: key)
+            log.info("registered as login item (first launch)")
         } catch {
             log.error("login item register failed: \(error.localizedDescription, privacy: .public)")
         }
