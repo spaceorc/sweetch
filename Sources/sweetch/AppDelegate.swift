@@ -7,6 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var eventTap: EventTapManager?
     private let buffer = KeystrokeBuffer()
     private var converting = false
+    private var llmCorrecting = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusItem()
@@ -20,13 +21,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         InputSourceSwitcher.dumpInstalled()
 
-        let switchHotkey  = Hotkey(keyCode: 49, flags: .maskCommand)    // Cmd+Space
-        let convertHotkey = Hotkey(keyCode: 49, flags: .maskAlternate)  // Option+Space
+        let switchHotkey  = Hotkey(keyCode: 49, flags: .maskCommand)                    // Cmd+Space
+        let convertHotkey = Hotkey(keyCode: 49, flags: .maskAlternate)                  // Option+Space
+        let llmHotkey     = Hotkey(keyCode: 49, flags: [.maskAlternate, .maskShift])    // Option+Shift+Space
 
         let manager = EventTapManager(
             bindings: [
                 HotkeyBinding(hotkey: switchHotkey)  { [weak self] in self?.handleSwitch() },
                 HotkeyBinding(hotkey: convertHotkey) { [weak self] in self?.handleConvert() },
+                HotkeyBinding(hotkey: llmHotkey)     { [weak self] in self?.handleLLMCorrect() },
             ],
             onKeyDown:   { [weak self] event in self?.handleKeyDown(event) },
             onMouseDown: { [weak self] in self?.buffer.clear(reason: "mouse click") }
@@ -69,6 +72,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
             }
         }
+    }
+
+    private func handleLLMCorrect() {
+        if llmCorrecting { return }
+        guard LLMClient.isConfigured else {
+            log.error("LLM correct: not configured (bundle sweetch.env missing or keyless)")
+            return
+        }
+        let snapshot = buffer.snapshot()
+        guard !snapshot.isEmpty else {
+            log.info("LLM correct: buffer empty, nothing to correct")
+            return
+        }
+        let original = snapshot.map { $0.chars }.joined()
+        let onScreenCount = original.count
+        let context = LLMCorrector.focusedFieldText()
+
+        llmCorrecting = true
+        setThinking(true)
+        log.info("LLM correct: requesting for '\(original, privacy: .public)'")
+
+        Task { [weak self] in
+            let corrected = await LLMCorrector.correct(text: original, context: context)
+
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                defer { self.llmCorrecting = false; self.setThinking(false) }
+
+                guard let corrected else { return }  // failure already logged
+                guard corrected != original else {
+                    log.info("LLM correct: already correct, no change")
+                    return
+                }
+                // Guard: the user may have kept typing while we waited on the network.
+                let now = self.buffer.snapshot().map { $0.chars }.joined()
+                guard now == original else {
+                    log.info("LLM correct: buffer changed during request, discarding")
+                    return
+                }
+                log.info("LLM correct: '\(original, privacy: .public)' -> '\(corrected, privacy: .public)'")
+                Replayer.waitForModifierRelease()
+                Replayer.replace(deleteCount: onScreenCount, with: corrected)
+                self.buffer.clear(reason: "after LLM correction")
+            }
+        }
+    }
+
+    /// Busy indicator in the menu bar while an LLM request is in flight.
+    private func setThinking(_ on: Bool) {
+        guard let button = statusItem?.button else { return }
+        let symbol = on ? "keyboard.badge.ellipsis" : "keyboard"
+        if let img = NSImage(systemSymbolName: symbol, accessibilityDescription: "sweetch") {
+            img.isTemplate = true
+            button.image = img
+        }
+        button.appearsDisabled = on
     }
 
     private func handleKeyDown(_ event: CGEvent) {

@@ -2,6 +2,7 @@
 .swiftpm/
 build/
 .cert/
+.env
 Package.resolved
 *.xcodeproj
 .DS_Store

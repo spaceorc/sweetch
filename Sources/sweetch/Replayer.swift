@@ -55,6 +55,35 @@ enum Replayer {
         postKey(keyCode: keyCode, flags: flags, down: false)
     }
 
+    /// Delete `count` characters, then type `text` literally. Used to replace a span
+    /// of already-typed text with an arbitrary Unicode string (LLM correction).
+    static func replace(deleteCount: Int, with text: String) {
+        for _ in 0..<deleteCount {
+            postKeyPair(keyCode: 51, flags: [])   // Backspace
+        }
+        usleep(20_000)
+        // Char-by-char (not one big string) — Chromium/Electron inputs are happier
+        // with discrete keystrokes; matches what selection-convert already does.
+        for ch in text {
+            postUnicodeString(String(ch))
+            usleep(1_000)
+        }
+    }
+
+    /// Wait (briefly) for the user's hotkey modifiers to lift before we synthesize keys.
+    /// CGEventSource.flagsState is live only off the event-tap thread — call from a
+    /// background queue / Task, never from the tap callback.
+    static func waitForModifierRelease(timeout: TimeInterval = 0.5) {
+        let interesting: CGEventFlags = [.maskAlternate, .maskCommand, .maskControl, .maskShift]
+        let start = Date()
+        while Date().timeIntervalSince(start) < timeout {
+            if CGEventSource.flagsState(.combinedSessionState).intersection(interesting).isEmpty {
+                return
+            }
+            usleep(5_000)
+        }
+    }
+
     /// Send a literal Unicode string as a synthesized keystroke. Used for chars that
     /// don't map to any key in the target layout (emojis, etc).
     static func postUnicodeString(_ s: String) {
