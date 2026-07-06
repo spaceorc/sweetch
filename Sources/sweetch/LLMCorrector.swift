@@ -5,18 +5,36 @@ import ApplicationServices
 /// on the whole current keystroke buffer, using the focused field's text as context.
 enum LLMCorrector {
     private static let systemPrompt = """
-    You are a keyboard text-correction engine for a Punto-Switcher-style utility. \
-    The user just typed some text that is either (a) meaningful text with maybe a few typos, or \
-    (b) gibberish produced by typing with the wrong keyboard layout — e.g. Russian typed on a US \
-    layout ("ghbdtn" → "привет") or English typed on a Russian layout ("руддщ" → "hello").
+    You are a keyboard text-correction engine for a Punto-Switcher-style utility. The user just \
+    typed text that is either (a) meaningful text in one language with maybe a few typos, or \
+    (b) gibberish from typing with the WRONG keyboard layout — Russian typed on a US layout \
+    ("ghbdtn" → "привет") or English typed on a Russian layout ("руддщ" → "hello").
 
-    You are given the RAW text and its LAYOUT-FLIPPED version (the raw text mapped deterministically \
-    through the other keyboard layout). Decide which one the user actually intended:
-    - If RAW is already a meaningful word/phrase, return RAW (fixing obvious typos only).
-    - If RAW is layout gibberish, return the LAYOUT-FLIPPED version (fixing obvious typos only).
+    You are given RAW (what the user typed) and FLIPPED (RAW mapped deterministically through the \
+    other keyboard layout). Do TWO things, in order:
 
-    Return ONLY the final intended text — no quotes, no explanation, no preamble. \
-    Preserve capitalization, punctuation and spacing.
+    1. Pick the intended language: if RAW is already meaningful in its own script, keep RAW's \
+       language; if RAW is layout gibberish, the intended text is FLIPPED.
+    2. Return clean, correctly-spelled text in that language. FIX ALL TYPOS. The user's original \
+       typos carry through the flip, so FLIPPED is often itself misspelled — you MUST correct it. \
+       Every word in your output must be a real, correctly-spelled word in the target language. \
+       Never output garbled or non-existent words.
+
+    Preserve capitalization, punctuation and meaning. Return ONLY the final text — no quotes, no \
+    explanation, no preamble. If the text is already fully correct, return it unchanged.
+
+    Examples:
+    RAW: ghbdtn
+    FLIPPED: привет
+    → привет
+
+    RAW: fgddbkmysq dfhbfyn
+    FLIPPED: апввильный вариант
+    → правильный вариант
+
+    RAW: helo wrold
+    FLIPPED: рудщ цкщдв
+    → hello world
     """
 
     /// Ask the model to correct `text`, giving it the deterministic layout-flip as a hint.
@@ -25,13 +43,13 @@ enum LLMCorrector {
         let flipped = LayoutTranslator.flip(text)
         log.info("LLM correct: flip hint '\(text, privacy: .public)' -> '\(flipped, privacy: .public)'")
         var user = """
-        RAW (what the user typed): \(text)
-        LAYOUT-FLIPPED (RAW mapped through the other keyboard layout): \(flipped)
+        RAW: \(text)
+        FLIPPED: \(flipped)
         """
         if let context, !context.isEmpty, context != text {
             user += "\n\nSurrounding field text (reference only, do NOT include it): \(String(context.prefix(1000)))"
         }
-        user += "\n\nReturn only the intended text."
+        user += "\n\n→ "
         do {
             let result = try await LLMClient.complete(system: systemPrompt, user: user)
             // The model (and our trimming) drops edge spaces; re-attach the original's
