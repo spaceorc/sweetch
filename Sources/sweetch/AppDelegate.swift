@@ -6,6 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem?
     private var eventTap: EventTapManager?
     private let buffer = KeystrokeBuffer()
+    private let loader = LoaderOverlay()
     private var converting = false
     private var llmCorrecting = false
 
@@ -119,8 +120,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// Busy indicator in the menu bar while an LLM request is in flight.
+    /// Busy indicator while an LLM request is in flight: centered HUD overlay + menu-bar dim.
     private func setThinking(_ on: Bool) {
+        if on { loader.show() } else { loader.hide() }
         guard let button = statusItem?.button else { return }
         let symbol = on ? "keyboard.badge.ellipsis" : "keyboard"
         if let img = NSImage(systemSymbolName: symbol, accessibilityDescription: "sweetch") {

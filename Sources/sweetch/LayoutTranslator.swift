@@ -28,6 +28,19 @@ enum LayoutTranslator {
         return (p2s, s2p)
     }
 
+    /// Flip a whole string through the other keyboard layout, char by char, picking the
+    /// direction by dominant script (latin→cyrillic, cyrillic→latin). Deterministic —
+    /// used as a strong hint for the LLM corrector so it doesn't have to transliterate blind.
+    static func flip(_ text: String) -> String {
+        let (p2s, s2p) = buildMaps()
+        let map: [Character: Character]
+        switch dominantScript(text) {
+        case .cyrillic: map = s2p
+        case .latin, .other: map = p2s
+        }
+        return String(text.map { map[$0] ?? $0 })
+    }
+
     static func dominantScript(_ s: String) -> Script {
         var latin = 0
         var cyrillic = 0

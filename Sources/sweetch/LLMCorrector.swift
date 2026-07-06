@@ -6,35 +6,50 @@ import ApplicationServices
 enum LLMCorrector {
     private static let systemPrompt = """
     You are a keyboard text-correction engine for a Punto-Switcher-style utility. \
-    The user just typed some text that may contain (a) ordinary typos, or (b) text typed in the \
-    wrong keyboard layout — e.g. Russian words typed on a US layout ("ghbdtn" → "привет") or \
-    English typed on a Russian layout ("руддщ" → "hello"). Return the text the user actually intended. \
-    Return ONLY the corrected text — no quotes, no explanations, no preamble, no trailing commentary. \
-    Preserve capitalization, punctuation, spacing and the user's language. \
-    If the text is already correct, return it unchanged.
+    The user just typed some text that is either (a) meaningful text with maybe a few typos, or \
+    (b) gibberish produced by typing with the wrong keyboard layout — e.g. Russian typed on a US \
+    layout ("ghbdtn" → "привет") or English typed on a Russian layout ("руддщ" → "hello").
+
+    You are given the RAW text and its LAYOUT-FLIPPED version (the raw text mapped deterministically \
+    through the other keyboard layout). Decide which one the user actually intended:
+    - If RAW is already a meaningful word/phrase, return RAW (fixing obvious typos only).
+    - If RAW is layout gibberish, return the LAYOUT-FLIPPED version (fixing obvious typos only).
+
+    Return ONLY the final intended text — no quotes, no explanation, no preamble. \
+    Preserve capitalization, punctuation and spacing.
     """
 
-    /// Ask the model to correct `text`. `context` (surrounding field text) is reference-only.
+    /// Ask the model to correct `text`, giving it the deterministic layout-flip as a hint.
+    /// `context` (surrounding field text) is reference-only.
     static func correct(text: String, context: String?) async -> String? {
-        let user: String
+        let flipped = LayoutTranslator.flip(text)
+        log.info("LLM correct: flip hint '\(text, privacy: .public)' -> '\(flipped, privacy: .public)'")
+        var user = """
+        RAW (what the user typed): \(text)
+        LAYOUT-FLIPPED (RAW mapped through the other keyboard layout): \(flipped)
+        """
         if let context, !context.isEmpty, context != text {
-            let trimmed = String(context.prefix(2000))
-            user = """
-            Surrounding text in the field (reference only — DO NOT include it in your answer):
-            \(trimmed)
-
-            Text to correct (output only this, corrected):
-            \(text)
-            """
-        } else {
-            user = text
+            user += "\n\nSurrounding field text (reference only, do NOT include it): \(String(context.prefix(1000)))"
         }
+        user += "\n\nReturn only the intended text."
         do {
-            return try await LLMClient.complete(system: systemPrompt, user: user)
+            let result = try await LLMClient.complete(system: systemPrompt, user: user)
+            // The model (and our trimming) drops edge spaces; re-attach the original's
+            // leading/trailing spaces so a separating space isn't swallowed ("there?cool").
+            return preservingEdgeSpaces(of: text, result)
         } catch {
             log.error("LLM correct failed: \(String(describing: error), privacy: .public)")
             return nil
         }
+    }
+
+    /// Force the corrected text to keep the original's leading/trailing spaces
+    /// (the buffer only ever contains the space char as whitespace).
+    private static func preservingEdgeSpaces(of original: String, _ corrected: String) -> String {
+        let lead = original.prefix { $0 == " " }
+        let trail = original.reversed().prefix { $0 == " " }
+        let core = corrected.trimmingCharacters(in: CharacterSet(charactersIn: " "))
+        return String(lead) + core + String(repeating: " ", count: trail.count)
     }
 
     /// Whole text of the currently focused element via Accessibility, for context.
