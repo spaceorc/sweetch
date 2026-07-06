@@ -15,50 +15,106 @@ enum LLMCorrector {
 
     1. Pick the intended language: if RAW is already meaningful in its own script, keep RAW's \
        language; if RAW is layout gibberish, the intended text is FLIPPED.
-    2. Return clean, correctly-spelled text in that language. FIX ALL TYPOS. The user's original \
+    2. Produce clean, correctly-spelled text in that language. FIX ALL TYPOS. The user's original \
        typos carry through the flip, so FLIPPED is often itself misspelled — you MUST correct it. \
-       Every word in your output must be a real, correctly-spelled word in the target language. \
-       Never output garbled or non-existent words.
+       Every word must be a real, correctly-spelled word in the target language.
 
-    Preserve capitalization, punctuation and meaning. Return ONLY the final text — no quotes, no \
-    explanation, no preamble. If the text is already fully correct, return it unchanged.
+    Reply with ONE JSON object and NOTHING else (no code fences, no text around it):
+    {"reasoning": "<terse tag, MAX 5 words>", "result": "<the corrected text>"}
+
+    "reasoning" MUST be at most 5 words — a terse tag, never a sentence, no analysis, no \
+    alternatives (e.g. "wrong-layout russian" or "already correct"). Do not think out loud; commit \
+    directly. "result" must contain ONLY the final corrected text, roughly the same length as the \
+    input, and nothing else. If the input is ambiguous or you are unsure, set "result" to the RAW \
+    input unchanged rather than guessing.
 
     Examples:
     RAW: ghbdtn
     FLIPPED: привет
-    → привет
+    {"reasoning": "latin gibberish → russian", "result": "привет"}
 
     RAW: fgddbkmysq dfhbfyn
     FLIPPED: апввильный вариант
-    → правильный вариант
+    {"reasoning": "wrong-layout russian, fix typos", "result": "правильный вариант"}
 
     RAW: helo wrold
     FLIPPED: рудщ цкщдв
-    → hello world
+    {"reasoning": "english with typos", "result": "hello world"}
+
+    RAW: сталда
+    FLIPPED: cnfklf
+    {"reasoning": "ambiguous, neither is clearly a word", "result": "сталда"}
+    """
+
+    private static let retryInstruction = """
+    Your reply was not a single valid JSON object. Reply again with ONLY this, nothing else:
+    {"reasoning": "...", "result": "..."}
     """
 
     /// Ask the model to correct `text`, giving it the deterministic layout-flip as a hint.
-    /// `context` (surrounding field text) is reference-only.
+    /// Uses a JSON {reasoning, result} response so the model's commentary goes into `reasoning`
+    /// and never into what we type. Retries once if the model doesn't return valid JSON.
     static func correct(text: String, context: String?) async -> String? {
         let flipped = LayoutTranslator.flip(text)
         log.info("LLM correct: flip hint '\(text, privacy: .public)' -> '\(flipped, privacy: .public)'")
-        var user = """
+
+        var firstUser = """
         RAW: \(text)
         FLIPPED: \(flipped)
         """
         if let context, !context.isEmpty, context != text {
-            user += "\n\nSurrounding field text (reference only, do NOT include it): \(String(context.prefix(1000)))"
+            firstUser += "\n\nSurrounding field text (reference only, do NOT include it): \(String(context.prefix(1000)))"
         }
-        user += "\n\n→ "
-        do {
-            let result = try await LLMClient.complete(system: systemPrompt, user: user)
-            // The model (and our trimming) drops edge spaces; re-attach the original's
-            // leading/trailing spaces so a separating space isn't swallowed ("there?cool").
-            return preservingEdgeSpaces(of: text, result)
-        } catch {
-            log.error("LLM correct failed: \(String(describing: error), privacy: .public)")
-            return nil
+
+        var convo: [[String: String]] = [["role": "user", "content": firstUser]]
+
+        for attempt in 0..<2 {
+            let raw: String
+            do {
+                raw = try await LLMClient.complete(system: systemPrompt + Persona.promptSection() + Glossary.promptSection(), messages: convo)
+            } catch {
+                log.error("LLM correct failed: \(String(describing: error), privacy: .public)")
+                return nil
+            }
+
+            if let result = parseResult(raw) {
+                guard isPlausibleCorrection(result, of: text) else {
+                    log.error("LLM correct: implausible result (len \(result.count, privacy: .public) vs \(text.count, privacy: .public)), discarding")
+                    return nil
+                }
+                return preservingEdgeSpaces(of: text, result)
+            }
+
+            // Malformed JSON — mini chat: show the model its bad reply, ask once more.
+            if attempt == 0 {
+                log.info("LLM correct: non-JSON reply, retrying once")
+                convo.append(["role": "assistant", "content": raw])
+                convo.append(["role": "user", "content": retryInstruction])
+            }
         }
+        log.error("LLM correct: still not valid JSON after retry, discarding")
+        return nil
+    }
+
+    /// Extract the "result" field from a JSON reply, tolerating surrounding text/code fences
+    /// by taking the outermost { … }. Logs "reasoning" for debugging.
+    private static func parseResult(_ raw: String) -> String? {
+        guard let start = raw.firstIndex(of: "{"),
+              let end = raw.lastIndex(of: "}"), start < end,
+              let data = String(raw[start...end]).data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let result = obj["result"] as? String else { return nil }
+        if let reasoning = obj["reasoning"] as? String {
+            log.info("LLM correct: reasoning='\(reasoning, privacy: .public)'")
+        }
+        return result
+    }
+
+    /// A real correction is about the same length as the input and doesn't invent newlines.
+    /// Anything much longer, or newline-bearing when the input had none, is model commentary.
+    private static func isPlausibleCorrection(_ result: String, of original: String) -> Bool {
+        if result.contains("\n") && !original.contains("\n") { return false }
+        return result.count <= original.count * 3 + 24
     }
 
     /// Force the corrected text to keep the original's leading/trailing spaces

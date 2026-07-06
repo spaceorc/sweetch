@@ -56,8 +56,9 @@ enum LLMClient {
 
     static var isConfigured: Bool { config != nil }
 
-    /// One-shot Messages API call. Returns the concatenated assistant text.
-    static func complete(system: String, user: String, maxTokens: Int = 2048) async throws -> String {
+    /// Messages API call. `messages` is a role/content conversation. Returns the
+    /// concatenated assistant text.
+    static func complete(system: String, messages: [[String: String]], maxTokens: Int = 600, model: String? = nil) async throws -> String {
         guard let config, let url = config.endpoint else { throw LLMError.notConfigured }
 
         var req = URLRequest(url: url)
@@ -68,10 +69,10 @@ enum LLMClient {
         req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
 
         let body: [String: Any] = [
-            "model": config.model,
+            "model": model ?? config.model,
             "max_tokens": maxTokens,
             "system": system,
-            "messages": [["role": "user", "content": user]],
+            "messages": messages,
         ]
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
 

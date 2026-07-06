@@ -7,7 +7,9 @@ struct Hotkey {
 
 struct HotkeyBinding {
     let hotkey: Hotkey
-    let action: () -> Void
+    /// Return true if the hotkey was handled (swallow the event), false to let it pass
+    /// through to the app (e.g. Cmd+Z when there's nothing of ours to undo).
+    let action: () -> Bool
 }
 
 enum EventTapError: Error {
@@ -157,8 +159,8 @@ final class EventTapManager {
             let flags = event.flags.intersection(relevantFlagsMask)
             for binding in bindings {
                 if keyCode == binding.hotkey.keyCode && flags == binding.hotkey.flags {
-                    binding.action()
-                    return nil
+                    // Swallow only if handled; otherwise let the app get the event.
+                    return binding.action() ? nil : Unmanaged.passUnretained(event)
                 }
             }
             onKeyDown(event)

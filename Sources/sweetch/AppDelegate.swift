@@ -9,6 +9,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let loader = LoaderOverlay()
     private var converting = false
     private var llmCorrecting = false
+    /// The last correction we applied (what we typed, and what was there before), for undo.
+    /// Valid only until the user's next keystroke / click / window switch.
+    private var lastCorrection: (typed: String, original: String)?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusItem()
@@ -28,12 +31,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         let manager = EventTapManager(
             bindings: [
-                HotkeyBinding(hotkey: switchHotkey)  { [weak self] in self?.handleSwitch() },
-                HotkeyBinding(hotkey: convertHotkey) { [weak self] in self?.handleConvert() },
-                HotkeyBinding(hotkey: llmHotkey)     { [weak self] in self?.handleLLMCorrect() },
+                HotkeyBinding(hotkey: switchHotkey)  { [weak self] in self?.handleSwitch(); return true },
+                HotkeyBinding(hotkey: convertHotkey) { [weak self] in self?.handleConvert(); return true },
+                HotkeyBinding(hotkey: llmHotkey)     { [weak self] in self?.handleLLMCorrect(); return true },
             ],
             onKeyDown:   { [weak self] event in self?.handleKeyDown(event) },
-            onMouseDown: { [weak self] in self?.buffer.clear(reason: "mouse click") }
+            onMouseDown: { [weak self] in self?.buffer.clear(reason: "mouse click"); self?.lastCorrection = nil }
         )
         do {
             try manager.start()
@@ -82,6 +85,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func handleLLMCorrect() {
         if llmCorrecting { return }
+
+        // Second press with nothing typed since the last correction = undo it (and learn that
+        // the user preferred their original wording — feeds the glossary).
+        if let lc = lastCorrection {
+            lastCorrection = nil
+            Glossary.noteRevert(fromOriginal: lc.original, corrected: lc.typed)
+            History.record(kind: "revert", original: lc.original, corrected: lc.typed,
+                           app: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
+            performRevert(lc)
+            return
+        }
+
         guard LLMClient.isConfigured else {
             log.error("LLM correct: not configured (bundle sweetch.env missing or keyless)")
             return
@@ -132,6 +147,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     // One Backspace deletes the whole selection, then type the correction.
                     Replayer.replace(deleteCount: 1, with: corrected)
                     self.activateLayout(for: corrected)
+                    self.lastCorrection = (typed: corrected, original: source)
+                    History.record(kind: "correct", original: source, corrected: corrected,
+                                   app: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
                     self.buffer.clear(reason: "after LLM selection correction")
 
                 case .buffer:
@@ -145,8 +163,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     Replayer.waitForModifierRelease()
                     Replayer.replace(deleteCount: source.count, with: corrected)
                     self.activateLayout(for: corrected)
+                    self.lastCorrection = (typed: corrected, original: source)
+                    History.record(kind: "correct", original: source, corrected: corrected,
+                                   app: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
                     self.buffer.clear(reason: "after LLM correction")
                 }
+            }
+        }
+    }
+
+    /// Undo the last correction: delete what we typed, restore the original, revert layout.
+    private func performRevert(_ lc: (typed: String, original: String)) {
+        log.info("revert: '\(lc.typed, privacy: .public)' -> '\(lc.original, privacy: .public)'")
+        // Off the tap thread: waitForModifierRelease needs live flagsState, and typing sleeps.
+        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
+            Replayer.waitForModifierRelease()
+            Replayer.replace(deleteCount: lc.typed.count, with: lc.original)
+            DispatchQueue.main.async {
+                self?.activateLayout(for: lc.original)
+                self?.buffer.clear(reason: "after revert")
             }
         }
     }
@@ -175,6 +210,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func handleKeyDown(_ event: CGEvent) {
+        // Any real keystroke ends the undo window (our own synthetic keys are filtered out
+        // by the tap before reaching here).
+        lastCorrection = nil
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
 
         // Editing/navigation keys → buffer is out of sync with the document, drop it.
@@ -233,6 +271,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             queue: .main
         ) { [weak self] _ in
             self?.buffer.clear(reason: "app activation")
+            self?.lastCorrection = nil
         }
     }
 
@@ -245,6 +284,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let loginItem = NSMenuItem(title: "Start at Login", action: #selector(toggleLoginItem), keyEquivalent: "")
         loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
         menu.addItem(loginItem)
+        menu.addItem(NSMenuItem.separator())
+        menu.addItem(NSMenuItem(title: "Edit Dictionary…", action: #selector(openDictionary), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Edit Persona…", action: #selector(openPersona), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Show History…", action: #selector(showHistory), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Refine Dictionary from History", action: #selector(refineDictionary), keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit sweetch", action: #selector(quit), keyEquivalent: "q"))
         menu.delegate = self
@@ -289,6 +333,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
         let options: CFDictionary = [key: true] as CFDictionary
         return AXIsProcessTrustedWithOptions(options)
+    }
+
+    @objc private func openDictionary() {
+        if !FileManager.default.fileExists(atPath: AppSupport.glossary.path) { Glossary.add([]) }
+        NSWorkspace.shared.open(AppSupport.glossary)
+    }
+
+    @objc private func openPersona() {
+        _ = Persona.text()   // creates the file with the default if missing
+        NSWorkspace.shared.open(AppSupport.persona)
+    }
+
+    @objc private func showHistory() {
+        let target = FileManager.default.fileExists(atPath: AppSupport.history.path) ? AppSupport.history : AppSupport.dir
+        NSWorkspace.shared.activateFileViewerSelecting([target])
+    }
+
+    @objc private func refineDictionary() {
+        setThinking(true)
+        Task { [weak self] in
+            let added = await Distiller.run()
+            await MainActor.run { [weak self] in
+                self?.setThinking(false)
+                log.info("distill: \(added, privacy: .public) new word(s) added")
+                if added > 0 { NSWorkspace.shared.open(AppSupport.glossary) }  // show the result
+            }
+        }
     }
 
     @objc private func quit() {
