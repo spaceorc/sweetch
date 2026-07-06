@@ -62,6 +62,16 @@ enum SelectionConverter {
         return .converted
     }
 
+    /// The current real selection text, or nil if there's no selection or it's an
+    /// inline-autocomplete artifact (same heuristic as tryConvert). Read-only — used by
+    /// the LLM corrector to decide between "correct the selection" and "correct the buffer".
+    static func currentSelection(typedText: String) -> String? {
+        guard let element = focusedElement(),
+              let sel = readAXSelectedText(element), !sel.isEmpty else { return nil }
+        if !typedText.isEmpty && !typedText.contains(sel) { return nil }  // autocomplete artifact
+        return sel
+    }
+
     private static func typeText(_ text: String, layoutIDs: [String]) {
         let reverseMap = LayoutTranslator.reverseKeyMap(forIDs: layoutIDs)
         for c in text {

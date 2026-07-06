@@ -75,48 +75,90 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    private enum LLMTarget {
+        case selection(String)      // correct the current AX selection
+        case buffer(String)         // correct the whole keystroke buffer
+    }
+
     private func handleLLMCorrect() {
         if llmCorrecting { return }
         guard LLMClient.isConfigured else {
             log.error("LLM correct: not configured (bundle sweetch.env missing or keyless)")
             return
         }
-        let snapshot = buffer.snapshot()
-        guard !snapshot.isEmpty else {
-            log.info("LLM correct: buffer empty, nothing to correct")
+
+        let typedText = buffer.snapshot().map { $0.chars }.joined()
+        let target: LLMTarget
+        if let selection = SelectionConverter.currentSelection(typedText: typedText) {
+            target = .selection(selection)
+        } else if !typedText.isEmpty {
+            target = .buffer(typedText)
+        } else {
+            log.info("LLM correct: nothing selected and buffer empty")
             return
         }
-        let original = snapshot.map { $0.chars }.joined()
-        let onScreenCount = original.count
+
+        let source: String = {
+            switch target { case .selection(let s), .buffer(let s): return s }
+        }()
         let context = LLMCorrector.focusedFieldText()
 
         llmCorrecting = true
         setThinking(true)
-        log.info("LLM correct: requesting for '\(original, privacy: .public)'")
+        log.info("LLM correct: requesting for '\(source, privacy: .public)'")
 
         Task { [weak self] in
-            let corrected = await LLMCorrector.correct(text: original, context: context)
+            let corrected = await LLMCorrector.correct(text: source, context: context)
 
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 defer { self.llmCorrecting = false; self.setThinking(false) }
 
                 guard let corrected else { return }  // failure already logged
-                guard corrected != original else {
+                guard corrected != source else {
                     log.info("LLM correct: already correct, no change")
                     return
                 }
-                // Guard: the user may have kept typing while we waited on the network.
-                let now = self.buffer.snapshot().map { $0.chars }.joined()
-                guard now == original else {
-                    log.info("LLM correct: buffer changed during request, discarding")
-                    return
+
+                switch target {
+                case .selection:
+                    // Confirm the selection is still what we corrected before clobbering it.
+                    guard SelectionConverter.currentSelection(typedText: "") == source else {
+                        log.info("LLM correct: selection changed during request, discarding")
+                        return
+                    }
+                    log.info("LLM correct (selection): '\(source, privacy: .public)' -> '\(corrected, privacy: .public)'")
+                    Replayer.waitForModifierRelease()
+                    // One Backspace deletes the whole selection, then type the correction.
+                    Replayer.replace(deleteCount: 1, with: corrected)
+                    self.activateLayout(for: corrected)
+                    self.buffer.clear(reason: "after LLM selection correction")
+
+                case .buffer:
+                    // The user may have kept typing while we waited on the network.
+                    let now = self.buffer.snapshot().map { $0.chars }.joined()
+                    guard now == source else {
+                        log.info("LLM correct: buffer changed during request, discarding")
+                        return
+                    }
+                    log.info("LLM correct (buffer): '\(source, privacy: .public)' -> '\(corrected, privacy: .public)'")
+                    Replayer.waitForModifierRelease()
+                    Replayer.replace(deleteCount: source.count, with: corrected)
+                    self.activateLayout(for: corrected)
+                    self.buffer.clear(reason: "after LLM correction")
                 }
-                log.info("LLM correct: '\(original, privacy: .public)' -> '\(corrected, privacy: .public)'")
-                Replayer.waitForModifierRelease()
-                Replayer.replace(deleteCount: onScreenCount, with: corrected)
-                self.buffer.clear(reason: "after LLM correction")
             }
+        }
+    }
+
+    /// After a correction, switch the active keyboard layout to match the corrected text's
+    /// script — so the user's next keystrokes go in the right layout. Detected deterministically
+    /// (no LLM needed); mixed text follows the majority; punctuation-only leaves layout as is.
+    private func activateLayout(for text: String) {
+        switch LayoutTranslator.dominantScript(text) {
+        case .latin:    InputSourceSwitcher.select(byIDs: InputSourceSwitcher.primaryIDs)
+        case .cyrillic: InputSourceSwitcher.select(byIDs: InputSourceSwitcher.secondaryIDs)
+        case .other:    break
         }
     }
 
