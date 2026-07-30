@@ -24,6 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         InputSourceSwitcher.dumpInstalled()
+        _ = LLMClient.isConfigured   // touch the lazy config so the provider line lands in the log
 
         let switchHotkey  = Hotkey(keyCode: 49, flags: .maskCommand)                    // Cmd+Space
         let convertHotkey = Hotkey(keyCode: 49, flags: .maskAlternate)                  // Option+Space

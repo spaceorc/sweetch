@@ -3,7 +3,7 @@ import Foundation
 /// Periodically distills the correction/revert history into glossary terms using a smarter
 /// model (Sonnet) than the per-keystroke corrector (Haiku). Run on demand from the menu.
 enum Distiller {
-    private static let model = "claude-sonnet-4-5-20250929"   // deployed on our Foundry
+    private static let model: LLMModel = .smart   // Sonnet — smarter than the corrector's Haiku
     private static let system = """
     You analyze a user's text-correction history from a Punto-Switcher-style tool. Each line is a \
     JSON event with kind "correct" (the tool changed the user's text) or "revert" (the user UNDID a \
