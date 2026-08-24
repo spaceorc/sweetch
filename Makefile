@@ -5,6 +5,11 @@ APP_BUNDLE = $(BUILD_DIR)/$(APP_NAME).app
 PLIST_SRC  = Sources/$(APP_NAME)/Info.plist
 
 SIGN_ID    = sweetch-dev
+OPENSSL    = openssl
+# OpenSSL 3 writes PKCS#12 with AES-256-CBC/PBKDF2, which Security.framework refuses
+# to import; -legacy restores the RC2/3DES encoding it understands. LibreSSL — what
+# /usr/bin/openssl is on macOS — already emits that format and rejects the flag.
+P12_LEGACY = $(shell $(OPENSSL) pkcs12 -help 2>&1 | grep -q -- -legacy && echo -legacy)
 CERT_DIR   = .cert
 CERT_KEY   = $(CERT_DIR)/$(SIGN_ID).key
 CERT_CRT   = $(CERT_DIR)/$(SIGN_ID).crt
@@ -34,9 +39,9 @@ setup-signing:
 			'keyUsage=critical,digitalSignature' \
 			'extendedKeyUsage=critical,codeSigning' \
 			'basicConstraints=critical,CA:FALSE' > $(CERT_CNF); \
-		openssl genrsa -out $(CERT_KEY) 2048 2>/dev/null; \
-		openssl req -new -x509 -days 3650 -key $(CERT_KEY) -out $(CERT_CRT) -config $(CERT_CNF) -extensions v3_req 2>/dev/null; \
-		openssl pkcs12 -export -legacy -out $(CERT_P12) -inkey $(CERT_KEY) -in $(CERT_CRT) -name $(SIGN_ID) -password pass:sweetch 2>/dev/null; \
+		$(OPENSSL) genrsa -out $(CERT_KEY) 2048 2>/dev/null; \
+		$(OPENSSL) req -new -x509 -days 3650 -key $(CERT_KEY) -out $(CERT_CRT) -config $(CERT_CNF) -extensions v3_req 2>/dev/null; \
+		$(OPENSSL) pkcs12 -export $(P12_LEGACY) -out $(CERT_P12) -inkey $(CERT_KEY) -in $(CERT_CRT) -name $(SIGN_ID) -password pass:sweetch; \
 		security import $(CERT_P12) -k $(HOME)/Library/Keychains/login.keychain-db -P sweetch -T /usr/bin/codesign; \
 		echo "done"; \
 	fi
