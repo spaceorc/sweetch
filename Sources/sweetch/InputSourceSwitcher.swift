@@ -4,7 +4,7 @@ import Cocoa
 enum InputSourceSwitcher {
     // Acceptable IDs for the two slots. Multiple IDs per slot tolerate naming variants
     // (e.g. US vs ABC for English). First installed match wins.
-    static let primaryIDs:   [String] = ["com.apple.keylayout.ABC", "com.apple.keylayout.US"]
+    static let primaryIDs:   [String] = ["com.apple.keylayout.ABC", "com.apple.keylayout.US", "com.apple.keylayout.British"]
     static let secondaryIDs: [String] = ["com.apple.keylayout.RussianWin"]
 
     static func select(byIDs ids: [String]) {
