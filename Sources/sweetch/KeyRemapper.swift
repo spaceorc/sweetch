@@ -39,7 +39,7 @@ final class KeyRemapper {
 
     /// Known action names, and what runs them. Set by the app at startup.
     var onAction: ((String) -> Void)?
-    static let actions = ["screenshot"]
+    static let actions = ["screenshot", "screenshot-full"]
 
     private var rules: [Rule] = []
     private var loadedStamp: Date?
@@ -123,8 +123,9 @@ final class KeyRemapper {
     #            forwarddelete, home, end, pageup, pagedown, left, right, up, down, menu,
     #            keypad0…keypad9 — or a raw virtual keycode: menu / key110 / 0x6e / 110.
     # Modifiers: cmd, shift, ctrl, opt — joined with '+'.
-    # The right side can also be a sweetch action instead of a key: @screenshot — capture a
-    # region and open it in the annotation editor.
+    # The right side can also be a sweetch action instead of a key:
+    #   @screenshot        select a region, then open it in the annotation editor
+    #   @screenshot-full   grab the whole screen with no selection step
     #
     # The left side matches exactly: `menu` fires only when no modifiers are held.
     # Windows keyboards: the context-menu key is `menu`; PrintScreen / ScrollLock / Pause
@@ -134,6 +135,8 @@ final class KeyRemapper {
 
     menu = shift+ctrl+opt+0
     f13 = @screenshot
+    ctrl+opt+cmd+s = @screenshot
+    ctrl+opt+cmd+f = @screenshot-full
 
     """
 

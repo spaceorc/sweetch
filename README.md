@@ -25,9 +25,11 @@ Runs as a menubar utility with no Dock icon.
   and reloaded whenever the status menu opens. **Detect Key…** in the menu reports
   the keycode of whatever you press next, so unlabelled keys are easy to find.
 
-- **Screenshot capture + annotation** — `@screenshot` in `remaps.txt` (bound to `f13`,
-  where a PC keyboard's PrintScreen lands) fires the native region crosshair, files the
-  result in `~/Pictures/sweetch/`, and opens it in a small editor.
+- **Screenshot capture + annotation** — two actions for `remaps.txt`: `@screenshot` fires
+  the native region crosshair, `@screenshot-full` grabs the whole screen the pointer is on
+  with no selection step. Either files the result in `~/Pictures/sweetch/` and opens it in
+  a small editor. The defaults bind `f13` (where a PC keyboard's PrintScreen lands) and
+  `⌃⌥⌘S` / `⌃⌥⌘F`, since Mac keyboards have no F13.
 
   Tools are `COPY | ARROW CROP` across the top. **ARROW** draws arrows — click one to pick
   it up, drag its ends to reshape it, Delete to remove it. **CROP** frames a region: drag

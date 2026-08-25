@@ -224,13 +224,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func runAction(_ name: String) {
         switch name {
-        case "screenshot": captureScreenshot()
-        default:           log.error("unknown action '\(name, privacy: .public)'")
+        case "screenshot":      capture(.region, after: 0)
+        case "screenshot-full": capture(.fullScreen, after: 0)
+        default:                log.error("unknown action '\(name, privacy: .public)'")
         }
     }
 
-    /// Native region capture straight into the screenshot library, then open the editor on it.
-    @objc private func captureScreenshot() {
+    private enum CaptureMode {
+        case region       // the native crosshair
+        case fullScreen   // whole screen, no selection step
+    }
+
+    @objc private func captureScreenshot()  { capture(.region, after: 0) }
+    /// From the menu, so the menu itself has time to come down before the shutter.
+    @objc private func captureFullScreen()  { capture(.fullScreen, after: 0.25) }
+
+    /// Capture into the screenshot library, then open the editor on the result.
+    private func capture(_ mode: CaptureMode, after delay: TimeInterval) {
         if capturing { return }
         capturing = true
         // Whoever is frontmost right now is where the user wants to paste afterwards.
@@ -238,12 +248,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let url = Screenshots.newFileURL()
 
         // screencapture blocks until the crosshair is done with — keep it off the main thread.
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let captured = ScreenCapture.interactiveRegion(to: url)
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + delay) { [weak self] in
+            let captured: Bool
+            switch mode {
+            case .region:     captured = ScreenCapture.interactiveRegion(to: url)
+            case .fullScreen: captured = ScreenCapture.fullScreen(to: url)
+            }
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.capturing = false
-                guard captured else { return }   // user pressed Escape; nothing was written
+                guard captured else { return }   // cancelled; nothing was written
                 log.info("captured \(url.lastPathComponent, privacy: .public)")
                 self.openEditor(for: url, previousApp: previousApp)
             }
@@ -472,6 +486,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(NSMenuItem(title: "Refine Dictionary from History", action: #selector(refineDictionary), keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "New Screenshot", action: #selector(captureScreenshot), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Capture Whole Screen", action: #selector(captureFullScreen), keyEquivalent: ""))
         let screenshots = NSMenuItem(title: "Screenshots", action: nil, keyEquivalent: "")
         screenshots.submenu = NSMenu()
         menu.addItem(screenshots)

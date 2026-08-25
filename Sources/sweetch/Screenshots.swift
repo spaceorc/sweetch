@@ -73,10 +73,31 @@ enum ScreenCapture {
     /// `url`. Blocks until the user finishes or cancels — call it off the main thread.
     /// Returns false if they cancelled; nothing is written in that case.
     static func interactiveRegion(to url: URL) -> Bool {
+        // -i interactive, -o no window shadow when grabbing a window, -x no shutter sound.
+        run(["-i", "-o", "-x", url.path], to: url)
+    }
+
+    /// The whole screen the pointer is on, with no selection step.
+    ///
+    /// Captured as an explicit region rather than with a bare `screencapture file.png`:
+    /// that form writes one file *per display* on a multi-monitor setup, which would leave
+    /// us guessing at the filename.
+    static func fullScreen(to url: URL) -> Bool {
+        let pointer = NSEvent.mouseLocation
+        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(pointer) }) ?? NSScreen.main,
+              let primary = NSScreen.screens.first else { return false }
+        let frame = screen.frame
+        // screencapture measures y down from the top of the primary display; AppKit measures
+        // up from its bottom.
+        let top = primary.frame.height - frame.maxY
+        let region = "\(Int(frame.minX)),\(Int(top)),\(Int(frame.width)),\(Int(frame.height))"
+        return run(["-x", "-R", region, url.path], to: url)
+    }
+
+    private static func run(_ arguments: [String], to url: URL) -> Bool {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-        // -i interactive, -o no window shadow when grabbing a window, -x no shutter sound.
-        task.arguments = ["-i", "-o", "-x", url.path]
+        task.arguments = arguments
         do {
             try task.run()
         } catch {
@@ -84,8 +105,9 @@ enum ScreenCapture {
             return false
         }
         task.waitUntilExit()
-        let captured = task.terminationStatus == 0 && FileManager.default.fileExists(atPath: url.path)
-        if !captured { log.info("screencapture: cancelled (status \(task.terminationStatus, privacy: .public))") }
+        // screencapture exits 0 even when the user cancels, so the file is the real signal.
+        let captured = FileManager.default.fileExists(atPath: url.path)
+        if !captured { log.info("screencapture: nothing captured (status \(task.terminationStatus, privacy: .public))") }
         return captured
     }
 }
