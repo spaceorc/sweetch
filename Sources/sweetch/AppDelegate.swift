@@ -33,6 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         remapper.onAction = { [weak self] name in self?.runAction(name) }
         InputSourceSwitcher.dumpInstalled()
+        LayoutTranslator.prewarm()   // build the layout maps on the main thread, once
         _ = LLMClient.isConfigured   // touch the lazy config so the provider line lands in the log
 
         let switchHotkey  = Hotkey(keyCode: 49, flags: .maskCommand)                    // Cmd+Space

@@ -8,23 +8,27 @@ enum InputSourceSwitcher {
     static let secondaryIDs: [String] = ["com.apple.keylayout.RussianWin"]
 
     static func select(byIDs ids: [String]) {
-        let sources = installedKeyboardSources()
-        guard let target = sources.first(where: { ids.contains(sourceID(of: $0)) }) else {
-            log.error("select(byIDs): no installed layout matches \(ids, privacy: .public)")
-            return
+        MainQueue.sync {
+            let sources = installedKeyboardSources()
+            guard let target = sources.first(where: { ids.contains(sourceID(of: $0)) }) else {
+                log.error("select(byIDs): no installed layout matches \(ids, privacy: .public)")
+                return
+            }
+            TISSelectInputSource(target)
         }
-        TISSelectInputSource(target)
     }
 
     static func toggle() {
-        let sources = installedKeyboardSources()
-        let currentID = currentSourceID()
-        let targetIDs = primaryIDs.contains(currentID) ? secondaryIDs : primaryIDs
-        guard let target = sources.first(where: { targetIDs.contains(sourceID(of: $0)) }) else {
-            log.error("no installed layout matches \(targetIDs, privacy: .public); current=\(currentID, privacy: .public)")
-            return
+        MainQueue.sync {
+            let sources = installedKeyboardSources()
+            let currentID = currentSourceID()
+            let targetIDs = primaryIDs.contains(currentID) ? secondaryIDs : primaryIDs
+            guard let target = sources.first(where: { targetIDs.contains(sourceID(of: $0)) }) else {
+                log.error("no installed layout matches \(targetIDs, privacy: .public); current=\(currentID, privacy: .public)")
+                return
+            }
+            TISSelectInputSource(target)
         }
-        TISSelectInputSource(target)
     }
 
     static func dumpInstalled() {
@@ -33,6 +37,7 @@ enum InputSourceSwitcher {
         }
     }
 
+    /// Callers hold the main queue already — see MainQueue.
     private static func installedKeyboardSources() -> [TISInputSource] {
         guard let cfList = TISCreateInputSourceList(nil, false)?.takeRetainedValue() else { return [] }
         guard let sources = cfList as? [TISInputSource] else { return [] }
@@ -47,8 +52,10 @@ enum InputSourceSwitcher {
     }
 
     static func currentSourceID() -> String {
-        let current = TISCopyCurrentKeyboardInputSource().takeRetainedValue()
-        return sourceID(of: current)
+        MainQueue.sync {
+            let current = TISCopyCurrentKeyboardInputSource().takeRetainedValue()
+            return sourceID(of: current)
+        }
     }
 
     private static func sourceID(of source: TISInputSource) -> String {

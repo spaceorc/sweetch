@@ -4,11 +4,49 @@ import Carbon
 enum LayoutTranslator {
     enum Script { case latin, cyrillic, other }
 
+    typealias Maps = (primaryToSecondary: [Character: Character], secondaryToPrimary: [Character: Character])
+
+    // Building a map runs UCKeyTranslate 256 times per layout, and it only changes when the
+    // user adds or removes an input source — so it's built once and kept. The cache also
+    // keeps the hot convert path off the main queue entirely.
+    private static let cacheLock = NSLock()
+    private static var cachedMaps: Maps?
+    private static var cachedReverse: [String: [Character: (keyCode: CGKeyCode, shift: Bool)]] = [:]
+
+    /// Build the caches ahead of time, on the main thread, at startup.
+    static func prewarm() {
+        _ = buildMaps()
+        _ = reverseKeyMap(forIDs: InputSourceSwitcher.primaryIDs)
+        _ = reverseKeyMap(forIDs: InputSourceSwitcher.secondaryIDs)
+        DistributedNotificationCenter.default().addObserver(
+            forName: NSNotification.Name(kTISNotifyEnabledKeyboardInputSourcesChanged as String),
+            object: nil, queue: .main
+        ) { _ in
+            cacheLock.lock()
+            cachedMaps = nil
+            cachedReverse.removeAll()
+            cacheLock.unlock()
+            log.info("layout maps invalidated: installed input sources changed")
+        }
+    }
+
     /// Char↔char maps between primary and secondary layouts. Built dynamically via
     /// UCKeyTranslate so that it works with whatever layouts are configured in
     /// InputSourceSwitcher, not just ABC/RussianWin.
-    static func buildMaps() -> (primaryToSecondary: [Character: Character],
-                                secondaryToPrimary: [Character: Character]) {
+    static func buildMaps() -> Maps {
+        cacheLock.lock()
+        let cached = cachedMaps
+        cacheLock.unlock()
+        if let cached { return cached }
+
+        let built = MainQueue.sync { computeMaps() }
+        cacheLock.lock()
+        cachedMaps = built
+        cacheLock.unlock()
+        return built
+    }
+
+    private static func computeMaps() -> Maps {
         guard let primary = findSource(ids: InputSourceSwitcher.primaryIDs),
               let secondary = findSource(ids: InputSourceSwitcher.secondaryIDs) else {
             log.error("buildMaps: missing primary or secondary input source")
@@ -59,15 +97,27 @@ enum LayoutTranslator {
     /// need to *type* a char in that layout (Electron apps don't update on AXSet, so we
     /// have to physically synthesize each keystroke).
     static func reverseKeyMap(forIDs ids: [String]) -> [Character: (keyCode: CGKeyCode, shift: Bool)] {
-        guard let source = findSource(ids: ids) else { return [:] }
-        let kcMap = keyCodeToChar(source: source)
-        var result: [Character: (CGKeyCode, Bool)] = [:]
-        for (key, c) in kcMap {
-            if result[c] == nil {
-                result[c] = (CGKeyCode(key & 0xFF), (key & 0x100) != 0)
+        let cacheKey = ids.joined(separator: "|")
+        cacheLock.lock()
+        let cached = cachedReverse[cacheKey]
+        cacheLock.unlock()
+        if let cached { return cached }
+
+        let built: [Character: (keyCode: CGKeyCode, shift: Bool)] = MainQueue.sync {
+            guard let source = findSource(ids: ids) else { return [:] }
+            let kcMap = keyCodeToChar(source: source)
+            var result: [Character: (keyCode: CGKeyCode, shift: Bool)] = [:]
+            for (key, c) in kcMap {
+                if result[c] == nil {
+                    result[c] = (CGKeyCode(key & 0xFF), (key & 0x100) != 0)
+                }
             }
+            return result
         }
-        return result
+        cacheLock.lock()
+        cachedReverse[cacheKey] = built
+        cacheLock.unlock()
+        return built
     }
 
     private static func keyCodeToChar(source: TISInputSource) -> [Int: Character] {
@@ -107,6 +157,7 @@ enum LayoutTranslator {
         return result
     }
 
+    /// Callers hold the main queue already — see MainQueue.
     private static func findSource(ids: [String]) -> TISInputSource? {
         guard let cfList = TISCreateInputSourceList(nil, false)?.takeRetainedValue() else { return nil }
         guard let sources = cfList as? [TISInputSource] else { return nil }
