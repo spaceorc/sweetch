@@ -17,6 +17,14 @@ Runs as a menubar utility with no Dock icon.
     recent keystrokes — backspaces it, switches layout, replays the keyCodes.
     A second press toggles back.
 
+- **Key remapping** — a Karabiner-shaped layer for keys macOS has no use for.
+  A PC keyboard's context-menu key arrives as a plain keycode 110 that nothing is
+  bound to; `menu = shift+ctrl+opt+0` in `remaps.txt` turns it into a hotkey you can
+  bind anywhere. Rules are read from
+  `~/Library/Application Support/sweetch/remaps.txt` (menu → **Edit Key Remaps…**)
+  and reloaded whenever the status menu opens. **Detect Key…** in the menu reports
+  the keycode of whatever you press next, so unlabelled keys are easy to find.
+
 ## Requirements
 
 - macOS 13+
@@ -56,6 +64,7 @@ Hotkeys and layout choices are currently constants in source — edit and rebuil
 | Convert hotkey | `AppDelegate.swift` — `convertHotkey` |
 | Layout IDs | `InputSourceSwitcher.swift` — `primaryIDs`, `secondaryIDs` |
 | Buffer invalidation rules | `AppDelegate.handleKeyDown` |
+| Key remaps | `~/Library/Application Support/sweetch/remaps.txt` (no rebuild) |
 
 To discover input source IDs installed on your machine, watch the log on
 startup — sweetch dumps every keyboard source it sees:
@@ -89,6 +98,11 @@ A few non-obvious decisions worth knowing if you go reading the code:
   `CGEventSource.flagsState` lies while the tap callback is blocked — the
   hotkey-release wait can only see clean modifier state once the callback
   has returned.
+- The remap layer runs **before** the hotkey bindings and sees key *up* events too —
+  swallowing only the down half would leave apps with a release for a press they never
+  got. Its synthetic output carries the same marker as every other event we post, so it
+  passes straight back through the tap (a remap therefore can't trigger sweetch's own
+  hotkeys — remap to something else and bind that).
 - Synthesized events are tagged with a marker in `eventSourceUserData`
   (ASCII `"sweetch\0"`) so the tap can recognise and pass through its own
   events without re-processing them.

@@ -20,6 +20,7 @@ private let relevantFlagsMask: CGEventFlags = [.maskCommand, .maskShift, .maskAl
 
 final class EventTapManager {
     private let bindings: [HotkeyBinding]
+    private let onRawKey: (Int64, CGEventFlags, Bool) -> Bool
     private let onKeyDown: (CGEvent) -> Void
     private let onMouseDown: () -> Void
     private var tap: CFMachPort?
@@ -35,10 +36,15 @@ final class EventTapManager {
     private var probeAcked = true
     private var probeSource = CGEventSource(stateID: .privateState)
 
+    /// `onRawKey` sees every real key event (down *and* up) before the hotkey bindings do,
+    /// and returns true to swallow it — that's the remap layer, which sits below our own
+    /// hotkeys just like Karabiner sits below everything.
     init(bindings: [HotkeyBinding],
+         onRawKey: @escaping (Int64, CGEventFlags, Bool) -> Bool,
          onKeyDown: @escaping (CGEvent) -> Void,
          onMouseDown: @escaping () -> Void) {
         self.bindings = bindings
+        self.onRawKey = onRawKey
         self.onKeyDown = onKeyDown
         self.onMouseDown = onMouseDown
     }
@@ -61,6 +67,7 @@ final class EventTapManager {
 
         let mask = (1 << CGEventType.null.rawValue)
                  | (1 << CGEventType.keyDown.rawValue)
+                 | (1 << CGEventType.keyUp.rawValue)
                  | (1 << CGEventType.leftMouseDown.rawValue)
                  | (1 << CGEventType.rightMouseDown.rawValue)
                  | (1 << CGEventType.otherMouseDown.rawValue)
@@ -154,9 +161,11 @@ final class EventTapManager {
         case .leftMouseDown, .rightMouseDown, .otherMouseDown:
             onMouseDown()
             return Unmanaged.passUnretained(event)
-        case .keyDown:
+        case .keyDown, .keyUp:
             let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
             let flags = event.flags.intersection(relevantFlagsMask)
+            if onRawKey(keyCode, flags, type == .keyDown) { return nil }
+            guard type == .keyDown else { return Unmanaged.passUnretained(event) }
             for binding in bindings {
                 if keyCode == binding.hotkey.keyCode && flags == binding.hotkey.flags {
                     // Swallow only if handled; otherwise let the app get the event.

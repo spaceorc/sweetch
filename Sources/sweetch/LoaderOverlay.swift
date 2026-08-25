@@ -7,12 +7,16 @@ import Cocoa
 final class LoaderOverlay {
     private var panel: NSPanel?
     private var spinner: NSProgressIndicator?
+    private var caption: NSTextField?
 
-    func show() {
+    /// `spinning: false` turns the HUD into a plain prompt (used by "Detect Key…").
+    func show(caption text: String = "correcting…", spinning: Bool = true) {
         let panel = self.panel ?? makePanel()
         self.panel = panel
         reposition(panel)
-        spinner?.startAnimation(nil)
+        caption?.stringValue = text
+        spinner?.isHidden = !spinning
+        if spinning { spinner?.startAnimation(nil) } else { spinner?.stopAnimation(nil) }
         panel.alphaValue = 0
         panel.orderFrontRegardless()          // show WITHOUT activating our app
         NSAnimationContext.runAnimationGroup { ctx in
@@ -85,6 +89,7 @@ final class LoaderOverlay {
 
         // Caption.
         let label = NSTextField(labelWithString: "correcting…")
+        self.caption = label
         label.font = .systemFont(ofSize: 13, weight: .medium)
         label.textColor = .secondaryLabelColor
         label.alignment = .center

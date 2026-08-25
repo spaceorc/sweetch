@@ -12,4 +12,5 @@ enum AppSupport {
     static var glossary: URL { dir.appendingPathComponent("glossary.txt") }
     static var persona: URL  { dir.appendingPathComponent("persona.txt") }
     static var history: URL  { dir.appendingPathComponent("history.jsonl") }
+    static var remaps: URL   { dir.appendingPathComponent("remaps.txt") }
 }

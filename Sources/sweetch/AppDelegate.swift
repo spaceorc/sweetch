@@ -6,12 +6,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem?
     private var eventTap: EventTapManager?
     private let buffer = KeystrokeBuffer()
+    private let remapper = KeyRemapper()
     private let loader = LoaderOverlay()
     private var converting = false
     private var llmCorrecting = false
     /// The last correction we applied (what we typed, and what was there before), for undo.
     /// Valid only until the user's next keystroke / click / window switch.
     private var lastCorrection: (typed: String, original: String)?
+    /// "Detect Key…" is armed: the next key press is captured and reported instead of
+    /// reaching the app underneath.
+    private var detectingKey = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusItem()
@@ -36,6 +40,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 HotkeyBinding(hotkey: convertHotkey) { [weak self] in self?.handleConvert(); return true },
                 HotkeyBinding(hotkey: llmHotkey)     { [weak self] in self?.handleLLMCorrect(); return true },
             ],
+            onRawKey:    { [weak self] keyCode, flags, isDown in
+                self?.handleRawKey(keyCode: keyCode, flags: flags, isDown: isDown) ?? false
+            },
             onKeyDown:   { [weak self] event in self?.handleKeyDown(event) },
             onMouseDown: { [weak self] in self?.buffer.clear(reason: "mouse click"); self?.lastCorrection = nil }
         )
@@ -210,6 +217,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         button.appearsDisabled = on
     }
 
+    /// Runs for every real key event, down and up, ahead of our own hotkeys. Returns true
+    /// to swallow the event: either "Detect Key…" grabbed it, or a remap rule fired.
+    private func handleRawKey(keyCode: Int64, flags: CGEventFlags, isDown: Bool) -> Bool {
+        if detectingKey {
+            if isDown { reportDetectedKey(keyCode: keyCode, flags: flags) }
+            return true   // swallow both halves of the press so it doesn't leak into the app
+        }
+        guard remapper.handle(keyCode: keyCode, flags: flags, isDown: isDown) else { return false }
+        if isDown {
+            // The synthetic combo is a shortcut for some other app — same reasoning as any
+            // Cmd/Ctrl keystroke, the buffer no longer tracks the document.
+            buffer.clear(reason: "remapped key")
+            lastCorrection = nil
+        }
+        return true
+    }
+
+    /// Arm the key detector: the next key press is reported (and eaten) rather than typed.
+    @objc private func detectKey() {
+        guard !detectingKey else { return }
+        detectingKey = true
+        loader.show(caption: "press a key…", spinning: false)
+    }
+
+    private func reportDetectedKey(keyCode: Int64, flags: CGEventFlags) {
+        detectingKey = false
+        let spec = KeyNames.describe(keyCode: keyCode, flags: flags)
+        log.info("detect key: \(spec, privacy: .public) (keyCode=\(keyCode, privacy: .public))")
+        // Off the tap callback — an alert would otherwise run a modal loop inside it.
+        DispatchQueue.main.async { [weak self] in
+            self?.loader.hide()
+            NSApp.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            alert.messageText = spec
+            alert.informativeText = """
+                Virtual keycode \(keyCode).
+
+                Add a line like this to remaps.txt to rebind it:
+
+                    \(spec) = shift+ctrl+opt+0
+                """
+            alert.addButton(withTitle: "Copy Rule")
+            alert.addButton(withTitle: "Done")
+            if alert.runModal() == .alertFirstButtonReturn {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString("\(spec) = shift+ctrl+opt+0", forType: .string)
+            }
+        }
+    }
+
     private func handleKeyDown(_ event: CGEvent) {
         // Any real keystroke ends the undo window (our own synthetic keys are filtered out
         // by the tap before reaching here).
@@ -291,6 +348,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(NSMenuItem(title: "Show History…", action: #selector(showHistory), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Refine Dictionary from History", action: #selector(refineDictionary), keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
+        menu.addItem(NSMenuItem(title: "Edit Key Remaps…", action: #selector(openRemaps), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Detect Key…", action: #selector(detectKey), keyEquivalent: ""))
+        menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit sweetch", action: #selector(quit), keyEquivalent: "q"))
         menu.delegate = self
         item.menu = menu
@@ -341,6 +401,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSWorkspace.shared.open(AppSupport.glossary)
     }
 
+    @objc private func openRemaps() {
+        remapper.reload()   // creates the file with the default rules if it's missing
+        NSWorkspace.shared.open(AppSupport.remaps)
+    }
+
     @objc private func openPersona() {
         _ = Persona.text()   // creates the file with the default if missing
         NSWorkspace.shared.open(AppSupport.persona)
@@ -370,6 +435,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // Refresh the "Start at Login" checkmark when the menu opens, in case the user
     // changed it from System Settings.
     func menuWillOpen(_ menu: NSMenu) {
+        remapper.reloadIfChanged()   // pick up edits to remaps.txt without a restart
         guard let item = menu.items.first(where: { $0.action == #selector(toggleLoginItem) }) else { return }
         item.state = SMAppService.mainApp.status == .enabled ? .on : .off
     }
