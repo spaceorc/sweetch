@@ -50,6 +50,15 @@ Runs as a menubar utility with no Dock icon.
   While an editor window is open sweetch becomes a regular app — Dock icon, ⌘-Tab, a Window
   menu — and slips back into the menu bar when the last one closes.
 
+- **Crash watchdog** — menu → **Restart on Crash** installs a launchd agent that owns
+  sweetch's lifecycle: it starts at login and brings the app back if it dies abnormally
+  (quitting from the menu is a clean exit and stays quit). A menu-bar app that crashes just
+  vanishes — there's no window to notice missing — so on the next start sweetch also looks
+  for the system crash report, keeps a copy plus a plain-text summary in
+  `~/Library/Application Support/sweetch/crashes/`, and puts a ⚠︎ item at the top of the
+  menu pointing at it. Being killed (`pkill`, force quit) produces no report and is not
+  treated as a crash.
+
 ## Requirements
 
 - macOS 13+
@@ -139,6 +148,16 @@ A few non-obvious decisions worth knowing if you go reading the code:
   overlay: it's the same crosshair the system uses, and the process exiting is a reliable
   "done or cancelled" signal. Note it exits 0 even on cancel, so the caller also checks that
   a file actually appeared.
+- Carbon's Text Input Sources API is **main-queue-only**: HIToolbox runs
+  `dispatch_assert_queue` inside `TISCreateInputSourceList` and traps the process when it's
+  called anywhere else. It doesn't fire every time — a cached list is served from any thread
+  — so an off-main call can work for months and then kill the app. Everything funnels
+  through `MainQueue.sync`, and the layout maps are built once at startup and cached.
+- The watchdog agent installs by *handing over*: launchd only supervises processes it
+  started, so bootstrapping the job spawns a fresh copy which asks the running one to quit
+  (newest instance wins). While it's installed, `pkill` is the wrong way to restart the app
+  — launchd will race you and bring the old binary back. Use
+  `launchctl kickstart -k gui/$(id -u)/com.spaceorc.sweetch.watchdog`.
 - Synthesized events are tagged with a marker in `eventSourceUserData`
   (ASCII `"sweetch\0"`) so the tap can recognise and pass through its own
   events without re-processing them.

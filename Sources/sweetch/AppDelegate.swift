@@ -19,8 +19,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Open annotation windows, kept alive here — an accessory app has no document controller.
     private var editors: [ScreenshotEditor] = []
     private var capturing = false
+    /// Summary of a crash the previous run died from, until the user opens it.
+    private var pendingCrashReport: URL?
+    private var crashItem: NSMenuItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Newest instance wins. The watchdog hands over by starting a fresh copy, and this
+        // is also what keeps a stray double-launch from leaving two event taps fighting.
+        let handover = terminateOtherInstances()
+        // During a handover the outgoing instance is alive and well, so there's nothing to
+        // diagnose — only check for a crash when we're starting from nothing.
+        if handover {
+            CrashWatch.markLaunch()
+        } else {
+            CrashWatch.checkPreviousRun { [weak self] report in self?.noteCrashReport(report) }
+        }
+
         setupMainMenu()
         setupStatusItem()
         observeAppActivation()
@@ -57,6 +71,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.eventTap = manager
         } catch {
             log.error("failed to start event tap: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    @discardableResult
+    private func terminateOtherInstances() -> Bool {
+        guard let bundleID = Bundle.main.bundleIdentifier else { return false }
+        let mine = ProcessInfo.processInfo.processIdentifier
+        let others = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+            .filter { $0.processIdentifier != mine }
+        for other in others {
+            log.info("another instance is running (pid \(other.processIdentifier, privacy: .public)) — asking it to quit")
+            other.terminate()
+        }
+        return !others.isEmpty
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        CrashWatch.markCleanExit()
+    }
+
+    /// A crash report showed up for the previous run — say so where it can be seen.
+    private func noteCrashReport(_ report: URL) {
+        pendingCrashReport = report
+        crashItem?.isHidden = false
+        crashItem?.title = "⚠︎ Crashed last run — Show Report"
+        refreshStatusIcon()
+        log.error("crash report ready: \(report.path, privacy: .public)")
+    }
+
+    @objc private func showCrashReport() {
+        guard let report = pendingCrashReport else {
+            NSWorkspace.shared.activateFileViewerSelecting([CrashWatch.dir])
+            return
+        }
+        NSWorkspace.shared.open(report)
+        pendingCrashReport = nil     // seen; stop shouting about it
+        crashItem?.isHidden = true
+        refreshStatusIcon()
+    }
+
+    @objc private func toggleWatchdog() {
+        if Watchdog.isInstalled {
+            Watchdog.uninstall()
+        } else {
+            // Installing spawns a supervised copy, which will ask this one to quit.
+            Watchdog.install()
         }
     }
 
@@ -215,10 +275,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func setThinking(_ on: Bool) {
         if on { loader.show() } else { loader.hide() }
         guard let button = statusItem?.button else { return }
-        let symbol = on ? "keyboard.badge.ellipsis" : "keyboard"
-        if let img = NSImage(systemSymbolName: symbol, accessibilityDescription: "sweetch") {
+        if on, let img = NSImage(systemSymbolName: "keyboard.badge.ellipsis", accessibilityDescription: "sweetch") {
             img.isTemplate = true
             button.image = img
+        } else if !on {
+            refreshStatusIcon()
         }
         button.appearsDisabled = on
     }
@@ -473,13 +534,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func setupStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        let image = NSImage(systemSymbolName: "keyboard", accessibilityDescription: "sweetch")
-        image?.isTemplate = true
-        item.button?.image = image
+        self.statusItem = item
+        refreshStatusIcon()
         let menu = NSMenu()
+        // Built up front and hidden: the report often lands a beat after launch.
+        let crash = NSMenuItem(title: "⚠︎ Crashed last run — Show Report",
+                               action: #selector(showCrashReport), keyEquivalent: "")
+        crash.isHidden = true
+        menu.addItem(crash)
+        crashItem = crash
         let loginItem = NSMenuItem(title: "Start at Login", action: #selector(toggleLoginItem), keyEquivalent: "")
         loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
         menu.addItem(loginItem)
+        let watchdogItem = NSMenuItem(title: "Restart on Crash", action: #selector(toggleWatchdog), keyEquivalent: "")
+        watchdogItem.state = Watchdog.isInstalled ? .on : .off
+        watchdogItem.toolTip = "Run under a launchd agent that starts sweetch at login and brings it back if it dies"
+        menu.addItem(watchdogItem)
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Edit Dictionary…", action: #selector(openDictionary), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Edit Persona…", action: #selector(openPersona), keyEquivalent: ""))
@@ -498,7 +568,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(NSMenuItem(title: "Quit sweetch", action: #selector(quit), keyEquivalent: "q"))
         menu.delegate = self
         item.menu = menu
-        self.statusItem = item
+    }
+
+    /// The menu bar is the only place a crash can be reported — there's no window to notice.
+    private func refreshStatusIcon() {
+        let symbol = pendingCrashReport != nil ? "exclamationmark.triangle" : "keyboard"
+        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "sweetch")
+        image?.isTemplate = true
+        statusItem?.button?.image = image
     }
 
     /// Register as a login item once, on first launch only, so the app survives a reboot.
@@ -580,6 +657,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // changed it from System Settings.
     func menuWillOpen(_ menu: NSMenu) {
         remapper.reloadIfChanged()   // pick up edits to remaps.txt without a restart
+        if let item = menu.items.first(where: { $0.action == #selector(toggleWatchdog) }) {
+            item.state = Watchdog.isInstalled ? .on : .off
+        }
         if let submenu = menu.items.first(where: { $0.title == "Screenshots" })?.submenu {
             refreshScreenshotsMenu(submenu)
         }
