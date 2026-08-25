@@ -134,9 +134,11 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate {
 
         let arrow = mainButton("ARROW", tinted: false, action: #selector(pickArrow))
         arrow.toolTip = "Draw arrows; click one to move it or drag its ends"
+        let pencil = mainButton("PENCIL", tinted: false, action: #selector(pickPencil))
+        pencil.toolTip = "Draw freehand — underline or circle something"
         let crop = mainButton("CROP", tinted: false, action: #selector(pickCrop))
         crop.toolTip = "Drag out a crop frame — or click for a default one"
-        modeButtons = [(arrow, .arrow), (crop, .crop)]
+        modeButtons = [(arrow, .arrow), (pencil, .pencil), (crop, .crop)]
 
         applyButton = mainButton("APPLY", tinted: true, action: #selector(applyCrop))
         applyButton.toolTip = "Crop to the frame (⏎)"
@@ -147,7 +149,7 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate {
         redoButton = iconButton("arrow.uturn.forward", "Redo (⇧⌘Z)", #selector(redo))
         let open = iconButton("folder", "Open an image… (⌘O)", #selector(openFile))
 
-        let left = NSStackView(views: [copy, separator(), arrow, crop, applyButton, cancelButton])
+        let left = NSStackView(views: [copy, separator(), arrow, pencil, crop, applyButton, cancelButton])
         left.orientation = .horizontal
         left.spacing = 8
 
@@ -213,7 +215,8 @@ final class ScreenshotEditor: NSObject, NSWindowDelegate {
 
     // MARK: - Actions
 
-    @objc private func pickArrow() { canvas.mode = .arrow }
+    @objc private func pickArrow()  { canvas.mode = .arrow }
+    @objc private func pickPencil() { canvas.mode = .pencil }
     @objc private func pickCrop()  { canvas.mode = .crop }
     @objc private func undo()      { canvas.undo() }
     @objc private func redo()      { canvas.redo() }

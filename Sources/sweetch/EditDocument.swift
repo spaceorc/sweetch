@@ -8,11 +8,18 @@ struct Arrow: Codable, Equatable {
     var to: CGPoint
 }
 
+/// One freehand stroke: the raw path the pointer took, in image pixel coordinates.
+struct Stroke: Codable, Equatable {
+    var id: UUID = UUID()
+    var points: [CGPoint]
+}
+
 /// Everything laid on top of an image. Never baked into the file: the PNG on disk stays the
 /// untouched capture and this lives beside it, so every arrow and the crop frame remain
 /// editable forever. Only the clipboard ever gets a flattened render.
 struct EditDoc: Codable, Equatable {
     var arrows: [Arrow] = []
+    var strokes: [Stroke] = []
     /// Crop is a *view* onto the original, not a destructive trim — drag it around, or undo
     /// it, and the pixels outside come straight back.
     var crop: CGRect?
@@ -21,11 +28,16 @@ struct EditDoc: Codable, Equatable {
     /// that undo separately.
     var cropFrame: CGRect?
 
-    var isEmpty: Bool { arrows.isEmpty && crop == nil && cropFrame == nil }
+    var isEmpty: Bool { arrows.isEmpty && strokes.isEmpty && crop == nil && cropFrame == nil }
 
     func arrow(_ id: UUID?) -> Arrow? {
         guard let id else { return nil }
         return arrows.first { $0.id == id }
+    }
+
+    func stroke(_ id: UUID?) -> Stroke? {
+        guard let id else { return nil }
+        return strokes.first { $0.id == id }
     }
 }
 

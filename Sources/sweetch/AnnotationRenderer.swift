@@ -18,11 +18,52 @@ enum AnnotationRenderer {
     }
 
     /// Draw the annotations in pixel space. The caller sets up the transform.
-    static func drawArrows(_ doc: EditDoc, width: CGFloat) {
+    static func drawAnnotations(_ doc: EditDoc, width: CGFloat) {
         NSColor.systemRed.setFill()
         for arrow in doc.arrows {
             arrowPath(from: arrow.from, to: arrow.to, width: width).fill()
         }
+        NSColor.systemRed.setStroke()
+        for stroke in doc.strokes {
+            strokePath(stroke.points, width: width).stroke()
+        }
+    }
+
+    /// A freehand stroke, smoothed: each recorded point becomes the control point of a
+    /// quadratic running between the midpoints of its neighbours, which takes the jitter out
+    /// of a mouse-drawn line without moving it anywhere the pointer didn't go.
+    static func strokePath(_ points: [CGPoint], width: CGFloat) -> NSBezierPath {
+        let path = NSBezierPath()
+        path.lineWidth = width
+        path.lineCapStyle = .round
+        path.lineJoinStyle = .round
+
+        guard let first = points.first else { return path }
+        guard points.count > 1 else {
+            // A tap with no travel: draw the dot it looks like.
+            return NSBezierPath(ovalIn: CGRect(x: first.x - width / 2, y: first.y - width / 2,
+                                               width: width, height: width))
+        }
+        path.move(to: first)
+        if points.count == 2 {
+            path.line(to: points[1])
+            return path
+        }
+        var start = first
+        for index in 1..<(points.count - 1) {
+            let control = points[index]
+            let end = CGPoint(x: (control.x + points[index + 1].x) / 2,
+                              y: (control.y + points[index + 1].y) / 2)
+            // Quadratic expressed as a cubic: both controls sit two thirds of the way out.
+            path.curve(to: end,
+                       controlPoint1: CGPoint(x: start.x + 2.0 / 3 * (control.x - start.x),
+                                              y: start.y + 2.0 / 3 * (control.y - start.y)),
+                       controlPoint2: CGPoint(x: end.x + 2.0 / 3 * (control.x - end.x),
+                                              y: end.y + 2.0 / 3 * (control.y - end.y)))
+            start = end
+        }
+        path.line(to: points[points.count - 1])
+        return path
     }
 
     /// A single filled polygon — shaft plus head. Filling one path rather than stroking a
@@ -50,9 +91,22 @@ enum AnnotationRenderer {
         return path
     }
 
+    /// Distance from a point to the nearest part of a stroke.
+    static func distance(from point: CGPoint, to stroke: Stroke) -> CGFloat {
+        guard let first = stroke.points.first else { return .greatestFiniteMagnitude }
+        var best = hypot(point.x - first.x, point.y - first.y)
+        for index in 1..<max(stroke.points.count, 1) {
+            best = min(best, distance(from: point, segment: stroke.points[index - 1], stroke.points[index]))
+        }
+        return best
+    }
+
     /// Distance from a point to the arrow's shaft — hit testing for selection.
     static func distance(from point: CGPoint, to arrow: Arrow) -> CGFloat {
-        let a = arrow.from, b = arrow.to
+        distance(from: point, segment: arrow.from, arrow.to)
+    }
+
+    private static func distance(from point: CGPoint, segment a: CGPoint, _ b: CGPoint) -> CGFloat {
         let dx = b.x - a.x, dy = b.y - a.y
         let lengthSquared = dx * dx + dy * dy
         guard lengthSquared > 0 else { return hypot(point.x - a.x, point.y - a.y) }
@@ -76,7 +130,7 @@ enum AnnotationRenderer {
         NSGraphicsContext.current = context
         image.draw(in: CGRect(origin: .zero, size: rect.size), from: rect, operation: .copy, fraction: 1.0)
         context.cgContext.translateBy(x: -rect.minX, y: -rect.minY)
-        drawArrows(doc, width: strokeWidth(pixelSize: image.size))
+        drawAnnotations(doc, width: strokeWidth(pixelSize: image.size))
         NSGraphicsContext.restoreGraphicsState()
 
         return rep.representation(using: .png, properties: [:])
@@ -98,7 +152,7 @@ enum AnnotationRenderer {
             let scale = width / rect.width
             ctx.scaleBy(x: scale, y: scale)
             ctx.translateBy(x: -rect.minX, y: -rect.minY)
-            drawArrows(doc, width: strokeWidth(pixelSize: image.size))
+            drawAnnotations(doc, width: strokeWidth(pixelSize: image.size))
         }
         return thumb
     }

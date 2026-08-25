@@ -31,8 +31,10 @@ Runs as a menubar utility with no Dock icon.
   a small editor. The defaults bind `f13` (where a PC keyboard's PrintScreen lands) and
   `⌃⌥⌘S` / `⌃⌥⌘F`, since Mac keyboards have no F13.
 
-  Tools are `COPY | ARROW CROP` across the top. **ARROW** draws arrows — click one to pick
-  it up, drag its ends to reshape it, Delete to remove it. **CROP** frames a region: drag
+  Tools are `COPY | ARROW PENCIL CROP` across the top. **ARROW** draws arrows — click one
+  to pick it up, drag its ends to reshape it, Delete to remove it. **PENCIL** draws freehand
+  for underlining or circling something; a stroke can be picked up and moved the same way.
+  **CROP** frames a region: drag
   one out, or just click for a default frame, then move it or drag any edge or corner;
   `APPLY`/`CANCEL` appear beside it (⏎ and esc). **COPY** (⏎ with no frame, or ⌘C) renders
   to the clipboard, closes the window and hands focus back where you were, so ⌘V lands in

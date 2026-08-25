@@ -4,12 +4,14 @@ import Cocoa
 /// picked up and reshaped. Owns no state of its own beyond what's being dragged right now —
 /// the document lives in the EditSession, which persists after every gesture.
 final class AnnotationCanvas: NSView {
-    enum Mode { case arrow, crop }
+    enum Mode { case arrow, pencil, crop }
 
     private enum Drag {
         case newArrow(from: CGPoint, to: CGPoint)
         case moveArrow(id: UUID, last: CGPoint)
         case moveArrowEnd(id: UUID, movingTo: Bool)     // false = the tail is being dragged
+        case newStroke(points: [CGPoint])
+        case moveStroke(id: UUID, last: CGPoint)
         case newCrop(anchor: CGPoint)
         case moveCrop(last: CGPoint)
         case resizeCrop(edges: CropEdges)               // which sides follow the mouse
@@ -30,14 +32,28 @@ final class AnnotationCanvas: NSView {
 
     var mode: Mode = .arrow {
         didSet {
-            selectedArrowID = nil
+            selected = nil
             needsDisplay = true
             onChange?()
         }
     }
 
-    private(set) var selectedArrowID: UUID?
+    /// What's picked up right now. Each mode selects its own kind of annotation.
+    private enum Selection: Equatable {
+        case arrow(UUID)
+        case stroke(UUID)
+    }
+    private var selected: Selection?
     private var drag: Drag?
+
+    private var selectedArrowID: UUID? {
+        if case .arrow(let id) = selected { return id }
+        return nil
+    }
+    private var selectedStrokeID: UUID? {
+        if case .stroke(let id) = selected { return id }
+        return nil
+    }
 
     private var pixelSize: CGSize { image.size }
     private var strokeWidth: CGFloat { AnnotationRenderer.strokeWidth(pixelSize: pixelSize) }
@@ -88,12 +104,15 @@ final class AnnotationCanvas: NSView {
 
     /// Delete key: whatever is currently "selected" in this mode.
     func deleteSelection() {
-        switch mode {
-        case .arrow:
-            guard let id = selectedArrowID else { return }
+        switch selected {
+        case .arrow(let id):
             session.commit { $0.arrows.removeAll { $0.id == id } }
-            selectedArrowID = nil
-        case .crop:
+            selected = nil
+        case .stroke(let id):
+            session.commit { $0.strokes.removeAll { $0.id == id } }
+            selected = nil
+        case nil:
+            guard mode == .crop else { return }
             if doc.cropFrame != nil {
                 session.commit { $0.cropFrame = nil }
             } else if doc.crop != nil {
@@ -170,7 +189,11 @@ final class AnnotationCanvas: NSView {
     override func mouseDown(with event: NSEvent) {
         let point = toPixels(convert(event.locationInWindow, from: nil))
         let grab = handleRadius * pixelsPerPoint * 1.6
-        drag = (mode == .arrow) ? arrowDrag(at: point, grab: grab) : cropDrag(at: point, grab: grab)
+        switch mode {
+        case .arrow:  drag = arrowDrag(at: point, grab: grab)
+        case .pencil: drag = pencilDrag(at: point, grab: grab)
+        case .crop:   drag = cropDrag(at: point, grab: grab)
+        }
         needsDisplay = true
         onChange?()
     }
@@ -189,11 +212,22 @@ final class AnnotationCanvas: NSView {
         if let hit = doc.arrows.reversed().first(where: {
             AnnotationRenderer.distance(from: point, to: $0) < max(strokeWidth * 2.5, grab)
         }) {
-            selectedArrowID = hit.id
+            selected = .arrow(hit.id)
             return .moveArrow(id: hit.id, last: point)
         }
-        selectedArrowID = nil
+        selected = nil
         return .newArrow(from: point, to: point)
+    }
+
+    private func pencilDrag(at point: CGPoint, grab: CGFloat) -> Drag {
+        if let hit = doc.strokes.reversed().first(where: {
+            AnnotationRenderer.distance(from: point, to: $0) < max(strokeWidth * 2.5, grab)
+        }) {
+            selected = .stroke(hit.id)
+            return .moveStroke(id: hit.id, last: point)
+        }
+        selected = nil
+        return .newStroke(points: [point])
     }
 
     private func cropDrag(at point: CGPoint, grab: CGFloat) -> Drag {
@@ -222,6 +256,26 @@ final class AnnotationCanvas: NSView {
         switch current {
         case .newArrow(let from, _):
             drag = .newArrow(from: from, to: point)
+
+        case .newStroke(var points):
+            // Thin the trail as it's recorded: sub-pixel wobble adds document size and
+            // nothing else.
+            if let last = points.last, hypot(point.x - last.x, point.y - last.y) < strokeWidth / 2 {
+                return
+            }
+            points.append(point)
+            drag = .newStroke(points: points)
+
+        case .moveStroke(let id, let last):
+            let dx = point.x - last.x, dy = point.y - last.y
+            session.updateLive { doc in
+                guard let index = doc.strokes.firstIndex(where: { $0.id == id }) else { return }
+                for pointIndex in doc.strokes[index].points.indices {
+                    doc.strokes[index].points[pointIndex].x += dx
+                    doc.strokes[index].points[pointIndex].y += dy
+                }
+            }
+            drag = .moveStroke(id: id, last: point)
 
         case .moveArrow(let id, let last):
             let dx = point.x - last.x, dy = point.y - last.y
@@ -276,7 +330,13 @@ final class AnnotationCanvas: NSView {
             guard hypot(to.x - from.x, to.y - from.y) > strokeWidth * 2 else { return }
             let arrow = Arrow(from: from, to: to)
             session.commit { $0.arrows.append(arrow) }
-            selectedArrowID = arrow.id
+            selected = .arrow(arrow.id)
+
+        case .newStroke(let points):
+            guard points.count > 1 else { return }
+            let stroke = Stroke(points: points)
+            session.commit { $0.strokes.append(stroke) }
+            selected = .stroke(stroke.id)
 
         case .newCrop:
             // A click that didn't travel isn't a zero-size frame — it means "give me one".
@@ -292,7 +352,7 @@ final class AnnotationCanvas: NSView {
         case .resizeCrop:
             session.endLiveEdit()
 
-        case .moveArrow, .moveArrowEnd, .moveCrop:
+        case .moveArrow, .moveArrowEnd, .moveStroke, .moveCrop:
             session.endLiveEdit()
         }
     }
@@ -319,19 +379,32 @@ final class AnnotationCanvas: NSView {
         ctx.translateBy(x: frame.minX, y: frame.minY)
         ctx.scaleBy(x: scale, y: scale)
         ctx.translateBy(x: -rect.minX, y: -rect.minY)
-        AnnotationRenderer.drawArrows(doc, width: strokeWidth)
+        AnnotationRenderer.drawAnnotations(doc, width: strokeWidth)
         if case .newArrow(let from, let to) = drag {
             NSColor.systemRed.setFill()
             AnnotationRenderer.arrowPath(from: from, to: to, width: strokeWidth).fill()
+        }
+        if case .newStroke(let points) = drag {
+            NSColor.systemRed.setStroke()
+            AnnotationRenderer.strokePath(points, width: strokeWidth).stroke()
         }
         ctx.restoreGState()
 
         if mode == .crop, let cropFrame = doc.cropFrame {
             drawFrame(toView(cropFrame))
         }
-        if mode == .arrow, let selected = doc.arrow(selectedArrowID) {
-            drawHandle(at: toView(selected.from))
-            drawHandle(at: toView(selected.to))
+        if let arrow = doc.arrow(selectedArrowID) {
+            drawHandle(at: toView(arrow.from))
+            drawHandle(at: toView(arrow.to))
+        }
+        if let stroke = doc.stroke(selectedStrokeID), let bounds = Self.bounds(of: stroke.points) {
+            // A freehand line has no meaningful handles, so show what's picked up instead.
+            let box = toView(bounds.insetBy(dx: -strokeWidth, dy: -strokeWidth))
+            let path = NSBezierPath(rect: box)
+            path.lineWidth = 1
+            path.setLineDash([4, 3], count: 2, phase: 0)
+            NSColor.white.withAlphaComponent(0.9).setStroke()
+            path.stroke()
         }
     }
 
@@ -387,6 +460,15 @@ final class AnnotationCanvas: NSView {
                       CGPoint(x: rect.minX, y: rect.midY), CGPoint(x: rect.maxX, y: rect.midY)] {
             drawHandle(at: point)
         }
+    }
+
+    private static func bounds(of points: [CGPoint]) -> CGRect? {
+        guard let first = points.first else { return nil }
+        var rect = CGRect(origin: first, size: .zero)
+        for point in points.dropFirst() {
+            rect = rect.union(CGRect(origin: point, size: .zero))
+        }
+        return rect
     }
 
     private func drawHandle(at point: CGPoint) {
