@@ -16,8 +16,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// "Detect Key…" is armed: the next key press is captured and reported instead of
     /// reaching the app underneath.
     private var detectingKey = false
+    /// Open annotation windows, kept alive here — an accessory app has no document controller.
+    private var editors: [ScreenshotEditor] = []
+    private var capturing = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        setupMainMenu()
         setupStatusItem()
         observeAppActivation()
         enableLoginItemIfNeeded()
@@ -27,6 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
 
+        remapper.onAction = { [weak self] name in self?.runAction(name) }
         InputSourceSwitcher.dumpInstalled()
         _ = LLMClient.isConfigured   // touch the lazy config so the provider line lands in the log
 
@@ -217,6 +222,120 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         button.appearsDisabled = on
     }
 
+    private func runAction(_ name: String) {
+        switch name {
+        case "screenshot": captureScreenshot()
+        default:           log.error("unknown action '\(name, privacy: .public)'")
+        }
+    }
+
+    /// Native region capture straight into the screenshot library, then open the editor on it.
+    @objc private func captureScreenshot() {
+        if capturing { return }
+        capturing = true
+        // Whoever is frontmost right now is where the user wants to paste afterwards.
+        let previousApp = NSWorkspace.shared.frontmostApplication
+        let url = Screenshots.newFileURL()
+
+        // screencapture blocks until the crosshair is done with — keep it off the main thread.
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let captured = ScreenCapture.interactiveRegion(to: url)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.capturing = false
+                guard captured else { return }   // user pressed Escape; nothing was written
+                log.info("captured \(url.lastPathComponent, privacy: .public)")
+                self.openEditor(for: url, previousApp: previousApp)
+            }
+        }
+    }
+
+    private func openEditor(for url: URL, previousApp: NSRunningApplication?) {
+        guard let editor = ScreenshotEditor(fileURL: url, previousApp: previousApp) else { return }
+        editor.onClose = { [weak self] closed in
+            self?.editors.removeAll { $0 === closed }
+            self?.updateActivationPolicy()
+        }
+        editor.onOpenFile = { [weak self] picked in
+            // A new window rather than reusing this one: edits live only until Copy, and
+            // silently discarding them because the user browsed to another file would sting.
+            self?.openEditor(for: picked, previousApp: previousApp)
+        }
+        editors.append(editor)
+        updateActivationPolicy()   // before show(), so the window opens into the right policy
+        editor.show()
+    }
+
+    /// An accessory app has no Dock icon and no Cmd-Tab entry — right for a menu-bar
+    /// utility, but it leaves an open editor window with no way back once it's buried. So
+    /// sweetch is a regular app for exactly as long as a window is open, and slips back into
+    /// the menu bar when the last one closes.
+    private func updateActivationPolicy() {
+        let policy: NSApplication.ActivationPolicy = editors.isEmpty ? .accessory : .regular
+        guard NSApp.activationPolicy() != policy else { return }
+        NSApp.setActivationPolicy(policy)
+    }
+
+    /// A minimal menu bar, for the stretches when we're a regular app. The Window menu is
+    /// the real point: AppKit keeps the list of open editors in it automatically.
+    private func setupMainMenu() {
+        let mainMenu = NSMenu()
+
+        let appItem = NSMenuItem()
+        let appMenu = NSMenu()
+        appMenu.addItem(NSMenuItem(title: "Hide sweetch", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h"))
+        appMenu.addItem(NSMenuItem.separator())
+        appMenu.addItem(NSMenuItem(title: "Quit sweetch", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        appItem.submenu = appMenu
+        mainMenu.addItem(appItem)
+
+        let windowItem = NSMenuItem()
+        let windowMenu = NSMenu(title: "Window")
+        windowMenu.addItem(NSMenuItem(title: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w"))
+        windowMenu.addItem(NSMenuItem(title: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m"))
+        windowMenu.addItem(NSMenuItem.separator())
+        windowItem.submenu = windowMenu
+        mainMenu.addItem(windowItem)
+
+        NSApp.mainMenu = mainMenu
+        NSApp.windowsMenu = windowMenu
+    }
+
+    @objc private func openRecentScreenshot(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? URL else { return }
+        openEditor(for: url, previousApp: NSWorkspace.shared.frontmostApplication)
+    }
+
+    @objc private func openScreenshotsFolder() {
+        NSWorkspace.shared.activateFileViewerSelecting([Screenshots.dir])
+    }
+
+    /// Rebuild the recents list each time the menu opens — cheap, and always current.
+    private func refreshScreenshotsMenu(_ menu: NSMenu) {
+        menu.removeAllItems()
+        let recent = Screenshots.recent(limit: 12)
+        if recent.isEmpty {
+            let empty = NSMenuItem(title: "No screenshots yet", action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+            menu.addItem(empty)
+        }
+        let formatter = DateFormatter()
+        formatter.dateStyle = .short
+        formatter.timeStyle = .short
+        for url in recent {
+            let item = NSMenuItem(title: formatter.string(from: Screenshots.modified(url)),
+                                  action: #selector(openRecentScreenshot(_:)), keyEquivalent: "")
+            item.representedObject = url
+            item.image = Screenshots.thumbnail(for: url)
+            item.target = self
+            menu.addItem(item)
+        }
+        menu.addItem(NSMenuItem.separator())
+        let folder = NSMenuItem(title: "Open Folder…", action: #selector(openScreenshotsFolder), keyEquivalent: "")
+        folder.target = self
+        menu.addItem(folder)
+    }
+
     /// Runs for every real key event, down and up, ahead of our own hotkeys. Returns true
     /// to swallow the event: either "Detect Key…" grabbed it, or a remap rule fired.
     private func handleRawKey(keyCode: Int64, flags: CGEventFlags, isDown: Bool) -> Bool {
@@ -268,6 +387,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func handleKeyDown(_ event: CGEvent) {
+        // Typing into our own editor window isn't the user writing text somewhere — never
+        // let it into the correction buffer.
+        if !editors.isEmpty && NSApp.isActive { return }
+
         // Any real keystroke ends the undo window (our own synthetic keys are filtered out
         // by the tap before reaching here).
         lastCorrection = nil
@@ -347,6 +470,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(NSMenuItem(title: "Edit Persona…", action: #selector(openPersona), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Show History…", action: #selector(showHistory), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Refine Dictionary from History", action: #selector(refineDictionary), keyEquivalent: ""))
+        menu.addItem(NSMenuItem.separator())
+        menu.addItem(NSMenuItem(title: "New Screenshot", action: #selector(captureScreenshot), keyEquivalent: ""))
+        let screenshots = NSMenuItem(title: "Screenshots", action: nil, keyEquivalent: "")
+        screenshots.submenu = NSMenu()
+        menu.addItem(screenshots)
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Edit Key Remaps…", action: #selector(openRemaps), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Detect Key…", action: #selector(detectKey), keyEquivalent: ""))
@@ -436,6 +564,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // changed it from System Settings.
     func menuWillOpen(_ menu: NSMenu) {
         remapper.reloadIfChanged()   // pick up edits to remaps.txt without a restart
+        if let submenu = menu.items.first(where: { $0.title == "Screenshots" })?.submenu {
+            refreshScreenshotsMenu(submenu)
+        }
         guard let item = menu.items.first(where: { $0.action == #selector(toggleLoginItem) }) else { return }
         item.state = SMAppService.mainApp.status == .enabled ? .on : .off
     }

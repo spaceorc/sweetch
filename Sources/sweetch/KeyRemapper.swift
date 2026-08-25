@@ -19,10 +19,27 @@ struct KeyCombo: Equatable {
 /// The left side matches *exactly* — a bare `menu` fires only when no modifiers are held,
 /// so it never shadows Shift+menu etc.
 final class KeyRemapper {
+    /// What a rule fires: another key combination, or one of sweetch's own actions.
+    private enum Target {
+        case combo(KeyCombo)
+        case action(String)
+
+        var description: String {
+            switch self {
+            case .combo(let c): return KeyNames.describe(keyCode: c.keyCode, flags: c.flags)
+            case .action(let name): return "@\(name)"
+            }
+        }
+    }
+
     private struct Rule {
         let from: KeyCombo
-        let to: KeyCombo
+        let to: Target
     }
+
+    /// Known action names, and what runs them. Set by the app at startup.
+    var onAction: ((String) -> Void)?
+    static let actions = ["screenshot"]
 
     private var rules: [Rule] = []
     private var loadedStamp: Date?
@@ -44,20 +61,26 @@ final class KeyRemapper {
             return false
         }
         swallowed.insert(keyCode)
-        log.info("remap: \(KeyNames.describe(keyCode: rule.from.keyCode, flags: rule.from.flags), privacy: .public) -> \(KeyNames.describe(keyCode: rule.to.keyCode, flags: rule.to.flags), privacy: .public)")
+        log.info("remap: \(KeyNames.describe(keyCode: rule.from.keyCode, flags: rule.from.flags), privacy: .public) -> \(rule.to.description, privacy: .public)")
+
+        guard case .combo(let target) = rule.to else {
+            if case .action(let name) = rule.to {
+                DispatchQueue.main.async { [weak self] in self?.onAction?(name) }
+            }
+            return true
+        }
 
         if rule.from.flags.isEmpty {
             // Fast path: no physical modifiers are down, so the synthetic combo can go out
             // immediately — right from the tap callback, keeping the remap feeling instant.
-            Replayer.postKeyPair(keyCode: rule.to.keyCode, flags: rule.to.flags)
+            Replayer.postKeyPair(keyCode: target.keyCode, flags: target.flags)
         } else {
             // The trigger itself used modifiers. Posting while they're still physically held
             // would let them bleed into the synthetic event, so wait for the release off the
             // tap thread (flagsState only updates once the callback has returned).
-            let to = rule.to
             DispatchQueue.global(qos: .userInteractive).async {
                 Replayer.waitForModifierRelease(timeout: 0.3)
-                Replayer.postKeyPair(keyCode: to.keyCode, flags: to.flags)
+                Replayer.postKeyPair(keyCode: target.keyCode, flags: target.flags)
             }
         }
         return true
@@ -71,7 +94,7 @@ final class KeyRemapper {
         rules = Self.parse(text)
         loadedStamp = modifiedAt()
         for rule in rules {
-            log.info("remap rule: \(KeyNames.describe(keyCode: rule.from.keyCode, flags: rule.from.flags), privacy: .public) = \(KeyNames.describe(keyCode: rule.to.keyCode, flags: rule.to.flags), privacy: .public)")
+            log.info("remap rule: \(KeyNames.describe(keyCode: rule.from.keyCode, flags: rule.from.flags), privacy: .public) = \(rule.to.description, privacy: .public)")
         }
         if rules.isEmpty { log.info("remap: no rules") }
     }
@@ -100,6 +123,8 @@ final class KeyRemapper {
     #            forwarddelete, home, end, pageup, pagedown, left, right, up, down, menu,
     #            keypad0…keypad9 — or a raw virtual keycode: menu / key110 / 0x6e / 110.
     # Modifiers: cmd, shift, ctrl, opt — joined with '+'.
+    # The right side can also be a sweetch action instead of a key: @screenshot — capture a
+    # region and open it in the annotation editor.
     #
     # The left side matches exactly: `menu` fires only when no modifiers are held.
     # Windows keyboards: the context-menu key is `menu`; PrintScreen / ScrollLock / Pause
@@ -108,6 +133,7 @@ final class KeyRemapper {
     # Edits are picked up the next time you open the sweetch menu.
 
     menu = shift+ctrl+opt+0
+    f13 = @screenshot
 
     """
 
@@ -119,13 +145,24 @@ final class KeyRemapper {
             let line = rawLine.trimmingCharacters(in: .whitespaces)
             if line.isEmpty || line.hasPrefix("#") { continue }
             let sides = line.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
-            guard sides.count == 2, let from = combo(sides[0]), let to = combo(sides[1]) else {
+            guard sides.count == 2, let from = combo(sides[0]), let to = target(sides[1]) else {
                 log.error("remaps.txt line \(index + 1, privacy: .public): can't parse '\(line, privacy: .public)'")
                 continue
             }
             result.append(Rule(from: from, to: to))
         }
         return result
+    }
+
+    /// Right-hand side: either "@screenshot" (one of our own actions) or a key combination.
+    private static func target(_ spec: String) -> Target? {
+        guard spec.hasPrefix("@") else { return combo(spec).map(Target.combo) }
+        let name = String(spec.dropFirst()).lowercased()
+        guard actions.contains(name) else {
+            log.error("remaps.txt: unknown action '@\(name, privacy: .public)'")
+            return nil
+        }
+        return .action(name)
     }
 
     /// "shift+ctrl+opt+0" -> combo. Last token is the key, everything before it a modifier.

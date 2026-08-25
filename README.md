@@ -25,6 +25,27 @@ Runs as a menubar utility with no Dock icon.
   and reloaded whenever the status menu opens. **Detect Key…** in the menu reports
   the keycode of whatever you press next, so unlabelled keys are easy to find.
 
+- **Screenshot capture + annotation** — `@screenshot` in `remaps.txt` (bound to `f13`,
+  where a PC keyboard's PrintScreen lands) fires the native region crosshair, files the
+  result in `~/Pictures/sweetch/`, and opens it in a small editor.
+
+  Tools are `COPY | ARROW CROP` across the top. **ARROW** draws arrows — click one to pick
+  it up, drag its ends to reshape it, Delete to remove it. **CROP** frames a region: drag
+  one out, or just click for a default frame, then move it or drag any edge or corner;
+  `APPLY`/`CANCEL` appear beside it (⏎ and esc). **COPY** (⏎ with no frame, or ⌘C) renders
+  to the clipboard, closes the window and hands focus back where you were, so ⌘V lands in
+  the right place. ⌘Z / ⇧⌘Z undo and redo; ⌘O opens any other image.
+
+  Everything is **non-destructive** — the captured PNG is never modified. Arrows, the crop,
+  the pending frame and the whole undo/redo history live in a sidecar under
+  `~/Pictures/sweetch/.edits/`, so reopening a screenshot (menu → **Screenshots**) restores
+  every shape, still draggable, and you can keep undoing where you left off. Drawing a
+  frame and applying it are separate edits that undo separately. Only the clipboard ever
+  receives flattened pixels.
+
+  While an editor window is open sweetch becomes a regular app — Dock icon, ⌘-Tab, a Window
+  menu — and slips back into the menu bar when the last one closes.
+
 ## Requirements
 
 - macOS 13+
@@ -64,7 +85,8 @@ Hotkeys and layout choices are currently constants in source — edit and rebuil
 | Convert hotkey | `AppDelegate.swift` — `convertHotkey` |
 | Layout IDs | `InputSourceSwitcher.swift` — `primaryIDs`, `secondaryIDs` |
 | Buffer invalidation rules | `AppDelegate.handleKeyDown` |
-| Key remaps | `~/Library/Application Support/sweetch/remaps.txt` (no rebuild) |
+| Key remaps and actions | `~/Library/Application Support/sweetch/remaps.txt` (no rebuild) |
+| Screenshot library | `~/Pictures/sweetch/` (edits in `.edits/`) |
 
 To discover input source IDs installed on your machine, watch the log on
 startup — sweetch dumps every keyboard source it sees:
@@ -103,6 +125,16 @@ A few non-obvious decisions worth knowing if you go reading the code:
   got. Its synthetic output carries the same marker as every other event we post, so it
   passes straight back through the tap (a remap therefore can't trigger sweetch's own
   hotkeys — remap to something else and bind that).
+- The screenshot editor stores **documents, not pixels**: an `EditDoc` of arrows and a crop
+  rect in original-image coordinates, with snapshot-based undo/redo persisted alongside it.
+  Snapshots rather than commands because the document is a handful of structs — copying it
+  costs nothing, and "reopen tomorrow and keep pressing undo" then falls out for free.
+  A crop narrows what's *displayed* rather than trimming anything, which is why undoing one
+  brings the pixels back and why arrows drawn while cropped don't move when it's removed.
+- Capture shells out to `/usr/sbin/screencapture -i` rather than reimplementing a selection
+  overlay: it's the same crosshair the system uses, and the process exiting is a reliable
+  "done or cancelled" signal. Note it exits 0 even on cancel, so the caller also checks that
+  a file actually appeared.
 - Synthesized events are tagged with a marker in `eventSourceUserData`
   (ASCII `"sweetch\0"`) so the tap can recognise and pass through its own
   events without re-processing them.

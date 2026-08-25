@@ -16,7 +16,15 @@ CERT_CRT   = $(CERT_DIR)/$(SIGN_ID).crt
 CERT_P12   = $(CERT_DIR)/$(SIGN_ID).p12
 CERT_CNF   = $(CERT_DIR)/$(SIGN_ID).cnf
 
-.PHONY: all build app run debug clean setup-signing tcc-reset
+# The icon is drawn in code (Tools/make-icon.swift) rather than checked in as a binary
+# asset. The Dock reads the *bundle* icon, so it has to end up in Contents/Resources —
+# setting applicationIconImage at runtime isn't picked up reliably when an accessory app
+# switches to a regular activation policy.
+ICON_TOOL  = Tools/make-icon.swift
+ICON_ICNS  = $(BUILD_DIR)/AppIcon.icns
+ICONSET    = $(BUILD_DIR)/AppIcon.iconset
+
+.PHONY: all build app run debug clean setup-signing tcc-reset icon
 
 all: app
 
@@ -50,30 +58,53 @@ setup-signing:
 tcc-reset:
 	@tccutil reset Accessibility $(BUNDLE_ID) 2>/dev/null && echo "cleared Accessibility for $(BUNDLE_ID)" || echo "no stale Accessibility entries"
 
+icon: $(ICON_ICNS)
+
+$(ICON_ICNS): $(ICON_TOOL)
+	@mkdir -p $(BUILD_DIR)
+	@swiftc -O $(ICON_TOOL) -o $(BUILD_DIR)/make-icon
+	@$(BUILD_DIR)/make-icon $(BUILD_DIR)/icon-1024.png
+	@rm -rf $(ICONSET) && mkdir -p $(ICONSET)
+	@sips -z 16 16     $(BUILD_DIR)/icon-1024.png --out $(ICONSET)/icon_16x16.png      >/dev/null
+	@sips -z 32 32     $(BUILD_DIR)/icon-1024.png --out $(ICONSET)/icon_16x16@2x.png   >/dev/null
+	@sips -z 32 32     $(BUILD_DIR)/icon-1024.png --out $(ICONSET)/icon_32x32.png      >/dev/null
+	@sips -z 64 64     $(BUILD_DIR)/icon-1024.png --out $(ICONSET)/icon_32x32@2x.png   >/dev/null
+	@sips -z 128 128   $(BUILD_DIR)/icon-1024.png --out $(ICONSET)/icon_128x128.png    >/dev/null
+	@sips -z 256 256   $(BUILD_DIR)/icon-1024.png --out $(ICONSET)/icon_128x128@2x.png >/dev/null
+	@sips -z 256 256   $(BUILD_DIR)/icon-1024.png --out $(ICONSET)/icon_256x256.png    >/dev/null
+	@sips -z 512 512   $(BUILD_DIR)/icon-1024.png --out $(ICONSET)/icon_256x256@2x.png >/dev/null
+	@sips -z 512 512   $(BUILD_DIR)/icon-1024.png --out $(ICONSET)/icon_512x512.png    >/dev/null
+	@cp $(BUILD_DIR)/icon-1024.png $(ICONSET)/icon_512x512@2x.png
+	@iconutil -c icns $(ICONSET) -o $(ICON_ICNS)
+	@echo "built $(ICON_ICNS)"
+
 build:
 	swift build -c release
 
-app: build setup-signing
+app: build setup-signing $(ICON_ICNS)
 	@rm -rf $(APP_BUNDLE)
 	@mkdir -p $(APP_BUNDLE)/Contents/MacOS
 	@mkdir -p $(APP_BUNDLE)/Contents/Resources
 	@cp .build/release/$(APP_NAME) $(APP_BUNDLE)/Contents/MacOS/$(APP_NAME)
 	@cp $(PLIST_SRC) $(APP_BUNDLE)/Contents/Info.plist
+	@cp $(ICON_ICNS) $(APP_BUNDLE)/Contents/Resources/AppIcon.icns
 	@cp .env $(APP_BUNDLE)/Contents/Resources/sweetch.env 2>/dev/null || echo "warning: .env missing — LLM correction disabled"
 	@codesign --force --sign "$(SIGN_ID)" $(APP_BUNDLE)
+	@touch $(APP_BUNDLE)
 	@echo "built $(APP_BUNDLE)"
 
 run: app
 	@pkill -x $(APP_NAME) 2>/dev/null || true
 	@open $(APP_BUNDLE)
 
-debug: setup-signing
+debug: setup-signing $(ICON_ICNS)
 	swift build -c debug
 	@rm -rf $(APP_BUNDLE)
 	@mkdir -p $(APP_BUNDLE)/Contents/MacOS
 	@mkdir -p $(APP_BUNDLE)/Contents/Resources
 	@cp .build/debug/$(APP_NAME) $(APP_BUNDLE)/Contents/MacOS/$(APP_NAME)
 	@cp $(PLIST_SRC) $(APP_BUNDLE)/Contents/Info.plist
+	@cp $(ICON_ICNS) $(APP_BUNDLE)/Contents/Resources/AppIcon.icns
 	@cp .env $(APP_BUNDLE)/Contents/Resources/sweetch.env 2>/dev/null || echo "warning: .env missing — LLM correction disabled"
 	@codesign --force --sign "$(SIGN_ID)" $(APP_BUNDLE)
 	@pkill -x $(APP_NAME) 2>/dev/null || true
