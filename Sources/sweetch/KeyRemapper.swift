@@ -135,6 +135,7 @@ final class KeyRemapper {
 
     menu = shift+ctrl+opt+0
     f13 = @screenshot
+    cmd+f13 = @screenshot-full
     ctrl+opt+cmd+s = @screenshot
     ctrl+opt+cmd+f = @screenshot-full
 
