@@ -4,7 +4,15 @@ import Cocoa
 enum InputSourceSwitcher {
     // Acceptable IDs for the two slots. Multiple IDs per slot tolerate naming variants
     // (e.g. US vs ABC for English). First installed match wins.
-    static let primaryIDs:   [String] = ["com.apple.keylayout.ABC", "com.apple.keylayout.US", "com.apple.keylayout.British"]
+    // PC-shaped variants included: a Windows keyboard on a Mac is usually paired with one of
+    // the "-PC" layouts, and leaving them out means the toggle silently finds no Latin layout.
+    static let primaryIDs: [String] = [
+        "com.apple.keylayout.ABC",
+        "com.apple.keylayout.US",
+        "com.apple.keylayout.British",
+        "com.apple.keylayout.British-PC",
+        "com.apple.keylayout.USInternational-PC",
+    ]
     static let secondaryIDs: [String] = ["com.apple.keylayout.RussianWin"]
 
     static func select(byIDs ids: [String]) {

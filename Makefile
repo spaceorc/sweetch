@@ -20,11 +20,14 @@ CERT_CNF   = $(CERT_DIR)/$(SIGN_ID).cnf
 # asset. The Dock reads the *bundle* icon, so it has to end up in Contents/Resources —
 # setting applicationIconImage at runtime isn't picked up reliably when an accessory app
 # switches to a regular activation policy.
+WATCHDOG_LABEL = com.spaceorc.sweetch.watchdog
+WATCHDOG_PLIST = $(HOME)/Library/LaunchAgents/$(WATCHDOG_LABEL).plist
+
 ICON_TOOL  = Tools/make-icon.swift
 ICON_ICNS  = $(BUILD_DIR)/AppIcon.icns
 ICONSET    = $(BUILD_DIR)/AppIcon.iconset
 
-.PHONY: all build app run debug clean setup-signing tcc-reset icon
+.PHONY: all build app run debug clean setup-signing tcc-reset icon stop start
 
 all: app
 
@@ -58,6 +61,22 @@ setup-signing:
 tcc-reset:
 	@tccutil reset Accessibility $(BUNDLE_ID) 2>/dev/null && echo "cleared Accessibility for $(BUNDLE_ID)" || echo "no stale Accessibility entries"
 
+# Rebuilding swaps the executable out from under a running instance, whose signature then
+# no longer matches — the kernel kills it and macOS files a crash report for something that
+# never crashed. So stop it first. If the watchdog agent owns the process, the job has to be
+# unloaded too, or launchd races the rebuild by restarting the old binary.
+stop:
+	@if [ -f $(WATCHDOG_PLIST) ]; then launchctl bootout gui/$$(id -u)/$(WATCHDOG_LABEL) 2>/dev/null || true; fi
+	@pkill -x $(APP_NAME) 2>/dev/null || true
+	@sleep 0.4
+
+start:
+	@if [ -f $(WATCHDOG_PLIST) ]; then \
+		launchctl bootstrap gui/$$(id -u) $(WATCHDOG_PLIST) && echo "started under the watchdog"; \
+	else \
+		open $(APP_BUNDLE); \
+	fi
+
 icon: $(ICON_ICNS)
 
 $(ICON_ICNS): $(ICON_TOOL)
@@ -82,6 +101,7 @@ build:
 	swift build -c release
 
 app: build setup-signing $(ICON_ICNS)
+	@$(MAKE) --no-print-directory stop
 	@rm -rf $(APP_BUNDLE)
 	@mkdir -p $(APP_BUNDLE)/Contents/MacOS
 	@mkdir -p $(APP_BUNDLE)/Contents/Resources
@@ -93,12 +113,11 @@ app: build setup-signing $(ICON_ICNS)
 	@touch $(APP_BUNDLE)
 	@echo "built $(APP_BUNDLE)"
 
-run: app
-	@pkill -x $(APP_NAME) 2>/dev/null || true
-	@open $(APP_BUNDLE)
+run: app start
 
 debug: setup-signing $(ICON_ICNS)
 	swift build -c debug
+	@$(MAKE) --no-print-directory stop
 	@rm -rf $(APP_BUNDLE)
 	@mkdir -p $(APP_BUNDLE)/Contents/MacOS
 	@mkdir -p $(APP_BUNDLE)/Contents/Resources
@@ -107,8 +126,7 @@ debug: setup-signing $(ICON_ICNS)
 	@cp $(ICON_ICNS) $(APP_BUNDLE)/Contents/Resources/AppIcon.icns
 	@cp .env $(APP_BUNDLE)/Contents/Resources/sweetch.env 2>/dev/null || echo "warning: .env missing — LLM correction disabled"
 	@codesign --force --sign "$(SIGN_ID)" $(APP_BUNDLE)
-	@pkill -x $(APP_NAME) 2>/dev/null || true
-	@open $(APP_BUNDLE)
+	@$(MAKE) --no-print-directory start
 
 clean:
 	swift package clean

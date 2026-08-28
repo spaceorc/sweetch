@@ -39,9 +39,18 @@ enum CrashWatch {
 
     private static func waitForReport(after date: Date, attemptsLeft: Int,
                                       onCrashFound: @escaping (URL) -> Void) {
-        if let report = newestSystemReport(after: date), let summary = preserve(report) {
-            onCrashFound(summary)
-            return
+        if let report = newestSystemReport(after: date) {
+            // Rebuilding the bundle under a running instance leaves its signature invalid and
+            // the kernel kills it. The system writes a report, but nothing crashed — raising
+            // a warning for it would cry wolf on every single build.
+            if terminationNamespace(report) == "CODESIGNING" {
+                log.info("previous run was killed for an invalid signature (rebuilt underneath it) — not a crash")
+                return
+            }
+            if let summary = preserve(report) {
+                onCrashFound(summary)
+                return
+            }
         }
         guard attemptsLeft > 0 else {
             // No report ever showed up: killed (pkill, force quit, a reboot), not crashed.
@@ -93,13 +102,22 @@ enum CrashWatch {
         return summary
     }
 
-    private static func summarize(_ report: URL) -> String? {
+    private static func terminationNamespace(_ report: URL) -> String? {
+        guard let root = body(of: report),
+              let termination = root["termination"] as? [String: Any] else { return nil }
+        return termination["namespace"] as? String
+    }
+
+    /// An .ips is two JSON documents: a one-line header, then the body.
+    private static func body(of report: URL) -> [String: Any]? {
         guard let raw = try? String(contentsOf: report, encoding: .utf8),
-              let split = raw.firstIndex(of: "\n") else { return nil }
-        // An .ips is two JSON documents: a one-line header, then the body.
-        let body = String(raw[raw.index(after: split)...])
-        guard let data = body.data(using: .utf8),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+              let split = raw.firstIndex(of: "\n"),
+              let data = String(raw[raw.index(after: split)...]).data(using: .utf8) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    }
+
+    private static func summarize(_ report: URL) -> String? {
+        guard let root = body(of: report) else { return nil }
 
         var lines: [String] = ["sweetch crash report", ""]
         if let time = root["captureTime"] as? String { lines.append("when:        \(time)") }

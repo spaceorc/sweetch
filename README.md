@@ -155,9 +155,11 @@ A few non-obvious decisions worth knowing if you go reading the code:
   through `MainQueue.sync`, and the layout maps are built once at startup and cached.
 - The watchdog agent installs by *handing over*: launchd only supervises processes it
   started, so bootstrapping the job spawns a fresh copy which asks the running one to quit
-  (newest instance wins). While it's installed, `pkill` is the wrong way to restart the app
-  — launchd will race you and bring the old binary back. Use
-  `launchctl kickstart -k gui/$(id -u)/com.spaceorc.sweetch.watchdog`.
+  (newest instance wins). Use `make run` to rebuild: it stops the app — unloading the
+  launchd job first, or launchd races the rebuild and restarts the old binary — and starts it
+  again the way it's owned. Swapping the bundle under a live process leaves its signature
+  invalid, the kernel kills it, and macOS files a crash report for something that never
+  crashed; reports whose termination namespace is `CODESIGNING` are ignored for that reason.
 - Synthesized events are tagged with a marker in `eventSourceUserData`
   (ASCII `"sweetch\0"`) so the tap can recognise and pass through its own
   events without re-processing them.
