@@ -27,7 +27,7 @@ ICON_TOOL  = Tools/make-icon.swift
 ICON_ICNS  = $(BUILD_DIR)/AppIcon.icns
 ICONSET    = $(BUILD_DIR)/AppIcon.iconset
 
-.PHONY: all build app run debug clean setup-signing tcc-reset icon stop start
+.PHONY: all build app run debug clean setup-signing tcc-reset icon stop start trace
 
 all: app
 
@@ -127,6 +127,24 @@ debug: setup-signing $(ICON_ICNS)
 	@cp .env $(APP_BUNDLE)/Contents/Resources/sweetch.env 2>/dev/null || echo "warning: .env missing — LLM correction disabled"
 	@codesign --force --sign "$(SIGN_ID)" $(APP_BUNDLE)
 	@$(MAKE) --no-print-directory start
+
+# Record what happens while you reproduce a "doesn't work in app X" problem: sweetch's own log
+# plus every key event, physical (HID) and as delivered to apps (APP), with sweetch's synthetic
+# ones marked. Both files use wall-clock times so they can be read side by side. Ctrl-C stops.
+TRACE_DIR = $(BUILD_DIR)/trace
+KEYWATCH  = $(BUILD_DIR)/keywatch
+
+$(KEYWATCH): Tools/keywatch.swift
+	@mkdir -p $(BUILD_DIR)
+	@swiftc -O Tools/keywatch.swift -o $(KEYWATCH)
+
+trace: $(KEYWATCH)
+	@mkdir -p $(TRACE_DIR)
+	@echo "recording to $(TRACE_DIR)/sweetch.log and $(TRACE_DIR)/keys.log — reproduce, then Ctrl-C"
+	@trap 'kill 0' INT TERM; \
+		/usr/bin/log stream --style compact --level debug --predicate 'subsystem == "$(BUNDLE_ID)"' > $(TRACE_DIR)/sweetch.log & \
+		$(KEYWATCH) > $(TRACE_DIR)/keys.log & \
+		wait
 
 clean:
 	swift package clean

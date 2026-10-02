@@ -108,12 +108,28 @@ startup — sweetch dumps every keyboard source it sees:
 /usr/bin/log stream --predicate 'subsystem == "com.spaceorc.sweetch"' --level info
 ```
 
+## Debugging "it doesn't work in app X"
+
+```sh
+make trace        # records until Ctrl-C into build/trace/
+```
+
+Reproduce the problem while it runs. `sweetch.log` is sweetch's own log (every hotkey, what
+Accessibility returned, what got replayed); `keys.log` has every key event twice — `HID`, what
+the keyboard sent, and `APP`, what reached the app — with sweetch's synthetic events marked
+`SWEETCH`. Both use wall-clock times, so a missing step shows up as a gap between the two. The
+key watcher needs Input Monitoring for your terminal.
+
 ## Limitations
 
 - **Terminal-like apps** (iTerm2, Terminal.app) don't expose an editable
   selection through Accessibility, so selection-convert falls back to
   last-word convert there. The displayed text in a terminal isn't a text
   field; there's no way to programmatically replace it short of pasting.
+- **Electron apps** (Claude, Slack, VS Code, …) hide their Accessibility tree until asked.
+  sweetch sets `AXManualAccessibility` on every app at startup, after each launch and on
+  activation, but for roughly the first 10–15 seconds after an Electron app starts its
+  focused element comes and goes, so selection-convert can miss there until it settles.
 - **Single Backspace deletes the whole selection** assumption: holds in every
   text widget I've tested. If you find one where it doesn't, the selection
   read still works — just the write needs more Backspaces.
