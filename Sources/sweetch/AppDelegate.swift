@@ -526,9 +526,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             forName: NSWorkspace.didActivateApplicationNotification,
             object: nil,
             queue: .main
-        ) { [weak self] _ in
+        ) { [weak self] note in
             self?.buffer.clear(reason: "app activation")
             self?.lastCorrection = nil
+            if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
+                SelectionConverter.wakeAccessibility(of: app)
+            }
+        }
+        // An Electron app takes ~10–15s after AX is first asked for before its focused element is
+        // reliable, so ask early — at our start for everything running, and shortly after any
+        // launch (asking at the instant of launch can be ignored, hence the second try) — and
+        // the warm-up is over by the time the user gets to convert there.
+        for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
+            SelectionConverter.wakeAccessibility(of: app)
+        }
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didLaunchApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { note in
+            guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+            for delay in [1.0, 5.0] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                    if !app.isTerminated { SelectionConverter.wakeAccessibility(of: app) }
+                }
+            }
         }
     }
 

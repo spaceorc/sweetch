@@ -129,11 +129,7 @@ enum LLMCorrector {
     /// Whole text of the currently focused element via Accessibility, for context.
     /// Works in Cocoa and most Electron fields (kAXValue), returns nil otherwise.
     static func focusedFieldText() -> String? {
-        let systemWide = AXUIElementCreateSystemWide()
-        var focused: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(systemWide, kAXFocusedUIElementAttribute as CFString, &focused) == .success,
-              let focused else { return nil }
-        let element = focused as! AXUIElement
+        guard let element = SelectionConverter.focusedElement(wait: false) else { return nil }
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &value) == .success else { return nil }
         return value as? String

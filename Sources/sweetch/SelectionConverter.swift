@@ -66,7 +66,7 @@ enum SelectionConverter {
     /// inline-autocomplete artifact (same heuristic as tryConvert). Read-only — used by
     /// the LLM corrector to decide between "correct the selection" and "correct the buffer".
     static func currentSelection(typedText: String) -> String? {
-        guard let element = focusedElement(),
+        guard let element = focusedElement(wait: false),
               let sel = readAXSelectedText(element), !sel.isEmpty else { return nil }
         if !typedText.isEmpty && !typedText.contains(sel) { return nil }  // autocomplete artifact
         return sel
@@ -119,12 +119,42 @@ enum SelectionConverter {
         log.info("convert-selection: modifier-release wait timed out (\(timeout, privacy: .public)s)")
     }
 
-    private static func focusedElement() -> AXUIElement? {
+    /// The system-wide focused element. If there is none, the frontmost app may be an Electron
+    /// one whose Accessibility tree isn't built yet — one asked too early (right at launch) never
+    /// builds it — so ask again and, if `wait`, give it a moment before giving up. Callers on the
+    /// event-tap thread pass `wait: false`: blocking there stalls typing.
+    static func focusedElement(wait: Bool = true) -> AXUIElement? {
+        if let el = copyFocusedElement() { return el }
+        guard let app = MainQueue.sync({ NSWorkspace.shared.frontmostApplication }),
+              wakeAccessibility(of: app), wait else { return nil }
+        for _ in 0..<10 {
+            usleep(50_000)
+            if let el = copyFocusedElement() {
+                log.info("convert-selection: focused element appeared after waking AX")
+                return el
+            }
+        }
+        return nil
+    }
+
+    private static func copyFocusedElement() -> AXUIElement? {
         let systemWide = AXUIElementCreateSystemWide()
         var focused: CFTypeRef?
         let result = AXUIElementCopyAttributeValue(systemWide, kAXFocusedUIElementAttribute as CFString, &focused)
         guard result == .success, let focused else { return nil }
         return (focused as! AXUIElement)
+    }
+
+    /// Electron apps (Claude, sometimes Slack) build no Accessibility tree until an assistive
+    /// client asks for one: the system-wide focused element comes back empty, so a perfectly
+    /// real selection is invisible to convert. Setting `AXManualAccessibility` is that ask.
+    /// Non-Electron apps reject it harmlessly. Returns whether the app accepted it.
+    @discardableResult
+    static func wakeAccessibility(of app: NSRunningApplication) -> Bool {
+        let el = AXUIElementCreateApplication(app.processIdentifier)
+        let ok = AXUIElementSetAttributeValue(el, "AXManualAccessibility" as CFString, kCFBooleanTrue) == .success
+        if ok { log.info("AXManualAccessibility enabled for \(app.bundleIdentifier ?? "?", privacy: .public)") }
+        return ok
     }
 
     private static func readAXSelectedText(_ element: AXUIElement) -> String? {
