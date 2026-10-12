@@ -17,6 +17,11 @@ Runs as a menubar utility with no Dock icon.
     recent keystrokes — backspaces it, switches layout, replays the keyCodes.
     A second press toggles back.
 
+- **Hold Space to dictate in Claude desktop** — the way Claude Code does in a terminal. Holding
+  Space in Claude desktop's prompt erases the space it typed and presses ⌘D, Claude's dictation
+  toggle; releasing Space presses ⌘D again. A quick tap still types a space, and anywhere other
+  than Claude's prompt Space is left alone.
+
 - **Key remapping** — a Karabiner-shaped layer for keys macOS has no use for.
   A PC keyboard's context-menu key arrives as a plain keycode 110 that nothing is
   bound to; `menu = shift+ctrl+opt+0` in `remaps.txt` turns it into a hotkey you can

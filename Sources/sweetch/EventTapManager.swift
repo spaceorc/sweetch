@@ -20,6 +20,7 @@ private let relevantFlagsMask: CGEventFlags = [.maskCommand, .maskShift, .maskAl
 
 final class EventTapManager {
     private let bindings: [HotkeyBinding]
+    private let holdToTalk = HoldToTalk()
     private let onRawKey: (Int64, CGEventFlags, Bool) -> Bool
     private let onKeyDown: (CGEvent) -> Void
     private let onMouseDown: () -> Void
@@ -162,6 +163,7 @@ final class EventTapManager {
             onMouseDown()
             return Unmanaged.passUnretained(event)
         case .keyDown, .keyUp:
+            if holdToTalk.handle(type: type, event: event) { return nil }
             let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
             let flags = event.flags.intersection(relevantFlagsMask)
             if onRawKey(keyCode, flags, type == .keyDown) { return nil }
