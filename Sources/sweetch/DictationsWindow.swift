@@ -27,7 +27,13 @@ final class DictationsWindow: NSObject, NSWindowDelegate, NSTableViewDataSource,
         var app: String { session["app"] as? String ?? "?" }
 
         var summary: String {
-            if let to = session["handoff"] as? String { return "→ \(to)’s own dictation" }
+            if let to = session["handoff"] as? String {
+                guard session["shadow"] as? Bool == true else { return "→ \(to)’s own dictation" }
+                let theirs = session["theirs"] as? String ?? "?"
+                let ours = session["text"] as? String
+                let same = ours.map { $0.lowercased().filter(\.isLetter) == theirs.lowercased().filter(\.isLetter) } ?? false
+                return "→ \(to): \(theirs)" + (ours == nil || same ? "" : "   ≠ ours: \(ours!)")
+            }
             if session["cancelled"] as? Bool == true { return "cancelled" }
             if let skipped = session["skipped"] as? String { return skipped }
             if let error = session["error"] as? String { return "error: \(error)" }
@@ -263,8 +269,12 @@ private enum DetailWriter {
             w.title("Handed to \(to)")
             w.line("\(entry.app) has a dictation of its own, so the hold went to it.", .secondary)
             if let seconds = s["hold_seconds"] as? Double { w.line("Held for \(secs(seconds)).", .secondary) }
-            return w.text
-        }
+            guard s["shadow"] as? Bool == true else { return w.text }
+            w.heading("\(to) vs. us")
+            w.labelled("\(to) wrote", s["theirs"] as? String ?? "(couldn't tell from the field)")
+            w.labelled("We heard", s["text"] as? String ?? "(nothing)")
+            if let r = s["seconds"] as? Double { w.line("we took \(secs(r)) after release", .secondary) }
+        } else {
 
         // The outcome.
         w.title(entry.summary.isEmpty ? "—" : entry.summary)
@@ -273,6 +283,7 @@ private enum DetailWriter {
         if let r = s["seconds"] as? Double { timings.append("recognised in \(secs(r)) after release") }
         if let settle = s["settlement"] as? [String: Any], let r = settle["seconds"] as? Double { timings.append("of which the model \(secs(r))") }
         w.line(([entry.app] + timings).joined(separator: "  ·  "), .secondary)
+        }
 
         // What the user made of it.
         let followup = entry.json("followup.json")

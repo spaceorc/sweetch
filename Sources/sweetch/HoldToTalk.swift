@@ -39,6 +39,8 @@ final class HoldToTalk {
     private var claudeInPane: Bool?
     /// A hold handed to an app's own dictation, recorded when Space comes up.
     private var handoff: (app: NSRunningApplication, to: String, at: Date)?
+    /// We're hearing that hold too, silently, to compare with what the app writes.
+    private var shadowing = false
     private let dictation: Dictation
     private let isDictationEnabled: () -> Bool
     /// Space was taken over: the keystroke buffer no longer matches the document.
@@ -151,7 +153,7 @@ final class HoldToTalk {
             Replayer.postKeyPair(keyCode: Self.dictationKeyCode, flags: .maskCommand)
             log.info("hold-to-talk: Claude dictation on")
             state = .claudeRecording
-            handoff = (app, "Claude desktop", Date())
+            handOff(app, to: "Claude desktop")
 
         case TerminalProbe.iTermBundleID:
             guard let claudeInPane else {
@@ -178,7 +180,7 @@ final class HoldToTalk {
     private func decideTerminal(claudeInPane: Bool, app: NSRunningApplication) {
         if claudeInPane {
             passThrough("Claude Code has the focused iTerm pane — its own push-to-talk")
-            handoff = (app, "Claude Code", Date())
+            handOff(app, to: "Claude Code")
         } else {
             // A terminal view isn't a text field to Accessibility, but it takes text all the same.
             startDictation(in: app)
@@ -215,9 +217,19 @@ final class HoldToTalk {
         onTakeOver()
     }
 
+    private func handOff(_ app: NSRunningApplication, to target: String) {
+        handoff = (app, target, Date())
+        shadowing = isDictationEnabled() && dictation.beginShadow(app: app, target: target)
+    }
+
     private func recordHandoff() {
         guard let handoff else { return }
         self.handoff = nil
+        if shadowing {
+            shadowing = false
+            dictation.finishShadow()   // records the handoff along with what both heard
+            return
+        }
         DictationStore.recordHandoff(app: handoff.app, to: handoff.to, startedAt: handoff.at,
                                      seconds: Date().timeIntervalSince(handoff.at))
     }

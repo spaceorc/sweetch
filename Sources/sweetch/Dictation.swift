@@ -1,3 +1,4 @@
+import AVFoundation
 import Cocoa
 import ApplicationServices
 
@@ -17,6 +18,9 @@ final class Dictation {
     private let queue = DispatchQueue(label: "sweetch.dictation")
     private var recorder: AudioRecorder?
     private var preview: AnyObject?   // LivePreview, on macOS 26
+    /// A hold handed to an app's own dictation, which we hear too, silently, to compare.
+    private var shadow: (session: Session, recorder: AudioRecorder, preview: AnyObject?, target: String)?
+    private let shadowQueue = DispatchQueue(label: "sweetch.dictation.shadow")
     private var current: Session?
 
     private struct Session {
@@ -35,6 +39,8 @@ final class Dictation {
         private let prefixReady = DispatchGroup()
         private(set) var context: ContextSnapshot.Gathered?
         private(set) var prefix: Prefix?
+        /// The focused field's whole text as the hold began.
+        private(set) var fieldValue: String?
 
         init(app: NSRunningApplication, dir: URL) {
             contextReady.enter()
@@ -44,7 +50,9 @@ final class Dictation {
                 // After the Backspace that took back the held space has landed.
                 usleep(100_000)
                 let started = Date()
-                let context = ContextSnapshot.capture(app: app, field: ContextSnapshot.Field.focused(), into: dir)
+                let field = ContextSnapshot.Field.focused()
+                fieldValue = field?.value
+                let context = ContextSnapshot.capture(app: app, field: field, into: dir)
                 self.context = context
                 contextReady.leave()
                 let gathered = Date().timeIntervalSince(started)
@@ -56,6 +64,11 @@ final class Dictation {
                 ], to: dir.appendingPathComponent("prefix.json"))
                 log.info("dictation: prefix ready in \(Date().timeIntervalSince(started), privacy: .public)s — \(prefix.spoken, privacy: .public)")
             }
+        }
+
+        /// The field as it was, once the context has been read (it's read first).
+        func fieldBefore(waiting seconds: TimeInterval) -> String? {
+            contextReady.wait(timeout: .now() + seconds) == .success ? fieldValue : nil
         }
 
         /// Whatever is ready within `seconds`; nil for what isn't.
@@ -206,6 +219,132 @@ final class Dictation {
             }
             log.info("dictation: heard '\(heard.text, privacy: .public)' from \(heard.versions.map(\.text), privacy: .public)")
             record.merge(self?.insert(heard.text, session: session) ?? [:]) { $1 }
+        }
+    }
+
+    // MARK: - Shadowing an app's own dictation
+
+    /// The hold went to `target`'s own dictation (Claude desktop, Claude Code). Record it as well,
+    /// with no HUD, so what we'd have heard can be set beside what the app wrote. False when we can't
+    /// listen — no prompts are raised for this.
+    func beginShadow(app: NSRunningApplication, target: String) -> Bool {
+        guard Whisper.missing() == nil, AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else { return false }
+        let dir = DictationStore.newSessionDir()
+        let session = Session(dir: dir, app: app, startedAt: Date(), prepared: Prepared(app: app, dir: dir), spaceSelected: false)
+        let recorder = AudioRecorder()
+        var preview: AnyObject?
+        if #available(macOS 26.0, *) {
+            let live = LivePreview { _ in }
+            recorder.onBuffer = { live.append($0) }
+            preview = live
+        }
+        shadow = (session, recorder, preview, target)
+        log.info("dictation: shadowing \(target, privacy: .public) → \(dir.lastPathComponent, privacy: .public)")
+        shadowQueue.async {
+            do { try recorder.start(to: dir.appendingPathComponent("recording.caf")) } catch {
+                log.error("dictation: shadow recording failed to start: \(String(describing: error), privacy: .public)")
+            }
+        }
+        return true
+    }
+
+    /// Space came up: hear what we recorded, and watch the field for what the app writes.
+    func finishShadow() {
+        guard let (session, recorder, preview, target) = shadow else { return }
+        shadow = nil
+        let held = Date().timeIntervalSince(session.startedAt)
+        var appleText: (TimeInterval) -> String? = { _ in nil }
+        if #available(macOS 26.0, *), let live = preview as? LivePreview {
+            live.finish()
+            appleText = { live.transcript(waiting: $0) }
+        }
+
+        // What the app writes, watched while we hear it ourselves.
+        let theirs = Box()
+        let watched = DispatchGroup()
+        watched.enter()
+        DispatchQueue.global(qos: .utility).async {
+            defer { watched.leave() }
+            let before = session.prepared.fieldBefore(waiting: 2) ?? ""
+            theirs.value = Self.watchForInsertion(after: before, in: session.app.processIdentifier)
+        }
+
+        shadowQueue.async {
+            let duration = recorder.stop()
+            var record: [String: Any] = [
+                "handoff": target, "shadow": true,
+                "started_at": DictationStore.stamp(session.startedAt),
+                "app": session.app.localizedName ?? "", "bundle_id": session.app.bundleIdentifier ?? "",
+                "hold_seconds": held, "recording_seconds": duration,
+            ]
+            do {
+                let started = Date()
+                let wav = session.dir.appendingPathComponent("recording.wav")
+                try Whisper.normalise(session.dir.appendingPathComponent("recording.caf"), to: wav)
+                try? FileManager.default.removeItem(at: session.dir.appendingPathComponent("recording.caf"))
+                let settled = try Hearing.hear(wav, dir: session.dir) {
+                    let ready = session.prepared.take(waiting: 0.3)
+                    return (ready.prefix, ready.context, appleText(0.2))
+                }
+                record["seconds"] = Date().timeIntervalSince(started)
+                if let settled {
+                    record["listenings"] = settled.versions.flatMap(\.members).map(\.record)
+                    record["versions"] = settled.versions.map(\.text)
+                    record["settlement"] = settled.settlement ?? NSNull()
+                    record["text"] = settled.text
+                }
+            } catch {
+                record["error"] = String(describing: error)
+            }
+            watched.wait()
+            record["theirs"] = theirs.value ?? NSNull()
+            DictationStore.write(record, to: session.dir.appendingPathComponent("session.json"))
+            log.info("dictation: \(target, privacy: .public) wrote '\(theirs.value ?? "?", privacy: .public)'; we heard '\(record["text"] as? String ?? "-", privacy: .public)'")
+        }
+    }
+
+    /// What appears in the focused field after `before`: polled until it stops changing (an app's
+    /// dictation finishes writing a moment after release), or until it's sent and the field empties.
+    private static func watchForInsertion(after before: String, in pid: pid_t) -> String? {
+        let deadline = Date().addingTimeInterval(15)
+        var last = before
+        var steady = 0
+        var best: String?
+        while Date() < deadline {
+            usleep(400_000)
+            guard let element = AX.focusedElement() else { continue }
+            var owner: pid_t = 0
+            AXUIElementGetPid(element, &owner)
+            guard owner == pid else { break }   // the user moved on
+            AXUIElementSetMessagingTimeout(element, 0.3)
+            let now = AX.string(element, kAXValueAttribute) ?? ""
+            if let inserted = insertion(from: before, to: now), !inserted.isEmpty { best = inserted }
+            steady = now == last ? steady + 1 : 0
+            last = now
+            if best != nil, steady >= 3 { break }   // 1.2 s without a change
+            if best != nil, now.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { break }   // sent
+        }
+        return best
+    }
+
+    /// The text that went in between two states of a field: what's left once their common start and
+    /// end are taken away.
+    private static func insertion(from a: String, to b: String) -> String? {
+        guard a != b else { return nil }
+        let x = Array(a), y = Array(b)
+        var start = 0
+        while start < x.count, start < y.count, x[start] == y[start] { start += 1 }
+        var endX = x.count, endY = y.count
+        while endX > start, endY > start, x[endX - 1] == y[endY - 1] { endX -= 1; endY -= 1 }
+        return String(y[start..<endY]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private final class Box: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stored: String?
+        var value: String? {
+            get { lock.withLock { stored } }
+            set { lock.withLock { stored = newValue } }
         }
     }
 
