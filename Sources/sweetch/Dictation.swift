@@ -336,7 +336,25 @@ final class Dictation {
         while start < x.count, start < y.count, x[start] == y[start] { start += 1 }
         var endX = x.count, endY = y.count
         while endX > start, endY > start, x[endX - 1] == y[endY - 1] { endX -= 1; endY -= 1 }
-        return String(y[start..<endY]).trimmingCharacters(in: .whitespacesAndNewlines)
+        return withoutTerminalChrome(String(y[start..<endY]))
+    }
+
+    /// A terminal app redraws more than its input around what was dictated — Claude Code's
+    /// separator rule, its status line with a ticking clock, its mode hint — and all of it lands in
+    /// the difference. The input is what comes before the first rule; box-drawing borders go.
+    private static func withoutTerminalChrome(_ text: String) -> String {
+        let border = CharacterSet(charactersIn: "─━═│┃╭╮╰╯┌┐└┘├┤")
+        var kept: [String] = []
+        for line in text.components(separatedBy: .newlines) {
+            let glyphs = line.unicodeScalars.filter { !CharacterSet.whitespaces.contains($0) }
+            if glyphs.count >= 8, Double(glyphs.filter(border.contains).count) > Double(glyphs.count) * 0.8 {
+                if !kept.joined().trimmingCharacters(in: .whitespaces).isEmpty { break }
+                continue
+            }
+            kept.append(String(line.unicodeScalars.filter { !border.contains($0) }.map(Character.init)))
+        }
+        return kept.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "^[>❯›]\\s*", with: "", options: .regularExpression)
     }
 
     private final class Box: @unchecked Sendable {
