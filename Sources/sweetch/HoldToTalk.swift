@@ -37,6 +37,8 @@ final class HoldToTalk {
     private var spacesTyped = 0
     /// Whether Claude Code runs in the focused iTerm pane, as asked at this press; nil until known.
     private var claudeInPane: Bool?
+    /// A hold handed to an app's own dictation, recorded when Space comes up.
+    private var handoff: (app: NSRunningApplication, to: String, at: Date)?
     private let dictation: Dictation
     private let isDictationEnabled: () -> Bool
     /// Space was taken over: the keystroke buffer no longer matches the document.
@@ -72,7 +74,9 @@ final class HoldToTalk {
         case (.keyDown, .idle) where !isRepeat:
             guard event.flags.intersection([.maskCommand, .maskShift, .maskAlternate, .maskControl]).isEmpty else { return false }
             let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-            guard front == Self.claudeBundleID || isDictationEnabled() else { return false }
+            guard front != Bundle.main.bundleIdentifier,
+                  front == Self.claudeBundleID || isDictationEnabled() else { return false }
+            handoff = nil
             spacesTyped = 1
             claudeInPane = nil
             if front == TerminalProbe.iTermBundleID {
@@ -104,6 +108,7 @@ final class HoldToTalk {
             Replayer.postKeyPair(keyCode: Self.dictationKeyCode, flags: .maskCommand)
             log.info("hold-to-talk: Claude dictation off")
             state = .idle
+            recordHandoff()
             return true
 
         case (.keyUp, .dictating):
@@ -117,6 +122,7 @@ final class HoldToTalk {
 
         case (.keyUp, .passthrough), (.keyUp, .awaitingTerminal):
             state = .idle
+            recordHandoff()
             return false
 
         default:
@@ -142,6 +148,7 @@ final class HoldToTalk {
             Replayer.postKeyPair(keyCode: Self.dictationKeyCode, flags: .maskCommand)
             log.info("hold-to-talk: Claude dictation on")
             state = .claudeRecording
+            handoff = (app, "Claude desktop", Date())
 
         case TerminalProbe.iTermBundleID:
             guard let claudeInPane else {
@@ -168,18 +175,32 @@ final class HoldToTalk {
     private func decideTerminal(claudeInPane: Bool, app: NSRunningApplication) {
         if claudeInPane {
             passThrough("Claude Code has the focused iTerm pane — its own push-to-talk")
+            handoff = (app, "Claude Code", Date())
         } else {
             // A terminal view isn't a text field to Accessibility, but it takes text all the same.
             startDictation(in: app)
         }
     }
 
+    /// In a terminal the typed spaces are erased (Shift-← would reach the shell as a key). Anywhere
+    /// else they are selected instead, and what's dictated is typed over them: a Backspace on a
+    /// blank line in a JetBrains editor takes the whole line with it.
     private func startDictation(in app: NSRunningApplication) {
-        let erased = spacesTyped
-        eraseTypedSpace()
-        guard dictation.begin(app: app) else {
-            // The spaces are gone already; put them back and let the rest of the hold type more.
-            for _ in 0..<erased { Replayer.postKeyPair(keyCode: Self.spaceKeyCode, flags: []) }
+        let typed = spacesTyped
+        let inTerminal = app.bundleIdentifier == TerminalProbe.iTermBundleID
+        if inTerminal {
+            eraseTypedSpace()
+        } else {
+            for _ in 0..<typed { Replayer.postKeyPair(keyCode: 123, flags: .maskShift) }   // Shift-←
+            spacesTyped = 0
+            onTakeOver()
+        }
+        guard dictation.begin(app: app, spaceSelected: !inTerminal) else {
+            if inTerminal {
+                for _ in 0..<typed { Replayer.postKeyPair(keyCode: Self.spaceKeyCode, flags: []) }
+            } else {
+                Replayer.postKeyPair(keyCode: 124, flags: [])   // → drops the selection, after the spaces
+            }
             return passThrough("dictation unavailable")
         }
         state = .dictating
@@ -189,6 +210,13 @@ final class HoldToTalk {
         for _ in 0..<spacesTyped { Replayer.postKeyPair(keyCode: 51, flags: []) }   // what the press typed
         spacesTyped = 0
         onTakeOver()
+    }
+
+    private func recordHandoff() {
+        guard let handoff else { return }
+        self.handoff = nil
+        DictationStore.recordHandoff(app: handoff.app, to: handoff.to, startedAt: handoff.at,
+                                     seconds: Date().timeIntervalSince(handoff.at))
     }
 
     private func passThrough(_ why: String) {

@@ -1,10 +1,19 @@
 import Foundation
 
-/// Logical models, mapped per provider. Ids mirror what flowra uses in production
-/// (`claude-haiku-4-5@20251001`, `claude-sonnet-4-5@20250929` on Vertex).
+/// Logical models, mapped per provider.
 enum LLMModel {
-    case fast    // per-keystroke correction
+    case fast    // per-keystroke correction, dictation's prefix and settling
     case smart   // glossary distillation
+
+    /// The proxy's sub-provider and model. Haiku 5.5 is served through Azure Foundry only: the proxy's
+    /// Vertex location map has no entry for it, and the Vertex project doesn't serve it anywhere. The
+    /// proxy turns `@` into `-` for Foundry, so this reaches the `claude-haiku-5-5-default` deployment.
+    var proxyRoute: (provider: String, model: String) {
+        switch self {
+        case .fast:  return ("AZURE", "claude-haiku-5-5@default")
+        case .smart: return ("VERTEX_AI", "claude-sonnet-5-5@default")
+        }
+    }
 
     var vertexID: String {
         switch self {
@@ -16,8 +25,18 @@ enum LLMModel {
     /// Azure Foundry addresses models by DEPLOYMENT name (no `@`).
     var azureDeployment: String {
         switch self {
-        case .fast:  return "claude-haiku-4-5-20251001"
-        case .smart: return "claude-sonnet-4-5-20250929"
+        case .fast:  return "claude-haiku-5-5-default"
+        case .smart: return "claude-sonnet-5-5-default"
+        }
+    }
+
+    /// The 5.x models think adaptively unless told not to, which costs time and tokens these short
+    /// answers don't need. Haiku 5.5 takes `disabled`; Sonnet 5.5 refuses it, and `between_tools`
+    /// without tools is no thinking at all. The proxy can't pass this on — hence Foundry first.
+    var thinkingOff: [String: String] {
+        switch self {
+        case .fast:  return ["type": "disabled"]
+        case .smart: return ["type": "between_tools"]
         }
     }
 }
@@ -31,11 +50,12 @@ enum LLMError: Error {
 
 /// LLM client with an ordered provider chain, tried in this order:
 ///
-/// 1. **ANNA LLM proxy** (`POST /api/chat`) — plain HTTP, no key, but only reachable on the
-///    ANNA network/VPN. Same thing anna-gemma uses. Primary.
-/// 2. **Anthropic on Vertex AI** — service-account auth (same shape flowra uses). Works
-///    anywhere, so it covers being off-VPN.
-/// 3. **Azure AI Foundry** — legacy; only useful while a valid Foundry key exists.
+/// 1. **Azure AI Foundry** — the Anthropic API with a Foundry key (the one flowra's `.env` holds).
+///    Primary because it's the only route that can turn the 5.x models' thinking off.
+/// 2. **ANNA LLM proxy** (`POST /api/chat`) — plain HTTP, no key, but only reachable on the
+///    ANNA network/VPN. Same thing anna-gemma uses. Its Claude adapter sends no thinking
+///    setting, so the 5.x models think on every call through it.
+/// 3. **Anthropic on Vertex AI** — service-account auth (same shape flowra uses).
 ///
 /// Credentials come from `sweetch.env` bundled into the app's Resources (copied from the
 /// repo `.env` by the Makefile).
@@ -103,6 +123,10 @@ enum LLMClient {
         guard let config else { throw LLMError.notConfigured }
 
         var attempts: [(name: String, call: () async throws -> String)] = []
+        if config.hasAzure {
+            attempts.append(("azure", { try await callAzure(config: config, system: system, messages: messages,
+                                                            maxTokens: maxTokens, model: model) }))
+        }
         if config.hasProxy {
             attempts.append(("proxy", { try await callProxy(config: config, system: system, messages: messages,
                                                             maxTokens: maxTokens, model: model) }))
@@ -110,10 +134,6 @@ enum LLMClient {
         if config.hasVertex {
             attempts.append(("vertex", { try await callVertex(config: config, system: system, messages: messages,
                                                               maxTokens: maxTokens, model: model) }))
-        }
-        if config.hasAzure {
-            attempts.append(("azure", { try await callAzure(config: config, system: system, messages: messages,
-                                                            maxTokens: maxTokens, model: model) }))
         }
         guard !attempts.isEmpty else { throw LLMError.notConfigured }
 
@@ -130,7 +150,7 @@ enum LLMClient {
         throw lastError
     }
 
-    // MARK: - ANNA LLM proxy (primary)
+    // MARK: - ANNA LLM proxy (fallback)
 
     private static func callProxy(config: Config, system: String, messages: [[String: String]],
                                   maxTokens: Int, model: LLMModel) async throws -> String {
@@ -143,12 +163,11 @@ enum LLMClient {
         req.timeoutInterval = 30
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("sweetch", forHTTPHeaderField: "X-Service-Name")
-        // The proxy takes the system prompt as a `system`-role message (not a separate field),
-        // and routes Anthropic models through provider VERTEX_AI.
+        // The proxy takes the system prompt as a `system`-role message (not a separate field).
         let allMessages = [["role": "system", "content": system]] + messages
         req.httpBody = try JSONSerialization.data(withJSONObject: [
-            "provider": "VERTEX_AI",
-            "model": model.vertexID,
+            "provider": model.proxyRoute.provider,
+            "model": model.proxyRoute.model,
             "max_tokens": maxTokens,
             "messages": allMessages,
         ])
@@ -207,7 +226,7 @@ enum LLMClient {
         return try await send(req)
     }
 
-    // MARK: - Azure AI Foundry (fallback)
+    // MARK: - Azure AI Foundry (primary)
 
     private static func callAzure(config: Config, system: String, messages: [[String: String]],
                                  maxTokens: Int, model: LLMModel) async throws -> String {
@@ -226,6 +245,7 @@ enum LLMClient {
             "max_tokens": maxTokens,
             "system": system,
             "messages": messages,
+            "thinking": model.thinkingOff,
         ])
         return try await send(req)
     }

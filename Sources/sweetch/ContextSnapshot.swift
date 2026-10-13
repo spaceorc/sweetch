@@ -1,13 +1,43 @@
 import Cocoa
 import ApplicationServices
+import Vision
 
 /// What was in front of the user as they started speaking: the app, the window, the field and the
 /// text around the cursor, every text the window shows through Accessibility, and a picture of the
 /// window for when Accessibility shows nothing.
 ///
-/// Phase 0 of dictation only records it beside the recording. The point is to measure, offline,
-/// which of these makes recognition better before any of it is used.
+/// It is what the recognition prefix is written from (`Prefix`), and it is kept beside the
+/// recording so the prefix can be rewritten and measured offline.
 enum ContextSnapshot {
+    /// What the prefix is written from.
+    struct Gathered {
+        let app: String
+        let windowTitle: String?
+        let textBeforeCursor: String?
+        let windowTexts: [String]
+        let ocrText: String?
+
+        /// Everything known about where the user is speaking, for a model to read. The screen texts
+        /// are cut at `screenLimit` characters each.
+        func described(screenLimit: Int) -> String {
+            var parts = ["<app>\(app)</app>"]
+            if let windowTitle { parts.append("<window_title>\(windowTitle)</window_title>") }
+            parts.append("<about_user>\n\(Persona.text().trimmingCharacters(in: .whitespacesAndNewlines))\n</about_user>")
+            let glossary = Glossary.terms()
+            if !glossary.isEmpty { parts.append("<user_words>\(glossary.joined(separator: ", "))</user_words>") }
+            if !windowTexts.isEmpty {
+                parts.append("<window_texts source=\"accessibility\">\n\(windowTexts.joined(separator: "\n").prefix(screenLimit))\n</window_texts>")
+            }
+            if let ocrText, !ocrText.isEmpty {
+                parts.append("<window_texts source=\"screenshot OCR\">\n\(ocrText.prefix(screenLimit))\n</window_texts>")
+            }
+            if let textBeforeCursor, !textBeforeCursor.isEmpty {
+                parts.append("<field_before_cursor>\(textBeforeCursor.suffix(2000))</field_before_cursor>")
+            }
+            return parts.joined(separator: "\n\n")
+        }
+    }
+
     /// The insertion point of the focused text field: what it holds and where the cursor is.
     struct Field {
         let element: AXUIElement
@@ -46,9 +76,9 @@ enum ContextSnapshot {
         }
     }
 
-    /// Gathers everything and writes `context.json` (and `window.png`) into `dir`. Slow — seconds
-    /// on a big window — so it runs off the main thread, while the user speaks.
-    static func capture(app: NSRunningApplication, field: Field?, into dir: URL) {
+    /// Gathers everything and writes `context.json` (and `window.png`) into `dir`. Slow — a second
+    /// or two on a big window — so it runs off the main thread, while the user speaks.
+    static func capture(app: NSRunningApplication, field: Field?, into dir: URL) -> Gathered {
         let started = Date()
         let appElement = AXUIElementCreateApplication(app.processIdentifier)
         AXUIElementSetMessagingTimeout(appElement, 0.3)
@@ -67,20 +97,49 @@ enum ContextSnapshot {
             if let s = field.selection { f["selection"] = ["location": s.location, "length": s.length] }
             context["field"] = f
         }
-        if let window { context["window_texts"] = windowTexts(window) }
+        let texts = window.map(windowTexts) ?? []
+        context["window_texts"] = texts
         context["ax_seconds"] = Date().timeIntervalSince(started)
 
+        var ocr: String?
         if let id = windowID(of: app) {
             let png = dir.appendingPathComponent("window.png")
             do {
                 try Subprocess.run("/usr/sbin/screencapture", ["-x", "-o", "-l", String(id), png.path])
                 context["screenshot"] = png.lastPathComponent
+                let ocrStarted = Date()
+                ocr = readText(in: png)
+                context["ocr"] = ocr
+                context["ocr_seconds"] = Date().timeIntervalSince(ocrStarted)
             } catch {
                 log.error("dictation: window screenshot failed: \(String(describing: error), privacy: .public)")
             }
         }
         context["seconds"] = Date().timeIntervalSince(started)
         DictationStore.write(context, to: dir.appendingPathComponent("context.json"))
+        return Gathered(app: app.localizedName ?? app.bundleIdentifier ?? "?",
+                        windowTitle: context["window_title"] as? String,
+                        textBeforeCursor: field?.textBeforeCursor,
+                        windowTexts: texts,
+                        ocrText: ocr)
+    }
+
+    /// Every line of text in a screenshot, top to bottom — on this machine, with Apple's Vision.
+    /// Where Accessibility shows nothing (Telegram), this is all there is.
+    private static func readText(in png: URL) -> String? {
+        guard let image = NSImage(contentsOf: png)?.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.recognitionLanguages = ["ru-RU", "en-US"]
+        request.usesLanguageCorrection = true
+        do {
+            try VNImageRequestHandler(cgImage: image).perform([request])
+        } catch {
+            log.error("dictation: OCR failed: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+        let lines = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+        return lines.isEmpty ? nil : String(lines.joined(separator: "\n").prefix(20_000))
     }
 
     private static let textRoles: Set<String> = ["AXStaticText", "AXTextArea", "AXTextField", "AXHeading", "AXLink", "AXCell"]

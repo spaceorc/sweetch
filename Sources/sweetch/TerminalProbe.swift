@@ -12,18 +12,24 @@ enum TerminalProbe {
     static let iTermBundleID = "com.googlecode.iterm2"
 
     private static let queue = DispatchQueue(label: "sweetch.terminal-probe")
-    // Main-thread state: callers waiting on the probe in flight.
+    /// A pane rarely changes between two presses of Space this close together, and typing a
+    /// sentence shouldn't run AppleScript at every word.
+    private static let freshFor: TimeInterval = 2
+    // Main-thread state: callers waiting on the probe in flight, and the last answer.
     private static var waiting: [(Bool) -> Void] = []
+    private static var last: (found: Bool, at: Date)?
 
-    /// Main thread only; `answer` is called on it. Asks joining a probe already in flight share
-    /// its answer.
+    /// Main thread only; `answer` is called on it — at once when the last answer is fresh. Asks
+    /// joining a probe already in flight share its answer.
     static func ask(_ answer: @escaping (Bool) -> Void) {
+        if let last, Date().timeIntervalSince(last.at) < freshFor { return answer(last.found) }
         waiting.append(answer)
         guard waiting.count == 1 else { return }
         queue.async {
             let found = Self.probe()
             DispatchQueue.main.async {
                 log.info("terminal probe: Claude Code in the focused iTerm pane = \(found, privacy: .public)")
+                Self.last = (found, Date())
                 let answers = Self.waiting
                 Self.waiting = []
                 answers.forEach { $0(found) }

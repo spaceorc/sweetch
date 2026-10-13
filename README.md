@@ -22,20 +22,30 @@ Runs as a menubar utility with no Dock icon.
   toggle; releasing Space presses ⌘D again. A quick tap still types a space, and anywhere other
   than Claude's prompt Space is left alone.
 
-- **Dictation everywhere else (experiment, phase 0)** — holding Space in any other text field
-  starts sweetch's own dictation: speak, release, and the text is typed where the cursor was.
-  Escape while holding throws the recording away. Claude Code in iTerm2 keeps its own
-  push-to-talk: sweetch asks iTerm which pane is focused and leaves Space alone where `claude`
-  owns it. A plain iTerm shell gets sweetch's. Recognition is local — `whisper-cli` and `ffmpeg`
-  from Homebrew, the large-v3-turbo model in `~/.cache/whisper-cpp`.
+- **Dictation everywhere else (experiment)** — holding Space in any other text field starts
+  sweetch's own dictation: speak, release, and the text is typed where the cursor was (over the
+  space the press typed, which is selected rather than erased — a Backspace on a blank line in a
+  JetBrains editor takes the line with it). Escape while holding throws the recording away.
+  Claude desktop keeps its ⌘D dictation; Claude Code in iTerm2 keeps its own push-to-talk —
+  sweetch asks iTerm which pane is focused and leaves Space alone where `claude` owns it.
 
-  Phase 0 is the baseline and the dataset: one plain listening in Russian, no context yet. Each
-  dictation leaves a folder in `~/Library/Application Support/sweetch/dictation/` (menu →
-  **Open Dictation Recordings**) with the recording, what was in front of you (`context.json`:
-  the field, every text the window shows through Accessibility; `window.png`), what whisper
-  heard and what was typed (`session.json`), and what you turned it into before moving on
-  (`followup.json`). The next phase measures, offline on that data, which context makes
-  recognition better. Menu → **Dictation (Hold Space)** turns it off.
+  It works the way Gemma's voice messages do. While you speak, sweetch gathers what's in front
+  of you — the window's texts through Accessibility, a screenshot read with Apple's Vision, the
+  field before the cursor, your persona and glossary — and Claude Haiku 5.5 writes a recognition
+  prefix from it: a sentence or two in your voice, in Russian and in English, naming the people
+  and terms on screen. On release, whisper.cpp (large-v3-turbo, resident as `whisper-server`)
+  listens three ways: detected language with no prefix, then the likelier of Russian/English and
+  the other one, each with its prefix. A second model pass reads the whole context again with
+  every version, its uncertain words and how it was heard, and settles what you said — never
+  translating, wary of a prefix leaking in. Haiku 5.5 is called on Azure Foundry directly, with
+  thinking off: through the ANNA LLM proxy it would think on every call.
+
+  Menu → **Dictations…** lists every dictation (and every hold handed to Claude) with everything
+  about it: each listening, the prefixes, the model's input and answer, the context and
+  screenshot, timings, and what you edited afterwards; it can play the recording back. The files
+  live in `~/Library/Application Support/sweetch/dictation/`, one folder each. Menu →
+  **Dictation (Hold Space)** turns it off. Needs `ffmpeg`, `whisper-cpp` from Homebrew and the
+  model in `~/.cache/whisper-cpp`.
 
 - **Key remapping** — a Karabiner-shaped layer for keys macOS has no use for.
   A PC keyboard's context-menu key arrives as a plain keycode 110 that nothing is

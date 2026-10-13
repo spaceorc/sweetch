@@ -20,6 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var detectingKey = false
     /// Open annotation windows, kept alive here — an accessory app has no document controller.
     private var editors: [ScreenshotEditor] = []
+    private var dictationsWindow: DictationsWindow?
     private var capturing = false
     /// Summary of a crash the previous run died from, until the user opens it.
     private var pendingCrashReport: URL?
@@ -51,6 +52,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         InputSourceSwitcher.dumpInstalled()
         LayoutTranslator.prewarm()   // build the layout maps on the main thread, once
         _ = LLMClient.isConfigured   // touch the lazy config so the provider line lands in the log
+        if isDictationEnabled { Whisper.warmUp() }   // the model takes seconds to load; not on the first hold
 
         let switchHotkey  = Hotkey(keyCode: 49, flags: .maskCommand)                    // Cmd+Space
         let convertHotkey = Hotkey(keyCode: 49, flags: .maskAlternate)                  // Option+Space
@@ -95,6 +97,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        Whisper.shutDown()
         CrashWatch.markCleanExit()
     }
 
@@ -354,7 +357,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// sweetch is a regular app for exactly as long as a window is open, and slips back into
     /// the menu bar when the last one closes.
     private func updateActivationPolicy() {
-        let policy: NSApplication.ActivationPolicy = editors.isEmpty ? .accessory : .regular
+        let policy: NSApplication.ActivationPolicy = editors.isEmpty && dictationsWindow == nil ? .accessory : .regular
         guard NSApp.activationPolicy() != policy else { return }
         NSApp.setActivationPolicy(policy)
     }
@@ -590,7 +593,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let dictationItem = NSMenuItem(title: "Dictation (Hold Space)", action: #selector(toggleDictation), keyEquivalent: "")
         dictationItem.toolTip = "Hold Space in a text field to dictate; Claude desktop and Claude Code keep their own"
         menu.addItem(dictationItem)
-        menu.addItem(NSMenuItem(title: "Open Dictation Recordings", action: #selector(openDictationRecordings), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Dictations…", action: #selector(showDictations), keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "New Screenshot", action: #selector(captureScreenshot), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Capture Whole Screen", action: #selector(captureFullScreen), keyEquivalent: ""))
@@ -691,11 +694,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func toggleDictation() {
         UserDefaults.standard.set(!isDictationEnabled, forKey: Self.dictationEnabledKey)
+        if isDictationEnabled { Whisper.warmUp() }
         log.info("dictation \(self.isDictationEnabled ? "enabled" : "disabled", privacy: .public)")
     }
 
-    @objc private func openDictationRecordings() {
-        NSWorkspace.shared.open(DictationStore.dir)
+    @objc private func showDictations() {
+        if dictationsWindow == nil {
+            let window = DictationsWindow()
+            window.onClose = { [weak self] in
+                self?.dictationsWindow = nil
+                self?.updateActivationPolicy()
+            }
+            dictationsWindow = window
+            updateActivationPolicy()   // before show(), so the window opens into the right policy
+        }
+        dictationsWindow?.show()
     }
 
     @objc private func quit() {

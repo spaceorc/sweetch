@@ -3,8 +3,9 @@ import ApplicationServices
 
 /// sweetch's own dictation, for apps without one: hold Space in a text field, speak, release.
 ///
-/// Phase 0 of the experiment (see the README): recognition is a single plain listening in Russian
-/// with no prefix — the baseline. Every dictation leaves a folder in `DictationStore.dir` with the
+/// While the user speaks, what's in front of them is gathered (`ContextSnapshot`) and the fast model
+/// writes the recognition prefix from it (`Prefix`). On release the recording is heard several
+/// ways and settled into what was said (`Hearing`), with the whole context read again. Every dictation leaves a folder in `DictationStore.dir` with the
 /// recording, what was in front of the user (`context.json`, `window.png`), what whisper heard and
 /// what was typed (`session.json`), and what the user turned it into (`followup.json`). That is the
 /// dataset the next phase measures prefix strategies against.
@@ -21,6 +22,41 @@ final class Dictation {
         let dir: URL
         let app: NSRunningApplication
         let startedAt: Date
+        let prepared: Prepared
+        /// The space the held key typed is selected, to be typed over — or deleted if nothing is.
+        let spaceSelected: Bool
+    }
+
+    /// The context and the prefix, made while the user speaks; the recogniser waits for them.
+    private final class Prepared {
+        private let ready = DispatchGroup()
+        private(set) var context: ContextSnapshot.Gathered?
+        private(set) var prefix: Prefix?
+
+        init(app: NSRunningApplication, dir: URL) {
+            ready.enter()
+            DispatchQueue.global(qos: .userInitiated).async { [self] in
+                defer { ready.leave() }
+                // After the Backspace that took back the held space has landed.
+                usleep(100_000)
+                let started = Date()
+                let context = ContextSnapshot.capture(app: app, field: ContextSnapshot.Field.focused(), into: dir)
+                self.context = context
+                let gathered = Date().timeIntervalSince(started)
+                let prefix = Prefix.build(from: context)
+                self.prefix = prefix
+                DictationStore.write([
+                    "spoken": prefix.spoken, "preceding": prefix.preceding ?? NSNull(),
+                    "context_seconds": gathered, "seconds": Date().timeIntervalSince(started),
+                ], to: dir.appendingPathComponent("prefix.json"))
+                log.info("dictation: prefix ready in \(Date().timeIntervalSince(started), privacy: .public)s — \(prefix.spoken, privacy: .public)")
+            }
+        }
+
+        /// False if they aren't ready in time; the recording is then heard without them.
+        func wait(upTo seconds: TimeInterval) -> Bool {
+            ready.wait(timeout: .now() + seconds) == .success
+        }
     }
 
     init(overlay: LoaderOverlay) {
@@ -28,7 +64,7 @@ final class Dictation {
     }
 
     /// False when the hold can't be recorded — the caller then lets Space be Space.
-    func begin(app: NSRunningApplication) -> Bool {
+    func begin(app: NSRunningApplication, spaceSelected: Bool) -> Bool {
         if let missing = Whisper.missing() {
             log.error("dictation: unavailable — missing \(missing, privacy: .public)")
             return false
@@ -45,7 +81,8 @@ final class Dictation {
         followUp.finish(reason: "next dictation")
 
         let dir = DictationStore.newSessionDir()
-        let session = Session(dir: dir, app: app, startedAt: Date())
+        let session = Session(dir: dir, app: app, startedAt: Date(), prepared: Prepared(app: app, dir: dir),
+                              spaceSelected: spaceSelected)
         current = session
         let recorder = AudioRecorder()
         self.recorder = recorder
@@ -58,11 +95,6 @@ final class Dictation {
             } catch {
                 log.error("dictation: recording failed to start: \(String(describing: error), privacy: .public)")
             }
-        }
-        DispatchQueue.global(qos: .userInitiated).async {
-            // After the Backspace that took back the held space has landed.
-            usleep(100_000)
-            ContextSnapshot.capture(app: app, field: ContextSnapshot.Field.focused(), into: dir)
         }
         return true
     }
@@ -79,6 +111,7 @@ final class Dictation {
         overlay.hide()
         queue.async {
             recorder.stop()
+            Self.dropSelectedSpace(session)
             DictationStore.write(["cancelled": true, "started_at": DictationStore.stamp(session.startedAt)],
                                  to: session.dir.appendingPathComponent("session.json"))
             log.info("dictation: cancelled")
@@ -101,35 +134,45 @@ final class Dictation {
             ]
             defer { DictationStore.write(record, to: session.dir.appendingPathComponent("session.json")) }
             let done = { DispatchQueue.main.async { self?.overlay.hide() } }
+            defer { if record["inserted"] == nil { Self.dropSelectedSpace(session) } }
 
             guard duration >= 0.4 else {
                 record["skipped"] = "too short"
                 log.info("dictation: \(duration, privacy: .public)s is too short to hold speech")
                 return done()
             }
-            let heard: Whisper.Heard
+            let settled: Hearing.Settled?
             do {
                 let started = Date()
                 let wav = session.dir.appendingPathComponent("recording.wav")
                 try Whisper.normalise(session.dir.appendingPathComponent("recording.caf"), to: wav)
                 try? FileManager.default.removeItem(at: session.dir.appendingPathComponent("recording.caf"))
-                let listening = Whisper.Listening(language: "ru", prompt: nil)
-                heard = try Whisper.hear(wav, listening, outputBase: session.dir.appendingPathComponent("listen-ru"))
-                record["listenings"] = [[
-                    "language": listening.language, "prompt": NSNull(), "text": heard.text,
-                    "json": heard.json.lastPathComponent, "seconds": Date().timeIntervalSince(started),
-                ]]
+                settled = try Hearing.hear(wav, dir: session.dir) {
+                    // The listening without a prefix has run by now, so this only waits on a slow model.
+                    guard session.prepared.wait(upTo: 2) else {
+                        log.error("dictation: context and prefix not ready in time — hearing without them")
+                        return (nil, nil)
+                    }
+                    return (session.prepared.prefix, session.prepared.context)
+                }
+                record["seconds"] = Date().timeIntervalSince(started)
+                if let settled {
+                    record["listenings"] = settled.versions.flatMap(\.members).map(\.record)
+                    record["versions"] = settled.versions.map(\.text)
+                    record["settlement"] = settled.settlement ?? NSNull()
+                    record["text"] = settled.text
+                }
             } catch {
                 record["error"] = String(describing: error)
                 log.error("dictation: recognition failed: \(String(describing: error), privacy: .public)")
                 return done()
             }
             done()
-            guard !heard.text.isEmpty else {
+            guard let heard = settled, !heard.text.isEmpty else {
                 log.info("dictation: nothing heard")
                 return
             }
-            log.info("dictation: heard '\(heard.text, privacy: .public)'")
+            log.info("dictation: heard '\(heard.text, privacy: .public)' from \(heard.versions.map(\.text), privacy: .public)")
             record.merge(self?.insert(heard.text, session: session) ?? [:]) { $1 }
         }
     }
@@ -152,6 +195,14 @@ final class Dictation {
         Replayer.replace(deleteCount: 0, with: typed)
         if let field { followUp.start(dir: session.dir, element: field.element, pid: session.app.processIdentifier) }
         return ["inserted": typed, "inserted_at": DictationStore.stamp(Date())]
+    }
+
+    /// Nothing will be typed over the selected space: delete it, if the user is still there.
+    private static func dropSelectedSpace(_ session: Session) {
+        guard session.spaceSelected,
+              MainQueue.sync({ NSWorkspace.shared.frontmostApplication?.processIdentifier }) == session.app.processIdentifier else { return }
+        Replayer.waitForModifierRelease()
+        Replayer.postKeyPair(keyCode: 51, flags: [])   // Backspace deletes just the selection
     }
 
     /// A space before the text when it would otherwise run into the word before the cursor.
@@ -262,8 +313,11 @@ enum DictationStore {
         return f
     }()
 
-    static func newSessionDir() -> URL {
-        let d = dir.appendingPathComponent(nameFormatter.string(from: Date()), isDirectory: true)
+    /// Posted on the main thread whenever a dictation's files change.
+    static let changed = Notification.Name("sweetch.dictations.changed")
+
+    static func newSessionDir(at date: Date = Date()) -> URL {
+        let d = dir.appendingPathComponent(nameFormatter.string(from: date), isDirectory: true)
         try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
         return d
     }
@@ -278,5 +332,17 @@ enum DictationStore {
             return
         }
         try? data.write(to: url)
+        DispatchQueue.main.async { NotificationCenter.default.post(name: changed, object: url) }
+    }
+
+    /// A hold that went to an app's own dictation, kept beside ours so the history shows both.
+    static func recordHandoff(app: NSRunningApplication, to target: String, startedAt: Date, seconds: TimeInterval) {
+        let appName = app.localizedName ?? ""
+        let bundleID = app.bundleIdentifier ?? ""
+        DispatchQueue.global(qos: .utility).async {
+            write(["handoff": target, "app": appName, "bundle_id": bundleID,
+                   "started_at": stamp(startedAt), "hold_seconds": seconds],
+                  to: newSessionDir(at: startedAt).appendingPathComponent("session.json"))
+        }
     }
 }
