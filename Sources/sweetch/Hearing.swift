@@ -10,8 +10,10 @@ import Foundation
 /// - **auto, no prefix** — what the recording alone sounds like. It starts the moment the key is
 ///   released, without waiting for the prefix, and its language probabilities pick the likelier of
 ///   Russian and English: the user speaks those two and nothing else;
+/// - if Apple's live recogniser heard the same as that first listening and the other language is
+///   unlikely, that's the answer — a plain Russian phrase, about 0.65 s after release;
 /// - **the likelier language, with its prefix**. If it heard the same words as the first and the
-///   other language was unlikely, that's the answer — the common case, about a second after release;
+///   other language was unlikely, that's the answer — about a second after release;
 /// - otherwise **the other language, with its prefix** — for accented English detected as Russian,
 ///   and the reverse — and then the model.
 ///
@@ -119,6 +121,24 @@ enum Hearing {
         let likelier = (p["en"] ?? 0) > (p["ru"] ?? 0) ? "en" : "ru"
         let other = likelier == "ru" ? "en" : "ru"
         let (prefix, context, apple) = prepared()
+
+        // Apple's recogniser, which heard the user live, agreeing with whisper's bare listening: two
+        // independent recognisers heard the same, in a language detection had little doubt about. The
+        // prefixed listening would add nothing — where it matters, on English names and terms, Apple's
+        // Russian model mangles them and doesn't agree.
+        if let apple, let bare = listened.first, !bare.heard.text.isEmpty, (p[other] ?? 0) < otherLanguageDoubt {
+            let appleHeard = Listened(kind: .apple, prompt: nil,
+                                      heard: Whisper.Heard(text: apple, language: "ru", languageProbabilities: [:], words: [],
+                                                           json: dir.appendingPathComponent("preview")),
+                                      seconds: 0)
+            let bareVersion = Version(text: bare.heard.text, members: [bare])
+            if agrees(apple, with: bareVersion) {
+                return Settled(text: inAppleScript(bare.heard.text, apple: apple),
+                               versions: grouped([bare, appleHeard]),
+                               settlement: ["skipped": "Apple's recogniser heard the same as the bare listening"])
+            }
+        }
+
         // Each language its own prefix: a prompt pulls whisper towards the language it's written in.
         let primed = prefix?.text(for: likelier)
         listen(.likelier(likelier), prefix: primed, name: primed == nil ? "listen-\(likelier)" : "listen-\(likelier)-prefix")
@@ -151,12 +171,7 @@ enum Hearing {
 
         // Apple's recogniser drops punctuation and endings, so it agrees with a version when its words
         // are that version's, loosely. The whisper versions it backs:
-        let appleBacks = apple.map { a in
-            whisperVersions.filter { v in
-                // Its words in the version, and the version not much longer than what it heard.
-                backed(a, by: [v]) && Double(latinWords(v.text).count) <= Double(latinWords(a).count) * 1.4 + 1
-            }
-        }
+        let appleBacks = apple.map { a in whisperVersions.filter { agrees(a, with: $0) } }
         if whisperVersions.count == 1, appleBacks.map({ !$0.isEmpty }) ?? true {
             let why = listened.filter(\.kind.isWhisper).count == 2
                 ? "heard alike with and without the prefix; \(other) unlikely (\(String(format: "%.2f", doubt)))"
@@ -219,6 +234,12 @@ enum Hearing {
                 || h.commonPrefix(with: word).count >= 4)) }
         }
         return Double(matched.count) >= Double(said.count) * 0.6
+    }
+
+    /// Apple's transcript agrees with a version when its words are the version's, loosely, and the
+    /// version isn't much longer than what it heard (whisper sometimes hears a phrase twice).
+    private static func agrees(_ apple: String, with version: Version) -> Bool {
+        backed(apple, by: [version]) && Double(latinWords(version.text).count) <= Double(latinWords(apple).count) * 1.4 + 1
     }
 
     /// Whisper sometimes writes Russian in Latin letters ("Ura!"). When Apple's recogniser heard the
