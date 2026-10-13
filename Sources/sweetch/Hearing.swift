@@ -24,11 +24,15 @@ enum Hearing {
         case auto
         case likelier(String)
         case other(String)
+        /// Apple's on-device dictation model, which heard the user live for the preview: a second,
+        /// independent recogniser, Russian only.
+        case apple
 
         var language: String? {
             switch self {
             case .auto: return nil
             case .likelier(let l), .other(let l): return l
+            case .apple: return "ru"
             }
         }
 
@@ -37,7 +41,12 @@ enum Hearing {
             case .auto: return "auto-detected"
             case .likelier(let l): return "\(l) (the likelier language)"
             case .other(let l): return "\(l) (the other language)"
+            case .apple: return "Apple dictation, ru (a different recogniser)"
             }
+        }
+
+        var isWhisper: Bool {
+            if case .apple = self { false } else { true }
         }
     }
 
@@ -92,7 +101,7 @@ enum Hearing {
     /// Blocks: whisper runs, and the model when it's needed. `prepared` blocks until the prefix and
     /// the context are in (or given up on). Throws only when no listening ran.
     static func hear(_ wav: URL, dir: URL,
-                     prepared: () -> (prefix: Prefix?, context: ContextSnapshot.Gathered?)) throws -> Settled? {
+                     prepared: () -> (prefix: Prefix?, context: ContextSnapshot.Gathered?, apple: String?)) throws -> Settled? {
         var listened: [Listened] = []
         var failures: [String] = []
         func listen(_ kind: Kind, prefix: String?, name: String) {
@@ -109,7 +118,7 @@ enum Hearing {
         let p = listened.first?.heard.languageProbabilities ?? [:]
         let likelier = (p["en"] ?? 0) > (p["ru"] ?? 0) ? "en" : "ru"
         let other = likelier == "ru" ? "en" : "ru"
-        let (prefix, context) = prepared()
+        let (prefix, context, apple) = prepared()
         // Each language its own prefix: a prompt pulls whisper towards the language it's written in.
         let primed = prefix?.text(for: likelier)
         listen(.likelier(likelier), prefix: primed, name: primed == nil ? "listen-\(likelier)" : "listen-\(likelier)-prefix")
@@ -130,12 +139,30 @@ enum Hearing {
         // something in silence is the prefix talking ("Спасибо.").
         guard let bare = listened.first(where: { if case .auto = $0.kind { true } else { false } }),
               !bare.heard.text.isEmpty else { return nil }
+        let whisperVersions = grouped(listened.filter { !$0.heard.text.isEmpty })
+        guard let first = whisperVersions.first else { return nil }
+        if let apple {
+            listened.append(Listened(kind: .apple, prompt: nil,
+                                     heard: Whisper.Heard(text: apple, language: "ru", languageProbabilities: [:], words: [],
+                                                          json: dir.appendingPathComponent("preview")),
+                                     seconds: 0))
+        }
         let versions = grouped(listened.filter { !$0.heard.text.isEmpty })
-        guard let first = versions.first else { return nil }
-        if versions.count == 1 {
-            let why = listened.count == 2 ? "heard alike with and without the prefix; \(other) unlikely (\(String(format: "%.2f", doubt)))"
-                                          : "every listening heard the same"
+
+        // Apple's recogniser drops punctuation and endings, so it agrees with a version when its words
+        // are that version's, loosely. The whisper versions it backs:
+        let appleBacks = apple.map { a in whisperVersions.filter { backed(a, by: [$0]) } }
+        if whisperVersions.count == 1, appleBacks.map({ !$0.isEmpty }) ?? true {
+            let why = listened.filter(\.kind.isWhisper).count == 2
+                ? "heard alike with and without the prefix; \(other) unlikely (\(String(format: "%.2f", doubt)))"
+                : "every listening heard the same"
             return Settled(text: first.text, versions: versions, settlement: ["skipped": why])
+        }
+        // Whisper's listenings disagree and Apple's recogniser heard one of them: two recognisers
+        // behind it settle it without the model.
+        if whisperVersions.count > 1, let backs = appleBacks, backs.count == 1 {
+            return Settled(text: backs[0].text, versions: versions,
+                           settlement: ["skipped": "Apple's recogniser heard the same as one of the versions"])
         }
         let prompts = Dictionary(listened.compactMap { l in l.prompt.map { (l.heard.language ?? "?", $0) } }) { a, _ in a }
         // Should the model's answer be refused, the version heard without the prefix stands: it is the
@@ -279,6 +306,9 @@ enum Hearing {
       words that were misheard. Never summarise, rephrase or tidy it up.
     - It continues the text already in the field: if that ends mid-sentence, continue it (lowercase \
       start); match its style of punctuation — a chat message with no full stops gets none at the end.
+    - A single short word or interjection ("Ура", "Да", "Ок", "Спасибо") is a real dictation, not noise.
+    - A version from Apple's dictation is a different recogniser: Russian only, no probabilities, \
+      English comes out mangled in it, but where it agrees with a whisper version they're both right.
     - Answer an empty text only when the versions are plainly noise — recogniser phantoms that \
       disagree with each other. Words the versions agree on were said, even if they make little \
       sense to you or the context doesn't explain them: type them.

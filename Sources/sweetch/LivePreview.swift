@@ -17,6 +17,8 @@ final class LivePreview: @unchecked Sendable {
     private var converter: AVAudioConverter?
     private var format: AVAudioFormat?
     private var tasks: [Task<Void, Never>] = []
+    private var latest = ""
+    private let heardAll = DispatchSemaphore(value: 0)
 
     /// Fetches the model for the next time when it isn't on the machine yet.
     static func prepare() {
@@ -34,12 +36,38 @@ final class LivePreview: @unchecked Sendable {
         }
     }
 
+    /// A whole recording heard at once — for checking stored dictations the way the live preview
+    /// would have heard them. Blocks; call off the main thread.
+    static func transcribe(file url: URL) -> String? {
+        let done = DispatchSemaphore(value: 0)
+        var text: String?
+        Task {
+            defer { done.signal() }
+            do {
+                let transcriber = DictationTranscriber(locale: locale, preset: .progressiveShortDictation)
+                let analyzer = SpeechAnalyzer(modules: [transcriber])
+                let reader = Task {
+                    var all = AttributedString()
+                    for try await result in transcriber.results where result.isFinal { all += result.text }
+                    return String(all.characters)
+                }
+                try await analyzer.start(inputAudioFile: AVAudioFile(forReading: url), finishAfterFile: true)
+                text = try await reader.value.trimmingCharacters(in: .whitespacesAndNewlines)
+            } catch {
+                log.error("live preview: transcribing \(url.lastPathComponent, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        done.wait()
+        return text?.isEmpty == false ? text : nil
+    }
+
     /// `onText` gets the whole transcript so far, on the main thread.
     init(onText: @escaping (String) -> Void) {
         analyzer = SpeechAnalyzer(modules: [transcriber])
         (input, feed) = AsyncStream.makeStream(of: AnalyzerInput.self)
         let transcriber = transcriber
-        tasks.append(Task {
+        tasks.append(Task { [weak self] in
+            defer { self?.heardAll.signal() }
             var settled = AttributedString()
             do {
                 for try await result in transcriber.results {
@@ -51,6 +79,7 @@ final class LivePreview: @unchecked Sendable {
                         text = settled + result.text
                     }
                     let plain = String(text.characters)
+                    self?.lock.withLock { self?.latest = plain }
                     DispatchQueue.main.async { onText(plain) }
                 }
             } catch {
@@ -81,10 +110,24 @@ final class LivePreview: @unchecked Sendable {
         feed.yield(AnalyzerInput(buffer: converted))
     }
 
-    func stop() {
+    /// Ends the input and lets the model finish the words it's on. Returns at once.
+    func finish() {
+        feed.finish()
+        Task { [analyzer] in try? await analyzer.finalizeAndFinishThroughEndOfInput() }
+    }
+
+    func cancel() {
         feed.finish()
         Task { [analyzer] in await analyzer.cancelAndFinishNow() }
         tasks.forEach { $0.cancel() }
+    }
+
+    /// The final transcript, waiting up to `seconds` for the model to finish after `finish()`;
+    /// what it has so far if it doesn't. Call off the main thread.
+    func transcript(waiting seconds: TimeInterval) -> String? {
+        _ = heardAll.wait(timeout: .now() + seconds)
+        let text = lock.withLock { latest }.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : text
     }
 
     private func convert(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {

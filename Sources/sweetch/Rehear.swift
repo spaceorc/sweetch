@@ -26,7 +26,9 @@ enum Rehear {
 
             let heardAt = Date()
             do {
-                guard let settled = try Hearing.hear(wav, dir: out, prepared: { (prefix, context) }) else {
+                var apple: String?
+                if #available(macOS 26.0, *) { apple = LivePreview.transcribe(file: wav) }
+                guard let settled = try Hearing.hear(wav, dir: out, prepared: { (prefix, context, apple) }) else {
                     print("  nothing heard")
                     continue
                 }

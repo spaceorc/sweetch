@@ -121,16 +121,26 @@ final class Dictation {
         followUp.noteReturn()
     }
 
-    private func stopPreview() {
-        if #available(macOS 26.0, *) { (preview as? LivePreview)?.stop() }
+    private func cancelPreview() {
+        if #available(macOS 26.0, *) { (preview as? LivePreview)?.cancel() }
         preview = nil
+    }
+
+    /// Stops the preview listening and hands back a way to its final words, for the recogniser.
+    private func finishPreview() -> (TimeInterval) -> String? {
+        defer { preview = nil }
+        if #available(macOS 26.0, *), let preview = preview as? LivePreview {
+            preview.finish()
+            return { preview.transcript(waiting: $0) }
+        }
+        return { _ in nil }
     }
 
     func cancel() {
         guard let session = current, let recorder else { return }
         current = nil
         self.recorder = nil
-        stopPreview()
+        cancelPreview()
         overlay.hide()
         queue.async {
             recorder.stop()
@@ -145,7 +155,7 @@ final class Dictation {
         guard let session = current, let recorder else { return }
         current = nil
         self.recorder = nil
-        stopPreview()   // the preview's last words stay on screen while whisper works
+        let previewText = finishPreview()   // its last words stay on screen while whisper works
         overlay.show(caption: "recognizing…", spinning: true, symbol: "waveform")
 
         queue.async { [weak self] in
@@ -175,7 +185,7 @@ final class Dictation {
                     // The listening without a prefix has run by now; the prefix gets a moment more.
                     let ready = session.prepared.take(waiting: 0.3)
                     if ready.prefix == nil { log.info("dictation: prefix not ready — hearing without it") }
-                    return ready
+                    return (ready.prefix, ready.context, previewText(0.2))
                 }
                 record["seconds"] = Date().timeIntervalSince(started)
                 if let settled {
