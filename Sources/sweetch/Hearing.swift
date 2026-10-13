@@ -151,17 +151,22 @@ enum Hearing {
 
         // Apple's recogniser drops punctuation and endings, so it agrees with a version when its words
         // are that version's, loosely. The whisper versions it backs:
-        let appleBacks = apple.map { a in whisperVersions.filter { backed(a, by: [$0]) } }
+        let appleBacks = apple.map { a in
+            whisperVersions.filter { v in
+                // Its words in the version, and the version not much longer than what it heard.
+                backed(a, by: [v]) && Double(latinWords(v.text).count) <= Double(latinWords(a).count) * 1.4 + 1
+            }
+        }
         if whisperVersions.count == 1, appleBacks.map({ !$0.isEmpty }) ?? true {
             let why = listened.filter(\.kind.isWhisper).count == 2
                 ? "heard alike with and without the prefix; \(other) unlikely (\(String(format: "%.2f", doubt)))"
                 : "every listening heard the same"
-            return Settled(text: first.text, versions: versions, settlement: ["skipped": why])
+            return Settled(text: inAppleScript(first.text, apple: apple), versions: versions, settlement: ["skipped": why])
         }
         // Whisper's listenings disagree and Apple's recogniser heard one of them: two recognisers
         // behind it settle it without the model.
         if whisperVersions.count > 1, let backs = appleBacks, backs.count == 1 {
-            return Settled(text: backs[0].text, versions: versions,
+            return Settled(text: inAppleScript(backs[0].text, apple: apple), versions: versions,
                            settlement: ["skipped": "Apple's recogniser heard the same as one of the versions"])
         }
         let prompts = Dictionary(listened.compactMap { l in l.prompt.map { (l.heard.language ?? "?", $0) } }) { a, _ in a }
@@ -214,6 +219,18 @@ enum Hearing {
                 || h.commonPrefix(with: word).count >= 4)) }
         }
         return Double(matched.count) >= Double(said.count) * 0.6
+    }
+
+    /// Whisper sometimes writes Russian in Latin letters ("Ura!"). When Apple's recogniser heard the
+    /// same words in Cyrillic, its spelling is the Russian one; whisper's punctuation is kept.
+    private static func inAppleScript(_ text: String, apple: String?) -> String {
+        guard let apple else { return text }
+        let latin = { (s: String) in s.unicodeScalars.filter { ("a"..."z").contains($0) || ("A"..."Z").contains($0) }.count }
+        let cyrillic = { (s: String) in s.unicodeScalars.filter { (0x0400...0x04FF).contains($0.value) }.count }
+        guard latin(text) > cyrillic(text), cyrillic(apple) > latin(apple),
+              latinWords(text) == latinWords(apple) else { return text }
+        let tail = text.reversed().prefix { !$0.isLetter && !$0.isNumber }
+        return apple + String(tail.reversed())
     }
 
     private static func latinWords(_ text: String) -> [String] {

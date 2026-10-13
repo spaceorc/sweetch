@@ -103,8 +103,7 @@ enum Whisper {
     /// answer to `<outputBase>.json`. Returns the text heard, empty when nothing was.
     static func hear(_ wav: URL, language: String?, prompt: String?, outputBase: URL) throws -> Heard {
         guard ensureRunning() else { throw Subprocess.Failure(description: "whisper-server is not answering") }
-        var fields = ["language": language ?? "auto", "response_format": "verbose_json", "temperature": "0",
-                      "audio_ctx": String(audioContext(for: wav))]
+        var fields = ["language": language ?? "auto", "response_format": "verbose_json", "temperature": "0"]
         if let prompt, !prompt.isEmpty { fields["prompt"] = prompt }
         let boundary = "sweetch-\(UUID().uuidString)"
         var body = Data()
@@ -127,10 +126,13 @@ enum Whisper {
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw Subprocess.Failure(description: "whisper-server answered with something other than JSON")
         }
-        let text = (object["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let segments = object["segments"] as? [[String: Any]] ?? []
+        // The segments, as they are: one can end mid-word ("в процессе д" + "иктовки."), and the
+        // server's own `text` puts a line break between them.
+        let text = withoutRepeat(segments.map { $0["text"] as? String ?? "" }).joined()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         let probabilities = object["language_probabilities"] as? [String: Double] ?? [:]
         let detected = probabilities.max { $0.value < $1.value }?.key
-        let segments = object["segments"] as? [[String: Any]] ?? []
         let phantom = isPhantom(text)
         return Heard(text: phantom ? "" : text,
                      language: language ?? detected,
@@ -139,14 +141,8 @@ enum Whisper {
                      json: json)
     }
 
-    /// Whisper encodes a 30-second window however short the recording. Half of it (768 of 1500
-    /// frames, ~15 s) halves the time on a short dictation and hears it the same; a quarter breaks it
-    /// into gibberish. Long recordings get the whole window.
-    private static func audioContext(for wav: URL) -> Int {
-        let bytes = (try? wav.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? .max
-        let seconds = Double(bytes) / 32_000   // 16 kHz, mono, 16-bit
-        return seconds <= 12 ? 768 : 0
-    }
+    // Not `audio_ctx`: encoding half of whisper's 30-second window halved a listening's time, but
+    // made it repeat a 4-second phrase twice, and other sizes garbled other recordings.
 
     private static func send(_ request: URLRequest) throws -> Data {
         let done = DispatchSemaphore(value: 0)
@@ -184,6 +180,16 @@ enum Whisper {
             guard !text.isEmpty, let least = scored.min() else { return nil }
             return Word(text: text, probability: least)
         }
+    }
+
+    /// Whisper sometimes hears a phrase, then hears it all over again. Segments that repeat the ones
+    /// before them, in full, go.
+    private static func withoutRepeat(_ segments: [String]) -> [String] {
+        let n = segments.count
+        guard n >= 2, n % 2 == 0 else { return segments }
+        let half = n / 2
+        let norm = { (s: [String]) in s.joined().lowercased().filter { $0.isLetter || $0.isNumber } }
+        return norm(Array(segments[..<half])) == norm(Array(segments[half...])) ? Array(segments[..<half]) : segments
     }
 
     private static func isPhantom(_ text: String) -> Bool {
