@@ -266,7 +266,7 @@ final class Dictation {
         DispatchQueue.global(qos: .utility).async {
             defer { watched.leave() }
             let before = session.prepared.fieldBefore(waiting: 2) ?? ""
-            theirs.value = Self.watchForInsertion(after: before, in: session.app.processIdentifier)
+            theirs.value = Theirs.watch(after: before, in: session.app.processIdentifier, dir: session.dir)
         }
 
         shadowQueue.async {
@@ -301,88 +301,6 @@ final class Dictation {
             DictationStore.write(record, to: session.dir.appendingPathComponent("session.json"))
             log.info("dictation: \(target, privacy: .public) wrote '\(theirs.value ?? "?", privacy: .public)'; we heard '\(record["text"] as? String ?? "-", privacy: .public)'")
         }
-    }
-
-    /// What appears in the focused field after `before`: polled until it stops changing (an app's
-    /// dictation finishes writing a moment after release), or until it's sent and the field empties.
-    /// In a terminal the "field" is the whole screen, which goes on changing after the text is sent —
-    /// Claude Code's spinner, its answer — so there only its input box is watched.
-    private static func watchForInsertion(after screen: String, in pid: pid_t) -> String? {
-        let box = claudeCodeInput(screen)
-        let before = box ?? screen
-        let deadline = Date().addingTimeInterval(15)
-        var last = before
-        var steady = 0
-        var best: String?
-        while Date() < deadline {
-            usleep(400_000)
-            guard let element = AX.focusedElement() else { continue }
-            var owner: pid_t = 0
-            AXUIElementGetPid(element, &owner)
-            guard owner == pid else { break }   // the user moved on
-            AXUIElementSetMessagingTimeout(element, 0.3)
-            let value = AX.string(element, kAXValueAttribute) ?? ""
-            let now = box == nil ? value : claudeCodeInput(value) ?? ""
-            if let inserted = insertion(from: before, to: now), !inserted.isEmpty { best = inserted }
-            steady = now == last ? steady + 1 : 0
-            last = now
-            if best != nil, steady >= 3 { break }   // 1.2 s without a change
-            if best != nil, now.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { break }   // sent
-        }
-        return best
-    }
-
-    /// The text that went in between two states of a field: what's left once their common start and
-    /// end are taken away.
-    private static func insertion(from a: String, to b: String) -> String? {
-        guard a != b else { return nil }
-        let x = Array(a), y = Array(b)
-        var start = 0
-        while start < x.count, start < y.count, x[start] == y[start] { start += 1 }
-        var endX = x.count, endY = y.count
-        while endX > start, endY > start, x[endX - 1] == y[endY - 1] { endX -= 1; endY -= 1 }
-        return withoutTerminalChrome(String(y[start..<endY]))
-    }
-
-    /// A terminal app redraws more than its input around what was dictated — Claude Code's
-    /// separator rule, its status line with a ticking clock, its mode hint — and all of it lands in
-    /// the difference. The input is what comes before the first rule; box-drawing borders go.
-    private static func withoutTerminalChrome(_ text: String) -> String {
-        var kept: [String] = []
-        for line in text.components(separatedBy: .newlines) {
-            if isRule(line) {
-                if !kept.joined().trimmingCharacters(in: .whitespaces).isEmpty { break }
-                continue
-            }
-            kept.append(String(line.unicodeScalars.filter { !border.contains($0) }.map(Character.init)))
-        }
-        return kept.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "^[>❯›]\\s*", with: "", options: .regularExpression)
-    }
-
-    /// What's typed in Claude Code's input box, read off a terminal's text: from the last `❯` prompt
-    /// down to the rule under it, its wrapped lines put back together. Nil when there's no such box.
-    /// iTerm2 gives blank cells as NULs.
-    static func claudeCodeInput(_ screen: String) -> String? {
-        let lines = screen.replacingOccurrences(of: "\0", with: " ").replacingOccurrences(of: "\u{a0}", with: " ")
-            .components(separatedBy: .newlines)
-        guard let top = lines.lastIndex(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix("❯") }) else { return nil }
-        var typed: [String] = []
-        for line in lines[top...] {
-            if isRule(line) {
-                return typed.joined(separator: " ").replacingOccurrences(of: "^❯\\s*", with: "", options: .regularExpression)
-            }
-            typed.append(line.trimmingCharacters(in: .whitespaces))
-        }
-        return nil
-    }
-
-    private static let border = CharacterSet(charactersIn: "─━═│┃╭╮╰╯┌┐└┘├┤")
-
-    /// A line drawn across: mostly box-drawing, perhaps with a label in it.
-    private static func isRule(_ line: String) -> Bool {
-        let glyphs = line.unicodeScalars.filter { !CharacterSet.whitespaces.contains($0) }
-        return glyphs.count >= 8 && Double(glyphs.filter(border.contains).count) > Double(glyphs.count) * 0.8
     }
 
     private final class Box: @unchecked Sendable {
