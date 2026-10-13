@@ -14,6 +14,8 @@ final class AudioRecorder {
 
     private var engine: AVAudioEngine?
     private var startedAt: Date?
+    /// Every buffer recorded, on the audio thread — for the live preview.
+    var onBuffer: ((AVAudioPCMBuffer) -> Void)?
 
     static func checkPermission() -> Permission {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
@@ -38,7 +40,9 @@ final class AudioRecorder {
         }
         let file = try AVAudioFile(forWriting: url, settings: format.settings,
                                    commonFormat: format.commonFormat, interleaved: format.isInterleaved)
+        let onBuffer = onBuffer
         input.installTap(onBus: 0, bufferSize: 4096, format: format) { buffer, _ in
+            onBuffer?(buffer)
             do { try file.write(from: buffer) } catch { log.error("dictation: audio write failed: \(error.localizedDescription, privacy: .public)") }
         }
         engine.prepare()

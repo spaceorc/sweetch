@@ -16,6 +16,7 @@ final class Dictation {
     private let followUp = DictationFollowUp()
     private let queue = DispatchQueue(label: "sweetch.dictation")
     private var recorder: AudioRecorder?
+    private var preview: AnyObject?   // LivePreview, on macOS 26
     private var current: Session?
 
     private struct Session {
@@ -93,6 +94,15 @@ final class Dictation {
         current = session
         let recorder = AudioRecorder()
         self.recorder = recorder
+        if #available(macOS 26.0, *) {
+            let overlay = self.overlay
+            let preview = LivePreview { [weak self] text in
+                guard self?.preview != nil else { return }   // a late word after release mustn't come back
+                overlay.showDetail(text)
+            }
+            recorder.onBuffer = { preview.append($0) }
+            self.preview = preview
+        }
         overlay.show(caption: "listening…", spinning: false, symbol: "mic.fill")
         log.info("dictation: listening in \(app.bundleIdentifier ?? "?", privacy: .public) → \(dir.lastPathComponent, privacy: .public)")
 
@@ -111,10 +121,16 @@ final class Dictation {
         followUp.noteReturn()
     }
 
+    private func stopPreview() {
+        if #available(macOS 26.0, *) { (preview as? LivePreview)?.stop() }
+        preview = nil
+    }
+
     func cancel() {
         guard let session = current, let recorder else { return }
         current = nil
         self.recorder = nil
+        stopPreview()
         overlay.hide()
         queue.async {
             recorder.stop()
@@ -129,6 +145,7 @@ final class Dictation {
         guard let session = current, let recorder else { return }
         current = nil
         self.recorder = nil
+        stopPreview()   // the preview's last words stay on screen while whisper works
         overlay.show(caption: "recognizing…", spinning: true, symbol: "waveform")
 
         queue.async { [weak self] in

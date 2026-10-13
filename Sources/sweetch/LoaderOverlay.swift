@@ -9,22 +9,40 @@ final class LoaderOverlay {
     private var spinner: NSProgressIndicator?
     private var caption: NSTextField?
     private var glyph: NSImageView?
+    private var blur: NSVisualEffectView?
+    private var detail: NSTextField?
+    private var detailText = ""
 
-    /// `spinning: false` turns the HUD into a plain prompt (used by "Detect Key…").
+    private static let squareSide: CGFloat = 176
+    private static let wideWidth: CGFloat = 480
+    private static let detailChars = 160
+
+    /// `spinning: false` turns the HUD into a plain prompt (used by "Detect Key…"). Already on
+    /// screen, it changes in place rather than fading in again.
     func show(caption text: String = "correcting…", spinning: Bool = true, symbol: String = "keyboard") {
         let panel = self.panel ?? makePanel()
         self.panel = panel
-        reposition(panel)
         caption?.stringValue = text
         glyph?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "sweetch")
         spinner?.isHidden = !spinning
         if spinning { spinner?.startAnimation(nil) } else { spinner?.stopAnimation(nil) }
+        layout(panel)
+        guard !(panel.isVisible && panel.alphaValue > 0) else { return }
         panel.alphaValue = 0
         panel.orderFrontRegardless()          // show WITHOUT activating our app
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.15
             panel.animator().alphaValue = 1
         }
+    }
+
+    /// Text under the caption — dictation's words as they're heard. The HUD widens to hold it and
+    /// keeps the end of a long one.
+    func showDetail(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        detailText = trimmed.count > Self.detailChars ? "…" + trimmed.suffix(Self.detailChars) : trimmed
+        guard let panel else { return }
+        layout(panel)
     }
 
     func hide() {
@@ -35,7 +53,31 @@ final class LoaderOverlay {
         }, completionHandler: { [weak self] in
             panel.orderOut(nil)
             self?.spinner?.stopAnimation(nil)
+            self?.detailText = ""
         })
+    }
+
+    /// The square HUD, or a wider one with the detail text under it; centred either way.
+    private func layout(_ panel: NSPanel) {
+        let side = Self.squareSide
+        var width = side
+        var lift: CGFloat = 0
+        detail?.stringValue = detailText
+        detail?.isHidden = detailText.isEmpty
+        if let detail, !detailText.isEmpty {
+            width = Self.wideWidth
+            let textWidth = width - 40
+            let height = min(ceil(detail.cell?.cellSize(forBounds: NSRect(x: 0, y: 0, width: textWidth, height: 400)).height ?? 20), 84)
+            detail.frame = NSRect(x: 20, y: 18, width: textWidth, height: height)
+            lift = height + 10
+        }
+        let size = NSSize(width: width, height: side + lift)
+        panel.setContentSize(size)
+        blur?.frame = NSRect(origin: .zero, size: size)
+        glyph?.frame = NSRect(x: (width - 56) / 2, y: 100 + lift, width: 56, height: 48)
+        spinner?.frame = NSRect(x: (width - 32) / 2, y: 56 + lift, width: 32, height: 32)
+        caption?.frame = NSRect(x: 0, y: 26 + lift, width: width, height: 18)
+        reposition(panel)
     }
 
     private func reposition(_ panel: NSPanel) {
@@ -70,6 +112,7 @@ final class LoaderOverlay {
         blur.wantsLayer = true
         blur.layer?.cornerRadius = 28
         blur.layer?.masksToBounds = true
+        self.blur = blur
 
         // Keyboard glyph on top.
         if let img = NSImage(systemSymbolName: "keyboard", accessibilityDescription: "sweetch") {
@@ -98,6 +141,16 @@ final class LoaderOverlay {
         label.alignment = .center
         label.frame = NSRect(x: 0, y: 26, width: size.width, height: 18)
         blur.addSubview(label)
+
+        let words = NSTextField(wrappingLabelWithString: "")
+        words.font = .systemFont(ofSize: 15)
+        words.textColor = .labelColor
+        words.alignment = .center
+        words.maximumNumberOfLines = 4
+        words.lineBreakMode = .byWordWrapping   // the start of a long text is cut in showDetail
+        words.isHidden = true
+        blur.addSubview(words)
+        self.detail = words
 
         panel.contentView = blur
         return panel

@@ -52,7 +52,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         InputSourceSwitcher.dumpInstalled()
         LayoutTranslator.prewarm()   // build the layout maps on the main thread, once
         _ = LLMClient.isConfigured   // touch the lazy config so the provider line lands in the log
-        if isDictationEnabled { Whisper.warmUp() }   // the model takes seconds to load; not on the first hold
+        if isDictationEnabled {
+            Whisper.warmUp()   // the model takes seconds to load; not on the first hold
+            if #available(macOS 26.0, *) { LivePreview.prepare() }
+        }
 
         let switchHotkey  = Hotkey(keyCode: 49, flags: .maskCommand)                    // Cmd+Space
         let convertHotkey = Hotkey(keyCode: 49, flags: .maskAlternate)                  // Option+Space
