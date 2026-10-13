@@ -305,7 +305,11 @@ final class Dictation {
 
     /// What appears in the focused field after `before`: polled until it stops changing (an app's
     /// dictation finishes writing a moment after release), or until it's sent and the field empties.
-    private static func watchForInsertion(after before: String, in pid: pid_t) -> String? {
+    /// In a terminal the "field" is the whole screen, which goes on changing after the text is sent —
+    /// Claude Code's spinner, its answer — so there only its input box is watched.
+    private static func watchForInsertion(after screen: String, in pid: pid_t) -> String? {
+        let box = claudeCodeInput(screen)
+        let before = box ?? screen
         let deadline = Date().addingTimeInterval(15)
         var last = before
         var steady = 0
@@ -317,7 +321,8 @@ final class Dictation {
             AXUIElementGetPid(element, &owner)
             guard owner == pid else { break }   // the user moved on
             AXUIElementSetMessagingTimeout(element, 0.3)
-            let now = AX.string(element, kAXValueAttribute) ?? ""
+            let value = AX.string(element, kAXValueAttribute) ?? ""
+            let now = box == nil ? value : claudeCodeInput(value) ?? ""
             if let inserted = insertion(from: before, to: now), !inserted.isEmpty { best = inserted }
             steady = now == last ? steady + 1 : 0
             last = now
@@ -343,11 +348,9 @@ final class Dictation {
     /// separator rule, its status line with a ticking clock, its mode hint — and all of it lands in
     /// the difference. The input is what comes before the first rule; box-drawing borders go.
     private static func withoutTerminalChrome(_ text: String) -> String {
-        let border = CharacterSet(charactersIn: "─━═│┃╭╮╰╯┌┐└┘├┤")
         var kept: [String] = []
         for line in text.components(separatedBy: .newlines) {
-            let glyphs = line.unicodeScalars.filter { !CharacterSet.whitespaces.contains($0) }
-            if glyphs.count >= 8, Double(glyphs.filter(border.contains).count) > Double(glyphs.count) * 0.8 {
+            if isRule(line) {
                 if !kept.joined().trimmingCharacters(in: .whitespaces).isEmpty { break }
                 continue
             }
@@ -355,6 +358,31 @@ final class Dictation {
         }
         return kept.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "^[>❯›]\\s*", with: "", options: .regularExpression)
+    }
+
+    /// What's typed in Claude Code's input box, read off a terminal's text: from the last `❯` prompt
+    /// down to the rule under it, its wrapped lines put back together. Nil when there's no such box.
+    /// iTerm2 gives blank cells as NULs.
+    static func claudeCodeInput(_ screen: String) -> String? {
+        let lines = screen.replacingOccurrences(of: "\0", with: " ").replacingOccurrences(of: "\u{a0}", with: " ")
+            .components(separatedBy: .newlines)
+        guard let top = lines.lastIndex(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix("❯") }) else { return nil }
+        var typed: [String] = []
+        for line in lines[top...] {
+            if isRule(line) {
+                return typed.joined(separator: " ").replacingOccurrences(of: "^❯\\s*", with: "", options: .regularExpression)
+            }
+            typed.append(line.trimmingCharacters(in: .whitespaces))
+        }
+        return nil
+    }
+
+    private static let border = CharacterSet(charactersIn: "─━═│┃╭╮╰╯┌┐└┘├┤")
+
+    /// A line drawn across: mostly box-drawing, perhaps with a label in it.
+    private static func isRule(_ line: String) -> Bool {
+        let glyphs = line.unicodeScalars.filter { !CharacterSet.whitespaces.contains($0) }
+        return glyphs.count >= 8 && Double(glyphs.filter(border.contains).count) > Double(glyphs.count) * 0.8
     }
 
     private final class Box: @unchecked Sendable {
