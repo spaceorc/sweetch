@@ -103,7 +103,8 @@ enum Whisper {
     /// answer to `<outputBase>.json`. Returns the text heard, empty when nothing was.
     static func hear(_ wav: URL, language: String?, prompt: String?, outputBase: URL) throws -> Heard {
         guard ensureRunning() else { throw Subprocess.Failure(description: "whisper-server is not answering") }
-        var fields = ["language": language ?? "auto", "response_format": "verbose_json", "temperature": "0"]
+        var fields = ["language": language ?? "auto", "response_format": "verbose_json", "temperature": "0",
+                      "audio_ctx": String(audioContext(for: wav))]
         if let prompt, !prompt.isEmpty { fields["prompt"] = prompt }
         let boundary = "sweetch-\(UUID().uuidString)"
         var body = Data()
@@ -136,6 +137,15 @@ enum Whisper {
                      languageProbabilities: language == nil ? probabilities : [:],
                      words: phantom ? [] : words(fromPieces: segments.flatMap { $0["words"] as? [[String: Any]] ?? [] }),
                      json: json)
+    }
+
+    /// Whisper encodes a 30-second window however short the recording. Half of it (768 of 1500
+    /// frames, ~15 s) halves the time on a short dictation and hears it the same; a quarter breaks it
+    /// into gibberish. Long recordings get the whole window.
+    private static func audioContext(for wav: URL) -> Int {
+        let bytes = (try? wav.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? .max
+        let seconds = Double(bytes) / 32_000   // 16 kHz, mono, 16-bit
+        return seconds <= 12 ? 768 : 0
     }
 
     private static func send(_ request: URLRequest) throws -> Data {

@@ -104,21 +104,24 @@ final class HoldToTalk {
             state = .idle
             return false
 
+        // Space's release always goes through. Swallowed, the system takes Space as still down, and
+        // the next real press anywhere arrives as an autorepeat — which Claude Code in a terminal
+        // doesn't take for the start of a hold. A release on its own types nothing.
         case (.keyUp, .claudeRecording):
             Replayer.postKeyPair(keyCode: Self.dictationKeyCode, flags: .maskCommand)
             log.info("hold-to-talk: Claude dictation off")
             state = .idle
             recordHandoff()
-            return true
+            return false
 
         case (.keyUp, .dictating):
             dictation.finish()
             state = .idle
-            return true
+            return false
 
         case (.keyUp, .swallowing):
             state = .idle
-            return true
+            return false
 
         case (.keyUp, .passthrough), (.keyUp, .awaitingTerminal):
             state = .idle

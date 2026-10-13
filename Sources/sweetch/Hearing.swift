@@ -10,14 +10,15 @@ import Foundation
 /// - **auto, no prefix** — what the recording alone sounds like. It starts the moment the key is
 ///   released, without waiting for the prefix, and its language probabilities pick the likelier of
 ///   Russian and English: the user speaks those two and nothing else;
-/// - **the likelier language, with the prefix**;
-/// - **the other language, with the prefix** — for accented English detected as Russian, and the
-///   reverse.
+/// - **the likelier language, with its prefix**. If it heard the same words as the first and the
+///   other language was unlikely, that's the answer — the common case, about a second after release;
+/// - otherwise **the other language, with its prefix** — for accented English detected as Russian,
+///   and the reverse — and then the model.
 ///
 /// Listenings whose texts differ only in case and punctuation heard the same words and make one
 /// version. Then a model settles what the user said, reading all of the context again, the prefix,
 /// and every version with how it was heard and which of its words whisper was unsure of. It is
-/// skipped only when every listening heard the same words and was sure of each one.
+/// skipped when every listening heard the same words.
 enum Hearing {
     enum Kind {
         case auto
@@ -79,6 +80,11 @@ enum Hearing {
         let settlement: [String: Any]?
     }
 
+    /// Detection's probability for the other language at which it gets a listening even when the first
+    /// two agree. Russian speech scored English 0.02–0.19 on the user's recordings, so this only spares
+    /// the clear cases.
+    static let otherLanguageDoubt = 0.1
+
     /// Below this a word is reported as possibly misheard. Gemma's value, calibrated on English;
     /// Russian is still to be calibrated on the recordings.
     static let uncertainProbability = 0.7
@@ -105,31 +111,52 @@ enum Hearing {
         let other = likelier == "ru" ? "en" : "ru"
         let (prefix, context) = prepared()
         // Each language its own prefix: a prompt pulls whisper towards the language it's written in.
-        if let prefix, prefix.text(for: likelier) != nil || prefix.text(for: other) != nil {
-            listen(.likelier(likelier), prefix: prefix.text(for: likelier), name: "listen-\(likelier)-prefix")
-            listen(.other(other), prefix: prefix.text(for: other), name: "listen-\(other)-prefix")
-        } else {
-            listen(.other(other), prefix: nil, name: "listen-\(other)")
+        let primed = prefix?.text(for: likelier)
+        listen(.likelier(likelier), prefix: primed, name: primed == nil ? "listen-\(likelier)" : "listen-\(likelier)-prefix")
+
+        // Heard alike with and without the prefix, in a language detection had little doubt about:
+        // that is what was said, and the other language and the model would only cost time.
+        let agreed = listened.count == 2 && !listened[0].heard.text.isEmpty
+            && wordsOf(listened[0].heard.text) == wordsOf(listened[1].heard.text)
+        let doubt = p[other] ?? 0
+        if !agreed || doubt >= otherLanguageDoubt {
+            let otherPrimed = prefix?.text(for: other)
+            listen(.other(other), prefix: otherPrimed, name: otherPrimed == nil ? "listen-\(other)" : "listen-\(other)-prefix")
         }
         if !failures.isEmpty { log.error("dictation: listenings failed: \(failures, privacy: .public)") }
         if listened.isEmpty { throw Subprocess.Failure(description: failures.joined(separator: "; ")) }
 
+        // Nothing heard without the prefix means nothing was said: a prefixed listening that hears
+        // something in silence is the prefix talking ("Спасибо.").
+        guard let bare = listened.first(where: { if case .auto = $0.kind { true } else { false } }),
+              !bare.heard.text.isEmpty else { return nil }
         let versions = grouped(listened.filter { !$0.heard.text.isEmpty })
         guard let first = versions.first else { return nil }
-        if versions.count == 1, first.members.allSatisfy({ Hearing.uncertain($0.heard.words).isEmpty }) {
-            return Settled(text: first.text, versions: versions, settlement: ["skipped": "every listening heard the same, surely"])
+        if versions.count == 1 {
+            let why = listened.count == 2 ? "heard alike with and without the prefix; \(other) unlikely (\(String(format: "%.2f", doubt)))"
+                                          : "every listening heard the same"
+            return Settled(text: first.text, versions: versions, settlement: ["skipped": why])
         }
         let prompts = Dictionary(listened.compactMap { l in l.prompt.map { (l.heard.language ?? "?", $0) } }) { a, _ in a }
+        // Should the model's answer be refused, the version heard without the prefix stands: it is the
+        // recording's own.
+        let fallback = versions.first { $0.members.contains { if case .auto = $0.kind { true } else { false } } } ?? first
         var (text, settlement) = settle(versions, prompts: prompts, context: context)
+        // What the versions don't back is the context talking, not the user.
+        if let answer = text, !answer.isEmpty, !backed(answer, by: versions) {
+            log.error("dictation: the model's answer isn't backed by what was heard — typing the bare version")
+            settlement["overruled"] = "answer not backed by the versions: \(answer)"
+            text = nil
+        }
         // Noise makes whisper hear nothing, or a phantom we already drop. Speech that two listenings
         // made words of was said — even in two spellings ("Setup Tools" / "Ситап Тулс") — and the
         // model doesn't get to drop it.
         if text?.isEmpty == true, versions.reduce(0, { $0 + $1.members.count }) >= 2 {
-            log.info("dictation: the model dropped what the listenings heard — typing the first version")
+            log.info("dictation: the model dropped what the listenings heard — typing the bare version")
             settlement["overruled"] = "listenings heard words; an empty answer isn't accepted"
             text = nil
         }
-        return Settled(text: text ?? first.text, versions: versions, settlement: settlement)
+        return Settled(text: text ?? fallback.text, versions: versions, settlement: settlement)
     }
 
     /// Most listenings first; among equals, the one whisper was surest of.
@@ -144,6 +171,28 @@ enum Hearing {
         return order.map { groups[$0]! }
             .sorted { ($0.count, sureness($0[0])) > ($1.count, sureness($1[0])) }
             .map { Version(text: $0[0].heard.text, members: $0) }
+    }
+
+    /// Whether an answer stays with what was heard: every number in it was heard as such, and most of
+    /// its words have a counterpart in some version — the same word, in either script ("тест" is
+    /// "test"), or one that shares its start ("setup tools" for "setuptools").
+    static func backed(_ answer: String, by versions: [Version]) -> Bool {
+        let heard = Set(versions.flatMap { latinWords($0.text) })
+        let said = latinWords(answer)
+        guard !said.isEmpty else { return true }
+        let numbers = said.filter { $0.allSatisfy(\.isNumber) }
+        guard numbers.allSatisfy(heard.contains) else { return false }
+        let matched = said.filter { word in
+            heard.contains { h in h == word || (min(h.count, word.count) >= 4 && (h.hasPrefix(word) || word.hasPrefix(h)
+                || h.commonPrefix(with: word).count >= 4)) }
+        }
+        return Double(matched.count) >= Double(said.count) * 0.6
+    }
+
+    private static func latinWords(_ text: String) -> [String] {
+        let latin = text.lowercased().applyingTransform(.toLatin, reverse: false)?
+            .applyingTransform(.stripDiacritics, reverse: false) ?? text.lowercased()
+        return String(latin.map { $0.isLetter || $0.isNumber ? $0 : " " }).split(separator: " ").map(String.init)
     }
 
     private static func wordsOf(_ text: String) -> String {
@@ -163,6 +212,18 @@ enum Hearing {
 
     // MARK: - Settling
 
+    private static let settleTimeout: TimeInterval = 1.5
+
+    /// A reply that may land after the wait for it gave up.
+    private final class Box: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stored: String?
+        var value: String? {
+            get { lock.withLock { stored } }
+            set { lock.withLock { stored = newValue } }
+        }
+    }
+
     private static let system = """
     You work out what a user said into the microphone. They held a key in some app, dictated, and \
     released; whatever you answer is typed at their cursor as if they had typed it themselves. Getting \
@@ -172,10 +233,13 @@ enum Hearing {
     terms inside it, which they write in Latin script ("закинул PR в anna-voice-messages"). Sometimes \
     a whole phrase in English.
 
+    THE RECORDING DECIDES. What the versions heard is the evidence; the context only helps to choose \
+    between them where they differ or are unsure, and to spell names and terms. Most of the time the \
+    answer is simply the best version, cleaned up.
+
     You get:
-    - <context>: where they are speaking — the app, the window, who they are, words they use, the \
-      texts the window shows (through Accessibility and/or read off a screenshot; noisy, partial, may \
-      include unrelated panes), and what the field already holds before the cursor.
+    - <context>: where they are speaking — the app, the window, who they are, words they use, and \
+      what the field already holds before the cursor.
     - <prefix>: text the recogniser was primed with, as if the user had said it just before — one per \
       language, each priming the listenings in that language. Written from the same context, to make \
       names and terms come out right.
@@ -211,6 +275,8 @@ enum Hearing {
       alike and fits — never because the context mentions something.
     - Use only content some version contains: you may combine versions word by word and take a \
       term's spelling from the context, but never add or drop meaning, never answer, never translate.
+    - A long dictation is the user's own wording: keep it, sentence by sentence, and only correct the \
+      words that were misheard. Never summarise, rephrase or tidy it up.
     - It continues the text already in the field: if that ends mid-sentence, continue it (lowercase \
       start); match its style of punctuation — a chat message with no full stops gets none at the end.
     - Answer an empty text only when the versions are plainly noise — recogniser phantoms that \
@@ -218,12 +284,14 @@ enum Hearing {
       sense to you or the context doesn't explain them: type them.
 
     Reply with ONE JSON object and nothing else:
-    {"reasoning": "<at most 15 words: which rule decided, if any>", "text": "<what the user said>"}
+    {"reasoning": "<at most 8 words: which rule decided>", "text": "<what the user said>"}
     """
 
     private static func settle(_ versions: [Version], prompts: [String: String], context: ContextSnapshot.Gathered?) -> (String?, [String: Any]) {
         var block = ""
-        if let context { block += "<context>\n\(context.described(screenLimit: 12_000))\n</context>\n\n" }
+        // The screen itself stays out: the prefix already distilled it, and a page of it pulls the
+        // model away from what was heard.
+        if let context { block += "<context>\n\(context.described(screenLimit: 0, fieldLimit: 500))\n</context>\n\n" }
         for (language, prompt) in prompts.sorted(by: { $0.key < $1.key }) {
             block += "<prefix language=\"\(language)\">\(prompt)</prefix>\n"
         }
@@ -246,16 +314,21 @@ enum Hearing {
         guard LLMClient.isConfigured else { return (nil, settlement) }
         let started = Date()
         let done = DispatchSemaphore(value: 0)
-        var raw: String?
+        let reply = Box()
         Task {
             defer { done.signal() }
             do {
-                raw = try await LLMClient.complete(system: system, messages: [["role": "user", "content": block]], maxTokens: 600)
+                reply.value = try await LLMClient.complete(system: system, messages: [["role": "user", "content": block]], maxTokens: 400)
             } catch {
                 log.error("dictation: settling failed: \(String(describing: error), privacy: .public)")
             }
         }
-        done.wait()
+        // A slow model costs the user more than an unsettled version does.
+        if done.wait(timeout: .now() + settleTimeout) == .timedOut {
+            log.error("dictation: the model took over \(settleTimeout, privacy: .public)s — typing the first version")
+            settlement["timed_out"] = settleTimeout
+        }
+        let raw = reply.value
         settlement["seconds"] = Date().timeIntervalSince(started)
         settlement["reply"] = raw ?? NSNull()
         guard let raw, let text = LLMJSON.string(raw, key: "text") else { return (nil, settlement) }

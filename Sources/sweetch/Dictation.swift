@@ -27,21 +27,25 @@ final class Dictation {
         let spaceSelected: Bool
     }
 
-    /// The context and the prefix, made while the user speaks; the recogniser waits for them.
+    /// The context and the prefix, made while the user speaks. The recogniser doesn't wait long for
+    /// them: what was said matters more than how well it was primed.
     private final class Prepared {
-        private let ready = DispatchGroup()
+        private let contextReady = DispatchGroup()
+        private let prefixReady = DispatchGroup()
         private(set) var context: ContextSnapshot.Gathered?
         private(set) var prefix: Prefix?
 
         init(app: NSRunningApplication, dir: URL) {
-            ready.enter()
+            contextReady.enter()
+            prefixReady.enter()
             DispatchQueue.global(qos: .userInitiated).async { [self] in
-                defer { ready.leave() }
+                defer { prefixReady.leave() }
                 // After the Backspace that took back the held space has landed.
                 usleep(100_000)
                 let started = Date()
                 let context = ContextSnapshot.capture(app: app, field: ContextSnapshot.Field.focused(), into: dir)
                 self.context = context
+                contextReady.leave()
                 let gathered = Date().timeIntervalSince(started)
                 let prefix = Prefix.build(from: context)
                 self.prefix = prefix
@@ -53,9 +57,12 @@ final class Dictation {
             }
         }
 
-        /// False if they aren't ready in time; the recording is then heard without them.
-        func wait(upTo seconds: TimeInterval) -> Bool {
-            ready.wait(timeout: .now() + seconds) == .success
+        /// Whatever is ready within `seconds`; nil for what isn't.
+        func take(waiting seconds: TimeInterval) -> (prefix: Prefix?, context: ContextSnapshot.Gathered?) {
+            let deadline = DispatchTime.now() + seconds
+            let prefix = prefixReady.wait(timeout: deadline) == .success ? self.prefix : nil
+            let context = contextReady.wait(timeout: deadline) == .success ? self.context : nil
+            return (prefix, context)
         }
     }
 
@@ -148,12 +155,10 @@ final class Dictation {
                 try Whisper.normalise(session.dir.appendingPathComponent("recording.caf"), to: wav)
                 try? FileManager.default.removeItem(at: session.dir.appendingPathComponent("recording.caf"))
                 settled = try Hearing.hear(wav, dir: session.dir) {
-                    // The listening without a prefix has run by now, so this only waits on a slow model.
-                    guard session.prepared.wait(upTo: 2) else {
-                        log.error("dictation: context and prefix not ready in time — hearing without them")
-                        return (nil, nil)
-                    }
-                    return (session.prepared.prefix, session.prepared.context)
+                    // The listening without a prefix has run by now; the prefix gets a moment more.
+                    let ready = session.prepared.take(waiting: 0.3)
+                    if ready.prefix == nil { log.info("dictation: prefix not ready — hearing without it") }
+                    return ready
                 }
                 record["seconds"] = Date().timeIntervalSince(started)
                 if let settled {

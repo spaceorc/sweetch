@@ -2,6 +2,12 @@ import Cocoa
 
 let app = NSApplication.shared
 
+// `sweetch --rehear <dictation folder>…`: run stored dictations through today's pipeline.
+if let i = CommandLine.arguments.firstIndex(of: "--rehear") {
+    Rehear.run(CommandLine.arguments[(i + 1)...].map { URL(fileURLWithPath: $0) })
+    exit(0)
+}
+
 // `sweetch --render-dictations out.png`: draw the Dictations window, dark, into a PNG and exit —
 // for checking its layout without putting it on screen.
 if let i = CommandLine.arguments.firstIndex(of: "--render-dictations"), i + 1 < CommandLine.arguments.count {

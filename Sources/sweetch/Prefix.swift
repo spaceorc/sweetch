@@ -27,7 +27,7 @@ struct Prefix {
 
     /// Whisper keeps only about 220 tokens of a prompt — the tail — and Cyrillic costs several
     /// tokens a word, so both parts stay short.
-    private static let spokenLimit = 300
+    private static let spokenLimit = 160
     private static let precedingLimit = 300
 
     private static let system = """
@@ -36,10 +36,11 @@ struct Prefix {
     in it is heard more readily and spelt the way it is written there.
 
     The user speaks Russian and English and is about to dictate into the app and window described \
-    below. Write 1–3 short sentences in the user's own voice — first person, as if they had just \
-    said them out loud — that set the scene: who they are, what they are doing in this place right \
-    now, naturally mentioning the people, product names, project names and technical terms from the \
-    context that they are most likely to say next, spelt exactly as the context spells them.
+    below. Write ONE short, dense sentence in the user's own voice — first person, as if they had just \
+    said it — naming what they are doing here and the few people, product names and technical terms \
+    from the context they are most likely to say next, spelt exactly as the context spells them. \
+    Short beats complete: whisper keeps only the end of a long prompt, and every extra word is one it \
+    may hear that wasn't said. Don't invent plans or events; don't mention who the user is.
 
     Write it twice, saying the same thing: once in Russian, once in English. Each primes a listening \
     in its own language, so each must read as natural speech in that language. Keep names and \
@@ -48,7 +49,7 @@ struct Prefix {
 
     Only things the user might plausibly have said. No remarks about the context, the screen, typos, \
     the task or these instructions — whisper takes every word as speech. No lists, no title case, no \
-    quotes, no markdown. At most 250 characters each. Do not repeat the \
+    quotes, no markdown. At most 12 words each. Do not repeat the \
     text already in the field — it is appended after your sentences verbatim.
 
     Reply with ONE JSON object and nothing else: {"ru": "<in Russian>", "en": "<in English>"}
@@ -60,7 +61,7 @@ struct Prefix {
         // Only prose is what the speech continues; code before the cursor would make whisper hear code.
         let preceding = context.textBeforeCursor.map(tail).flatMap { isProse($0) ? $0 : nil }
         guard LLMClient.isConfigured else { return Prefix(spoken: [:], preceding: preceding) }
-        let spoken = blockingComplete(context.described(screenLimit: 3000)).mapValues { String($0.prefix(spokenLimit)) }
+        let spoken = blockingComplete(context.described(screenLimit: 2000, fieldLimit: 600)).mapValues { String($0.prefix(spokenLimit)) }
         return Prefix(spoken: spoken, preceding: preceding)
     }
 
