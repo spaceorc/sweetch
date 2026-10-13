@@ -9,9 +9,9 @@ import Foundation
 /// messages learned the style lesson: a list of terms in title case came back as a transcription in
 /// title case.
 ///
-/// The spoken part is written by the fast model from everything gathered while the user speaks, once
-/// in Russian and once in English: a prompt pulls whisper towards its own language, so a listening
-/// in English gets the English one and a listening in Russian the Russian one.
+/// The spoken part is one sentence, once in Russian and once in English (a prompt pulls whisper
+/// towards its own language): where the user is and the few names and terms they're likely to say,
+/// which the fast model picks from what was gathered while they speak.
 struct Prefix {
     /// The model's sentences in the user's voice, by language ("ru", "en"); empty when it couldn't
     /// write them.
@@ -27,32 +27,23 @@ struct Prefix {
 
     /// Whisper keeps only about 220 tokens of a prompt — the tail — and Cyrillic costs several
     /// tokens a word, so both parts stay short.
-    private static let spokenLimit = 160
     private static let precedingLimit = 300
+    private static let maxTerms = 4
 
+    // The model only picks the words; the sentence is ours. Asked to write the sentence itself, it
+    // transliterated names ("Denis Khranovskii" → "Денис Храновский") and kept naming the speaker,
+    // however the prompt put it — and a prefix exists to spell names the way the screen does.
     private static let system = """
-    You write the initial prompt for Whisper speech recognition. Whisper treats it as the text \
-    spoken just before the recording, and copies its vocabulary, spelling and style: a name or term \
-    in it is heard more readily and spelt the way it is written there.
-
     The user speaks Russian and English and is about to dictate into the app and window described \
-    below. Write ONE short, dense sentence in the user's own voice — first person, as if they had just \
-    said it — naming what they are doing here and the few people, product names and technical terms \
-    from the context they are most likely to say next, spelt exactly as the context spells them. \
-    Short beats complete: whisper keeps only the end of a long prompt, and every extra word is one it \
-    may hear that wasn't said. Don't invent plans or events; don't mention who the user is.
+    below. From the context, pick the two to four people, product names, project names or technical \
+    terms they are most likely to say next — the ones in the conversation or document they are \
+    working on, not menus, buttons or unrelated panes.
 
-    Write it twice, saying the same thing: once in Russian, once in English. Each primes a listening \
-    in its own language, so each must read as natural speech in that language. Keep names and \
-    technical terms identical in both, in Latin script where the context writes them so — the way \
-    the user writes them inside Russian sentences.
+    Copy each EXACTLY as the context writes it, character for character: no translating, \
+    transliterating, declining or capitalising differently. The speaker is USER_NAME — never pick \
+    them. Fewer is better than unsure.
 
-    Only things the user might plausibly have said. No remarks about the context, the screen, typos, \
-    the task or these instructions — whisper takes every word as speech. No lists, no title case, no \
-    quotes, no markdown. At most 12 words each. Do not repeat the \
-    text already in the field — it is appended after your sentences verbatim.
-
-    Reply with ONE JSON object and nothing else: {"ru": "<in Russian>", "en": "<in English>"}
+    Reply with ONE JSON object and nothing else: {"terms": ["...", "..."]}
     """
 
     /// Blocks on the network — call off the main thread. Never throws: without the model there is
@@ -61,27 +52,75 @@ struct Prefix {
         // Only prose is what the speech continues; code before the cursor would make whisper hear code.
         let preceding = context.textBeforeCursor.map(tail).flatMap { isProse($0) ? $0 : nil }
         guard LLMClient.isConfigured else { return Prefix(spoken: [:], preceding: preceding) }
-        let spoken = blockingComplete(context.described(screenLimit: 2000, fieldLimit: 600)).mapValues { String($0.prefix(spokenLimit)) }
-        return Prefix(spoken: spoken, preceding: preceding)
+        let screen = ([context.windowTitle ?? "", context.ocrText ?? "", context.textBeforeCursor ?? ""] + context.windowTexts)
+            .joined(separator: "\n")
+        let terms = pickTerms(context.described(screenLimit: 2000, fieldLimit: 600))
+            .filter { screen.contains($0) && !isSpeaker($0) }
+            .prefix(maxTerms)
+        return Prefix(spoken: sentences(app: context.app, terms: Array(terms)), preceding: preceding)
     }
 
-    private static func blockingComplete(_ user: String) -> [String: String] {
+    /// The scene in the user's voice, once per language, with the terms as the screen spells them.
+    private static func sentences(app: String, terms: [String]) -> [String: String] {
+        func listed(_ items: [String], and: String) -> String {
+            items.count == 1 ? items[0] : items.dropLast().joined(separator: ", ") + " \(and) " + items[items.count - 1]
+        }
+        guard !terms.isEmpty else { return ["ru": "Я сейчас в \(app).", "en": "I'm in \(app) now."] }
+        return ["ru": "Я сейчас в \(app), речь про \(listed(terms, and: "и")).",
+                "en": "I'm in \(app) now, talking about \(listed(terms, and: "and"))."]
+    }
+
+    private static func pickTerms(_ context: String) -> [String] {
         let done = DispatchSemaphore(value: 0)
-        var result: [String: String] = [:]
+        var terms: [String] = []
         Task {
             defer { done.signal() }
             do {
-                let raw = try await LLMClient.complete(system: system, messages: [["role": "user", "content": user]],
-                                                       maxTokens: 600)
-                for language in ["ru", "en"] {
-                    if let text = LLMJSON.string(raw, key: language), !text.isEmpty { result[language] = text }
-                }
+                let system = system.replacingOccurrences(of: "USER_NAME", with: NSFullUserName())
+                let raw = try await LLMClient.complete(system: system, messages: [["role": "user", "content": context]],
+                                                       maxTokens: 200)
+                terms = (LLMJSON.object(raw)?["terms"] as? [String] ?? [])
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
             } catch {
                 log.error("dictation: prefix failed: \(String(describing: error), privacy: .public)")
             }
         }
         done.wait()
-        return result
+        return terms
+    }
+
+    /// Whether a term is the speaker: their first name as a word in it, in Latin or Cyrillic letters
+    /// and any case ending. Someone who only shares the surname isn't.
+    private static func isSpeaker(_ term: String) -> Bool {
+        guard let first = NSFullUserName().split(separator: " ").first.map(String.init), first.count >= 2 else { return false }
+        return [first, cyrillic(first)].contains { name in
+            let stem = NSRegularExpression.escapedPattern(for: String(name.prefix(max(3, name.count - 1))))
+            return term.range(of: "\\b\(stem)\\w*\\b", options: [.regularExpression, .caseInsensitive]) != nil
+        }
+    }
+
+    /// A Latin-spelt Russian name back in Cyrillic: "Dashkevich" → "Дашкевич". ICU's transform reads
+    /// "sh" and "ch" as two letters each.
+    private static func cyrillic(_ latin: String) -> String {
+        let digraphs = [("shch", "щ"), ("sh", "ш"), ("ch", "ч"), ("kh", "х"), ("zh", "ж"), ("ts", "ц"),
+                        ("ya", "я"), ("yu", "ю"), ("yo", "ё"), ("ye", "е")]
+        let letters: [Character: String] = ["a": "а", "b": "б", "v": "в", "g": "г", "d": "д", "e": "е", "z": "з",
+                                            "i": "и", "y": "й", "k": "к", "l": "л", "m": "м", "n": "н", "o": "о",
+                                            "p": "п", "r": "р", "s": "с", "t": "т", "u": "у", "f": "ф", "h": "х",
+                                            "c": "к", "x": "кс", "w": "в", "j": "дж", "q": "к"]
+        var rest = Substring(latin.lowercased())
+        var out = ""
+        while let first = rest.first {
+            if let (from, to) = digraphs.first(where: { rest.hasPrefix($0.0) }) {
+                out += to
+                rest = rest.dropFirst(from.count)
+            } else {
+                out += letters[first] ?? String(first)
+                rest = rest.dropFirst()
+            }
+        }
+        return out
     }
 
     /// Mostly letters and spaces, with little of the punctuation code and markup are made of.

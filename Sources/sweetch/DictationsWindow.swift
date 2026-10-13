@@ -318,7 +318,12 @@ private enum DetailWriter {
             }
             if let preceding = prefix["preceding"] as? String { w.labelled("From the field", preceding, mono: true) }
             if let listenings = s["listenings"] as? [[String: Any]], !listenings.contains(where: { $0["prefixed"] as? Bool == true }) {
-                w.line("Not used: it wasn't ready in time.", .warning)
+                let skipped = (s["settlement"] as? [String: Any])?["skipped"] as? String ?? ""
+                if skipped.contains("bare listening") {
+                    w.line("Not needed: Apple's recogniser agreed with the listening without it.", .secondary)
+                } else {
+                    w.line("Not used: it wasn't ready in time.", .warning)
+                }
             }
         }
 
