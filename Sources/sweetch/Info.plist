@@ -18,6 +18,10 @@
     <string>1</string>
     <key>CFBundleShortVersionString</key>
     <string>0.1.0</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>sweetch records your voice while you hold Space to dictate.</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>sweetch asks iTerm2 which pane is focused, to leave hold-Space to Claude Code where it runs.</string>
     <key>LSUIElement</key>
     <true/>
     <key>LSMinimumSystemVersion</key>

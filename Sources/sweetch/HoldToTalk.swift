@@ -1,43 +1,83 @@
 import Cocoa
 import ApplicationServices
 
-/// Claude Code in a terminal starts dictation while Space is held; Claude desktop toggles it with
-/// ⌘D instead. This bridges the two: in Claude desktop, holding Space in the prompt erases the one
-/// space it typed and presses ⌘D, and releasing Space presses ⌘D again to stop.
+/// Hold Space in a text field to dictate — the gesture Claude Code uses in a terminal, everywhere.
+///
+/// Whose dictation it is depends on where the user is:
+/// - **Claude desktop** toggles its own with ⌘D: holding Space erases the one space it typed and
+///   presses ⌘D, releasing presses ⌘D again.
+/// - **Claude Code in iTerm2** has its own hold-Space push-to-talk, so Space is left alone there.
+/// - **Any other text field**, a plain iTerm2 shell included, gets sweetch's own (`Dictation`).
 ///
 /// A tap is left alone — it types its space as always. "Held" means the first autorepeat, or
 /// `holdDelay` without one (for people with key repeat off), whichever comes first; either
-/// way exactly one space has reached the app by then, so one Backspace undoes it.
+/// way exactly one space has reached the app by then, so one Backspace undoes it. Escape during
+/// our own dictation throws the recording away.
 ///
 /// Runs on the event-tap thread (the main run loop).
 final class HoldToTalk {
-    static let bundleID = "com.anthropic.claudefordesktop"
+    static let claudeBundleID = "com.anthropic.claudefordesktop"
     private static let dictationKeyCode: Int64 = 2   // D, with ⌘ — Claude's dictation toggle
     private static let holdDelay: TimeInterval = 0.35
     private static let spaceKeyCode: Int64 = 49
+    private static let escapeKeyCode: Int64 = 53
 
     private enum State {
         case idle
         case pending(Timer)                     // Space is down and its space typed; not held yet
-        case recording
-        case passthrough                        // held, but not somewhere we can record — let it be
+        case claudeRecording                    // Claude desktop's dictation, toggled with ⌘D
+        case dictating                          // ours
+        case swallowing                         // ours, cancelled; eat Space until it's released
+        case awaitingTerminal                   // held in iTerm before it said whether Claude Code is there
+        case passthrough                        // held, but not ours to take — let it be
     }
     private var state: State = .idle
+    /// Spaces this press has typed into the app so far: one, plus repeats let through while
+    /// waiting on iTerm. Taking the hold over erases them all.
+    private var spacesTyped = 0
+    /// Whether Claude Code runs in the focused iTerm pane, as asked at this press; nil until known.
+    private var claudeInPane: Bool?
+    private let dictation: Dictation
+    private let isDictationEnabled: () -> Bool
+    /// Space was taken over: the keystroke buffer no longer matches the document.
+    private let onTakeOver: () -> Void
+
+    init(dictation: Dictation, isDictationEnabled: @escaping () -> Bool, onTakeOver: @escaping () -> Void) {
+        self.dictation = dictation
+        self.isDictationEnabled = isDictationEnabled
+        self.onTakeOver = onTakeOver
+    }
 
     /// Sees every real key event first; returns true to swallow it.
     func handle(type: CGEventType, event: CGEvent) -> Bool {
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
         guard keyCode == Self.spaceKeyCode else {
+            switch (type, state) {
             // Typing on while Space is still down (fast "a b") — that was never a hold.
-            if type == .keyDown, case .pending(let timer) = state { timer.invalidate(); state = .idle }
+            case (.keyDown, .pending(let timer)):
+                timer.invalidate()
+                state = .idle
+            case (.keyDown, .dictating) where keyCode == Self.escapeKeyCode:
+                dictation.cancel()
+                state = .swallowing
+                return true
+            default:
+                break
+            }
             return false
         }
         let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
 
         switch (type, state) {
         case (.keyDown, .idle) where !isRepeat:
-            guard event.flags.intersection([.maskCommand, .maskShift, .maskAlternate, .maskControl]).isEmpty,
-                  NSWorkspace.shared.frontmostApplication?.bundleIdentifier == Self.bundleID else { return false }
+            guard event.flags.intersection([.maskCommand, .maskShift, .maskAlternate, .maskControl]).isEmpty else { return false }
+            let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+            guard front == Self.claudeBundleID || isDictationEnabled() else { return false }
+            spacesTyped = 1
+            claudeInPane = nil
+            if front == TerminalProbe.iTermBundleID {
+                TerminalProbe.ask { [weak self] found in self?.terminalAnswered(found) }
+            }
             let timer = Timer(timeInterval: Self.holdDelay, repeats: false) { [weak self] _ in self?.becomeHeld() }
             RunLoop.main.add(timer, forMode: .common)
             state = .pending(timer)
@@ -46,23 +86,36 @@ final class HoldToTalk {
         case (.keyDown, .pending(let timer)) where isRepeat:
             timer.invalidate()
             becomeHeld()
-            return isRecording
+            return isTakenOver
 
-        case (.keyDown, .recording) where isRepeat:
+        case (.keyDown, .claudeRecording), (.keyDown, .dictating), (.keyDown, .swallowing):
             return true
+
+        case (.keyDown, .awaitingTerminal):
+            spacesTyped += 1
+            return false
 
         case (.keyUp, .pending(let timer)):
             timer.invalidate()
             state = .idle
             return false
 
-        case (.keyUp, .recording):
+        case (.keyUp, .claudeRecording):
             Replayer.postKeyPair(keyCode: Self.dictationKeyCode, flags: .maskCommand)
-            log.info("hold-to-talk: dictation off")
+            log.info("hold-to-talk: Claude dictation off")
             state = .idle
             return true
 
-        case (.keyUp, .passthrough):
+        case (.keyUp, .dictating):
+            dictation.finish()
+            state = .idle
+            return true
+
+        case (.keyUp, .swallowing):
+            state = .idle
+            return true
+
+        case (.keyUp, .passthrough), (.keyUp, .awaitingTerminal):
             state = .idle
             return false
 
@@ -71,22 +124,76 @@ final class HoldToTalk {
         }
     }
 
-    private var isRecording: Bool {
-        if case .recording = state { return true }
-        return false
+    private var isTakenOver: Bool {
+        switch state {
+        case .claudeRecording, .dictating, .swallowing: return true
+        default: return false
+        }
     }
 
     private func becomeHeld() {
         guard case .pending = state else { return }
-        guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier == Self.bundleID, focusIsTextInput() else {
-            log.info("hold-to-talk: Space held outside Claude's prompt — passing through")
-            state = .passthrough
-            return
+        guard let app = NSWorkspace.shared.frontmostApplication else { state = .passthrough; return }
+
+        switch app.bundleIdentifier {
+        case Self.claudeBundleID:
+            guard focusIsTextInput() else { return passThrough("Space held outside Claude's prompt") }
+            eraseTypedSpace()
+            Replayer.postKeyPair(keyCode: Self.dictationKeyCode, flags: .maskCommand)
+            log.info("hold-to-talk: Claude dictation on")
+            state = .claudeRecording
+
+        case TerminalProbe.iTermBundleID:
+            guard let claudeInPane else {
+                log.info("hold-to-talk: held in iTerm before it said what runs there — waiting")
+                state = .awaitingTerminal
+                return
+            }
+            decideTerminal(claudeInPane: claudeInPane, app: app)
+
+        default:
+            guard focusIsTextInput() else { return passThrough("Space held outside a text field") }
+            startDictation(in: app)
         }
-        Replayer.postKeyPair(keyCode: 51, flags: [])   // the space the press already typed
-        Replayer.postKeyPair(keyCode: Self.dictationKeyCode, flags: .maskCommand)
-        log.info("hold-to-talk: dictation on")
-        state = .recording
+    }
+
+    private func terminalAnswered(_ found: Bool) {
+        claudeInPane = found
+        guard case .awaitingTerminal = state,
+              let app = NSWorkspace.shared.frontmostApplication,
+              app.bundleIdentifier == TerminalProbe.iTermBundleID else { return }
+        decideTerminal(claudeInPane: found, app: app)
+    }
+
+    private func decideTerminal(claudeInPane: Bool, app: NSRunningApplication) {
+        if claudeInPane {
+            passThrough("Claude Code has the focused iTerm pane — its own push-to-talk")
+        } else {
+            // A terminal view isn't a text field to Accessibility, but it takes text all the same.
+            startDictation(in: app)
+        }
+    }
+
+    private func startDictation(in app: NSRunningApplication) {
+        let erased = spacesTyped
+        eraseTypedSpace()
+        guard dictation.begin(app: app) else {
+            // The spaces are gone already; put them back and let the rest of the hold type more.
+            for _ in 0..<erased { Replayer.postKeyPair(keyCode: Self.spaceKeyCode, flags: []) }
+            return passThrough("dictation unavailable")
+        }
+        state = .dictating
+    }
+
+    private func eraseTypedSpace() {
+        for _ in 0..<spacesTyped { Replayer.postKeyPair(keyCode: 51, flags: []) }   // what the press typed
+        spacesTyped = 0
+        onTakeOver()
+    }
+
+    private func passThrough(_ why: String) {
+        log.info("hold-to-talk: \(why, privacy: .public) — passing through")
+        state = .passthrough
     }
 
     /// Only hijack Space while typing in a text field — elsewhere a Backspace could navigate.

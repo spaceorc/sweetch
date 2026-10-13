@@ -22,6 +22,21 @@ Runs as a menubar utility with no Dock icon.
   toggle; releasing Space presses ⌘D again. A quick tap still types a space, and anywhere other
   than Claude's prompt Space is left alone.
 
+- **Dictation everywhere else (experiment, phase 0)** — holding Space in any other text field
+  starts sweetch's own dictation: speak, release, and the text is typed where the cursor was.
+  Escape while holding throws the recording away. Claude Code in iTerm2 keeps its own
+  push-to-talk: sweetch asks iTerm which pane is focused and leaves Space alone where `claude`
+  owns it. A plain iTerm shell gets sweetch's. Recognition is local — `whisper-cli` and `ffmpeg`
+  from Homebrew, the large-v3-turbo model in `~/.cache/whisper-cpp`.
+
+  Phase 0 is the baseline and the dataset: one plain listening in Russian, no context yet. Each
+  dictation leaves a folder in `~/Library/Application Support/sweetch/dictation/` (menu →
+  **Open Dictation Recordings**) with the recording, what was in front of you (`context.json`:
+  the field, every text the window shows through Accessibility; `window.png`), what whisper
+  heard and what was typed (`session.json`), and what you turned it into before moving on
+  (`followup.json`). The next phase measures, offline on that data, which context makes
+  recognition better. Menu → **Dictation (Hold Space)** turns it off.
+
 - **Key remapping** — a Karabiner-shaped layer for keys macOS has no use for.
   A PC keyboard's context-menu key arrives as a plain keycode 110 that nothing is
   bound to; `menu = shift+ctrl+opt+0` in `remaps.txt` turns it into a hotkey you can

@@ -8,6 +8,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let buffer = KeystrokeBuffer()
     private let remapper = KeyRemapper()
     private let loader = LoaderOverlay()
+    private lazy var dictation = Dictation(overlay: loader)
+    private static let dictationEnabledKey = "dictationEnabled"
     private var converting = false
     private var llmCorrecting = false
     /// The last correction we applied (what we typed, and what was there before), for undo.
@@ -60,6 +62,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 HotkeyBinding(hotkey: convertHotkey) { [weak self] in self?.handleConvert(); return true },
                 HotkeyBinding(hotkey: llmHotkey)     { [weak self] in self?.handleLLMCorrect(); return true },
             ],
+            holdToTalk: HoldToTalk(
+                dictation: dictation,
+                isDictationEnabled: { [weak self] in self?.isDictationEnabled ?? false },
+                onTakeOver: { [weak self] in self?.buffer.clear(reason: "hold-to-talk"); self?.lastCorrection = nil }
+            ),
             onRawKey:    { [weak self] keyCode, flags, isDown in
                 self?.handleRawKey(keyCode: keyCode, flags: flags, isDown: isDown) ?? false
             },
@@ -476,6 +483,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         switch keyCode {
         case 36, 76:                     // Return, Numpad Enter
             buffer.clear(reason: "Return")
+            // A plain Return sends a chat message: the last chance to see what a dictation became.
+            if event.flags.intersection([.maskCommand, .maskShift, .maskAlternate, .maskControl]).isEmpty { dictation.noteReturn() }
             return
         case 53:                         // Escape
             buffer.clear(reason: "Escape")
@@ -578,6 +587,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(NSMenuItem(title: "Show History…", action: #selector(showHistory), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Refine Dictionary from History", action: #selector(refineDictionary), keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
+        let dictationItem = NSMenuItem(title: "Dictation (Hold Space)", action: #selector(toggleDictation), keyEquivalent: "")
+        dictationItem.toolTip = "Hold Space in a text field to dictate; Claude desktop and Claude Code keep their own"
+        menu.addItem(dictationItem)
+        menu.addItem(NSMenuItem(title: "Open Dictation Recordings", action: #selector(openDictationRecordings), keyEquivalent: ""))
+        menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "New Screenshot", action: #selector(captureScreenshot), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Capture Whole Screen", action: #selector(captureFullScreen), keyEquivalent: ""))
         let screenshots = NSMenuItem(title: "Screenshots", action: nil, keyEquivalent: "")
@@ -671,6 +685,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    private var isDictationEnabled: Bool {
+        UserDefaults.standard.object(forKey: Self.dictationEnabledKey) as? Bool ?? true
+    }
+
+    @objc private func toggleDictation() {
+        UserDefaults.standard.set(!isDictationEnabled, forKey: Self.dictationEnabledKey)
+        log.info("dictation \(self.isDictationEnabled ? "enabled" : "disabled", privacy: .public)")
+    }
+
+    @objc private func openDictationRecordings() {
+        NSWorkspace.shared.open(DictationStore.dir)
+    }
+
     @objc private func quit() {
         NSApp.terminate(nil)
     }
@@ -679,6 +706,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // changed it from System Settings.
     func menuWillOpen(_ menu: NSMenu) {
         remapper.reloadIfChanged()   // pick up edits to remaps.txt without a restart
+        if let item = menu.items.first(where: { $0.action == #selector(toggleDictation) }) {
+            item.state = isDictationEnabled ? .on : .off
+        }
         if let item = menu.items.first(where: { $0.action == #selector(toggleWatchdog) }) {
             item.state = Watchdog.isInstalled ? .on : .off
         }

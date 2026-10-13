@@ -20,7 +20,7 @@ private let relevantFlagsMask: CGEventFlags = [.maskCommand, .maskShift, .maskAl
 
 final class EventTapManager {
     private let bindings: [HotkeyBinding]
-    private let holdToTalk = HoldToTalk()
+    private let holdToTalk: HoldToTalk
     private let onRawKey: (Int64, CGEventFlags, Bool) -> Bool
     private let onKeyDown: (CGEvent) -> Void
     private let onMouseDown: () -> Void
@@ -41,10 +41,12 @@ final class EventTapManager {
     /// and returns true to swallow it — that's the remap layer, which sits below our own
     /// hotkeys just like Karabiner sits below everything.
     init(bindings: [HotkeyBinding],
+         holdToTalk: HoldToTalk,
          onRawKey: @escaping (Int64, CGEventFlags, Bool) -> Bool,
          onKeyDown: @escaping (CGEvent) -> Void,
          onMouseDown: @escaping () -> Void) {
         self.bindings = bindings
+        self.holdToTalk = holdToTalk
         self.onRawKey = onRawKey
         self.onKeyDown = onKeyDown
         self.onMouseDown = onMouseDown

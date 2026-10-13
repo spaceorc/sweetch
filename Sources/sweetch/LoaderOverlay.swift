@@ -8,13 +8,15 @@ final class LoaderOverlay {
     private var panel: NSPanel?
     private var spinner: NSProgressIndicator?
     private var caption: NSTextField?
+    private var glyph: NSImageView?
 
     /// `spinning: false` turns the HUD into a plain prompt (used by "Detect Key…").
-    func show(caption text: String = "correcting…", spinning: Bool = true) {
+    func show(caption text: String = "correcting…", spinning: Bool = true, symbol: String = "keyboard") {
         let panel = self.panel ?? makePanel()
         self.panel = panel
         reposition(panel)
         caption?.stringValue = text
+        glyph?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "sweetch")
         spinner?.isHidden = !spinning
         if spinning { spinner?.startAnimation(nil) } else { spinner?.stopAnimation(nil) }
         panel.alphaValue = 0
@@ -77,6 +79,7 @@ final class LoaderOverlay {
             iv.frame = NSRect(x: (size.width - 56) / 2, y: 100, width: 56, height: 48)
             iv.imageScaling = .scaleProportionallyUpOrDown
             blur.addSubview(iv)
+            self.glyph = iv
         }
 
         // Spinner in the middle.
