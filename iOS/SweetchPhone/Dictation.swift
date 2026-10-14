@@ -32,6 +32,7 @@ final class Dictation: ObservableObject {
     private var context: Task<String?, Never>?
     /// Which of the Mac's addresses answers, found while the user speaks.
     private var server: Task<Server?, Never>?
+    private var screenshot: Data?
 
     private nonisolated static let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false)!
 
@@ -107,18 +108,29 @@ final class Dictation: ObservableObject {
         self.live = live
         startedAt = Date()
         server = Task { await Server.reachable() }
+        screenshot = nil
+        sendContext()
         phase = .listening
     }
 
-    /// The screenshot the Shortcut takes right after starting: sent at once, so the Mac reads it
-    /// while the user is still speaking.
+    /// The screenshot the Shortcut takes right after starting: the context waits a moment for it.
     func attach(screenshot: Data) {
-        guard phase == .listening, context == nil else { return }
-        let jpeg = UIImage(data: screenshot)?.jpegData(compressionQuality: 0.8) ?? screenshot
+        Trace.note("screenshot: \(screenshot.count) bytes")
+        guard phase == .listening else { return }
+        self.screenshot = UIImage(data: screenshot)?.jpegData(compressionQuality: 0.8) ?? screenshot
+    }
+
+    /// Sent while the user speaks, so the Mac reads the screen and writes the prefix meanwhile: the
+    /// screenshot when the Shortcut sends one within a moment, and on the Mac's side the field the
+    /// keyboard told it about.
+    private func sendContext() {
         let server = server
-        context = Task {
+        context = Task { [weak self] in
+            for _ in 0..<30 where await self?.screenshot == nil {
+                try? await Task.sleep(for: .milliseconds(50))
+            }
             guard let mac = await server?.value else { return nil }
-            return try? await mac.context(screenshot: jpeg, fieldBefore: nil)
+            return try? await mac.context(screenshot: await self?.screenshot, fieldBefore: nil)
         }
     }
 
