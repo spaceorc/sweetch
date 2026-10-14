@@ -42,6 +42,9 @@ final class Dictation: ObservableObject {
                 try start()
             } catch {
                 Trace.note("start failed: \(error)")
+                engine?.stop()
+                engine = nil
+                try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
                 problem = error.localizedDescription
                 await activity?.end(.init(state: .init(phase: .failed, text: error.localizedDescription), staleDate: nil),
                                     dismissalPolicy: .after(.now + 4))

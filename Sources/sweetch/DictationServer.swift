@@ -187,7 +187,13 @@ final class DictationServer {
             let gathered = ContextSnapshot.Gathered(app: app ?? "iPhone", windowTitle: nil, textBeforeCursor: fieldBefore,
                                                     windowTexts: [], ocrText: ocr)
             entry.context = gathered
-            entry.prefix = Prefix.build(from: gathered)
+            let gatheredSeconds = Date().timeIntervalSince(started)
+            let prefix = Prefix.build(from: gathered)
+            entry.prefix = prefix
+            DictationStore.write([
+                "spoken": prefix.spoken, "preceding": prefix.preceding ?? NSNull(),
+                "context_seconds": gatheredSeconds, "seconds": Date().timeIntervalSince(started),
+            ], to: entry.dir.appendingPathComponent("prefix.json"))
         }
         return (200, ["id": id])
     }
