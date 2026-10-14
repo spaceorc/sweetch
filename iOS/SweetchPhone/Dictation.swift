@@ -60,6 +60,21 @@ final class Dictation: ObservableObject {
             case .idle: Signal.cold.post()
             }
         }
+        // Locked, the phone needs no warm microphone: it goes off at once. A dictation in progress
+        // goes on — the Action Button works on the lock screen too.
+        NotificationCenter.default.addObserver(forName: UIApplication.protectedDataWillBecomeUnavailableNotification,
+                                               object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.locked() }
+        }
+        CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), nil, { _, _, _, _, _ in
+            DispatchQueue.main.async { MainActor.assumeIsolated { Dictation.shared.locked() } }
+        }, "com.apple.springboard.lockcomplete" as CFString, nil, .deliverImmediately)
+    }
+
+    private func locked() {
+        Trace.note("locked in \(phase)")
+        guard phase == .warm else { return }
+        Task { await coolDown(showing: nil) }
     }
 
     /// Starts when not listening, stops when listening. Nil when it started; what was heard when it
@@ -201,7 +216,8 @@ final class Dictation: ObservableObject {
         }
         try? FileManager.default.removeItem(at: recording)
         self.recording = nil
-        guard Self.warmFor > .zero else {
+        // A dictation finished on the lock screen doesn't warm the microphone either.
+        guard Self.warmFor > .zero, UIApplication.shared.isProtectedDataAvailable else {
             await coolDown(showing: .init(phase: .done, text: last ?? ""))
             return
         }
