@@ -1,0 +1,49 @@
+name: SweetchPhone
+options:
+  bundleIdPrefix: com.spaceorc.sweetch
+  deploymentTarget:
+    iOS: "26.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    DEVELOPMENT_TEAM: ${SWEETCH_TEAM}
+    CODE_SIGN_STYLE: Automatic
+    MARKETING_VERSION: "0.1"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  SweetchPhone:
+    type: application
+    platform: iOS
+    sources: [SweetchPhone, Shared]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.spaceorc.sweetch.phone
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: YES
+    info:
+      path: SweetchPhone/Info.plist
+      properties:
+        CFBundleDisplayName: sweetch
+        UILaunchScreen: {}
+        NSMicrophoneUsageDescription: sweetch records what you dictate and hears it on your Mac.
+        NSSpeechRecognitionUsageDescription: sweetch shows the words as you say them.
+        NSSupportsLiveActivities: true
+        UIBackgroundModes: [audio]
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+    dependencies:
+      - target: SweetchWidget
+  SweetchWidget:
+    type: app-extension
+    platform: iOS
+    sources: [SweetchWidget, Shared]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.spaceorc.sweetch.phone.widget
+        GENERATE_INFOPLIST_FILE: YES
+    info:
+      path: SweetchWidget/Info.plist
+      properties:
+        CFBundleDisplayName: sweetch
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension

@@ -6,3 +6,5 @@ build/
 Package.resolved
 *.xcodeproj
 .DS_Store
+iOS/*.xcodeproj
+iOS/build/
