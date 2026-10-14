@@ -27,7 +27,7 @@ ICON_TOOL  = Tools/make-icon.swift
 ICON_ICNS  = $(BUILD_DIR)/AppIcon.icns
 ICONSET    = $(BUILD_DIR)/AppIcon.iconset
 
-.PHONY: all build app run debug clean setup-signing tcc-reset icon stop start trace
+.PHONY: all build app run debug clean setup-signing tcc-reset icon stop start trace phone
 
 all: app
 
@@ -149,3 +149,16 @@ trace: $(KEYWATCH)
 clean:
 	swift package clean
 	rm -rf $(BUILD_DIR) .build
+
+# The iPhone app (iOS/): generate the project, build, sign with the personal team and install on
+# the phone — over the cable or, once paired, the local network. Free provisioning lasts 7 days;
+# running this again renews it.
+PHONE_ID  ?= 00008150-000034D81E47401C
+XCODE_DEV  = /Applications/Xcode.app/Contents/Developer
+
+phone:
+	cd iOS && DEVELOPER_DIR=$(XCODE_DEV) xcodegen generate -q
+	cd iOS && DEVELOPER_DIR=$(XCODE_DEV) xcodebuild -quiet -project SweetchPhone.xcodeproj -scheme SweetchPhone \
+		-destination id=$(PHONE_ID) -derivedDataPath build -allowProvisioningUpdates build
+	DEVELOPER_DIR=$(XCODE_DEV) xcrun devicectl device install app --device $(PHONE_ID) \
+		iOS/build/Build/Products/Debug-iphoneos/SweetchPhone.app
