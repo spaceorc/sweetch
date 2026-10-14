@@ -157,6 +157,8 @@ final class KeyboardSurface: UIView {
         var carry: CGFloat = 0
         /// Shift held while a letter was typed.
         var typedWith = false
+        /// The page before a page key was touched, and the one it showed.
+        var pages: (from: KeyboardModel.Layout, to: KeyboardModel.Layout)?
 
         init(key: KeySpec) { self.key = key }
     }
@@ -243,6 +245,11 @@ final class KeyboardSurface: UIView {
             }
         case .shift:
             model.shiftDown()
+        // The other keys' page shows as the finger touches, so it can slide on to one of them.
+        case .more, .symbols:
+            let from = model.layout
+            if press.key.kind == .more { model.switchDigits() } else { model.switchSymbols() }
+            press.pages = (from, model.layout)
         case .backspace:
             model.backspace()
             press.timer = .scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self, weak press] _ in
@@ -297,8 +304,12 @@ final class KeyboardSurface: UIView {
         case .space:
             if press.trackpadX != nil { model.setTrackpad(false) } else { model.space() }
         case .ret: model.newline()
-        case .more: model.switchDigits()
-        case .symbols: model.switchSymbols()
+        case .more, .symbols:
+            // Slid onto a key of the page: it's typed, and the page goes back.
+            if let point, let key = key(at: point), let character = key.character {
+                model.typeCharacter(character)
+                if let pages = press.pages, model.layout == pages.to { model.show(pages.from) }
+            }
         case .language: model.switchLanguage()
         case .globe: model.nextKeyboard()
         case .backspace: break

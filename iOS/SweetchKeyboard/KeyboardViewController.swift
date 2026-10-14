@@ -213,6 +213,11 @@ final class KeyboardModel {
         layout = layout == .digits ? .symbols : .digits
     }
 
+    func show(_ page: Layout) {
+        layout = page
+        if layout.isLetters { autoCapitalise() }
+    }
+
     func nextKeyboard() { controller?.advanceToNextInputMode() }
 
     func setTrackpad(_ on: Bool) { trackpad = on }
