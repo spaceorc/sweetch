@@ -97,7 +97,10 @@ final class Dictation: ObservableObject {
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         self.engine = nil
-        file = nil   // closes the WAV
+        // The tap's block still holds the file until the engine goes, so it's closed by hand: only
+        // then are the buffered samples and the header's sizes written.
+        file?.close()
+        file = nil
         phase = .recognizing
         live?.finish()
         await show(.recognizing, preview)
