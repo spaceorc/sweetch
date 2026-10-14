@@ -68,6 +68,11 @@ struct Server {
         _ = try? await send("/field", body: JSONSerialization.data(withJSONObject: body), timeout: 3)
     }
 
+    /// A line for the Mac's `phone.log`: how things went where the phone can't be watched.
+    func log(_ line: String) async {
+        _ = try? await send("/log", body: Data(line.utf8), timeout: 3)
+    }
+
     /// What the Mac heard in `recording`.
     func hear(_ recording: Data, contextID: String?, apple: String?) async throws -> String {
         var query = URLComponents()

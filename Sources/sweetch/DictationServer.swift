@@ -160,6 +160,7 @@ final class DictationServer {
                 (status, reply) = next(after: Int(request.query["after"] ?? "") ?? 0,
                                        wait: min(Double(request.query["wait"] ?? "") ?? 25, 25))
             case ("POST", "/field"): (status, reply) = noteField(request)
+            case ("POST", "/log"): (status, reply) = phoneLog(request)
             default: (status, reply) = (404, ["error": "no such endpoint"])
             }
         }
@@ -295,6 +296,20 @@ final class DictationServer {
         guard let json = try? JSONSerialization.jsonObject(with: request.body) as? [String: Any],
               let text = json["text"] as? String else { return (400, ["error": "expected {text}"]) }
         lock.withLock { field = (String(text.suffix(2000)), json["app"] as? String, Date()) }
+        return (200, ["ok": true])
+    }
+
+    /// What the phone wants kept for debugging: a line appended to `phone.log` in App Support.
+    private func phoneLog(_ request: Request) -> (Int, [String: Any]) {
+        let line = "\(Date().ISO8601Format()) \(String(decoding: request.body, as: UTF8.self))\n"
+        let url = AppSupport.dir.appendingPathComponent("phone.log")
+        if let handle = try? FileHandle(forWritingTo: url) {
+            handle.seekToEndOfFile()
+            handle.write(Data(line.utf8))
+            try? handle.close()
+        } else {
+            try? Data(line.utf8).write(to: url)
+        }
         return (200, ["ok": true])
     }
 }

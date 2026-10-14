@@ -88,20 +88,59 @@ final class KeyboardModel: ObservableObject {
 
     private var proxy: UITextDocumentProxy? { controller?.textDocumentProxy }
 
-    /// The app the keyboard is typing into. iOS doesn't say; these private keys have, on some
-    /// versions — whichever answers.
+    /// The app the keyboard is typing into. iOS doesn't say. Before iOS 16 a private key did; since,
+    /// the host's process id leads to its connection with the keyboard, and that to its bundle id.
     private(set) lazy var host: String? = {
         guard let controller else { return nil }
-        let holders: [NSObject?] = [controller, controller.parent, controller.parent?.parent]
-        for holder in holders.compactMap({ $0 }) {
-            for key in ["_hostBundleID", "_hostApplicationBundleIdentifier", "hostBundleID"]
-            where holder.responds(to: NSSelectorFromString(key)) {
-                if let id = holder.value(forKey: key) as? String, !id.isEmpty, id != "<null>" { return id }
+        for holder in [controller, controller.parent].compactMap({ $0 as NSObject? })
+        where holder.responds(to: NSSelectorFromString("_hostBundleID")) {
+            if let id = holder.value(forKey: "_hostBundleID") as? String, !id.isEmpty, id != "<null>" {
+                hostTrail.append("_hostBundleID")
+                return id
             }
         }
-        return nil
+        return hostByProcess()
     }()
+
+    /// How the host was looked for, step by step: sent to the Mac's log.
+    private var hostTrail: [String] = []
+
+    private func hostByProcess() -> String? {
+        let parent = controller?.parent as NSObject?
+        guard let parent, parent.responds(to: NSSelectorFromString("_hostPID")),
+              let pid = parent.value(forKey: "_hostPID") else { hostTrail.append("no _hostPID"); return nil }
+        hostTrail.append("pid \(pid)")
+        guard let service = NSClassFromString("PKService") as AnyObject as? NSObjectProtocol,
+              service.responds(to: NSSelectorFromString("defaultService")),
+              let shared = service.perform(NSSelectorFromString("defaultService"))?.takeUnretainedValue() as? NSObjectProtocol
+        else { hostTrail.append("no PKService"); return nil }
+        guard shared.responds(to: NSSelectorFromString("personalities")),
+              let personalities = shared.perform(NSSelectorFromString("personalities"))?.takeUnretainedValue() as? [String: Any],
+              let infos = personalities.first?.value as? [AnyHashable: Any]
+        else { hostTrail.append("no personalities"); return nil }
+        hostTrail.append("\(personalities.count) personalities, \(infos.count) infos")
+        guard let info = infos.first(where: { "\($0.key)".contains("\(pid)") })?.value as? NSObjectProtocol,
+              info.responds(to: NSSelectorFromString("connection")),
+              let connection = info.perform(NSSelectorFromString("connection"))?.takeUnretainedValue() as? NSObjectProtocol,
+              connection.responds(to: NSSelectorFromString("_xpcConnection")),
+              let xpc = connection.perform(NSSelectorFromString("_xpcConnection"))?.takeUnretainedValue()
+        else { hostTrail.append("no connection for the pid among \(infos.keys.map { "\($0)" })"); return nil }
+        guard let symbol = dlsym(dlopen(nil, RTLD_NOW), "xpc_connection_copy_bundle_id") else {
+            hostTrail.append("no xpc_connection_copy_bundle_id")
+            return nil
+        }
+        typealias CopyBundleID = @convention(c) (AnyObject) -> UnsafeMutablePointer<CChar>?
+        guard let id = unsafeBitCast(symbol, to: CopyBundleID.self)(xpc) else { hostTrail.append("no bundle id"); return nil }
+        defer { free(id) }
+        hostTrail.append("xpc")
+        return String(cString: id)
+    }
+
     func appeared() {
+        let found = host
+        Task { [hostTrail] in
+            await reach()?.log("keyboard host: \(found ?? "unknown") — \(hostTrail.joined(separator: "; "))")
+        }
         listening?.cancel()
         listening = Task { await listen() }
         Signal.ping.post()
