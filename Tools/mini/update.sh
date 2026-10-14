@@ -12,6 +12,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT" || exit 1
 SERVICE="com.spaceorc.sweetch.server"
 INSTALLED="$HOME/sweetch/sweetch.app"
+# The commit the running server was built from.
+INSTALLED_COMMIT="$HOME/sweetch/commit"
 LOG="$HOME/Library/Logs/sweetch-update.log"
 LOCK="$ROOT/.update.lock"
 
@@ -28,7 +30,8 @@ if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
 fi
 before=$(git rev-parse HEAD)
 after=$(git rev-parse origin/main)
-[ "$before" = "$after" ] && [ -d "$INSTALLED" ] && exit 0
+running=$(cat "$INSTALLED_COMMIT" 2>/dev/null)
+[ "$running" = "$after" ] && [ -d "$INSTALLED" ] && exit 0
 
 # Not in the middle of a dictation, nor right after one (the next may be coming).
 idle=$(curl -s -m 3 http://127.0.0.1:8180/ping | python3 -c 'import json,sys; print(json.load(sys.stdin).get("idle", 999))' 2>/dev/null || echo 999)
@@ -38,7 +41,7 @@ if [ "$idle" -lt 60 ]; then
 fi
 
 short=$(git rev-parse --short "$after")
-log "updating ${before:0:7} → $short: $(git log --format=%s -1 "$after" | cut -c1-120)"
+log "updating ${running:0:7} → $short: $(git log --format=%s -1 "$after" | cut -c1-120)"
 if ! git merge --ff-only --quiet "$after"; then
     log "can't fast-forward to $short"
     exit 1
@@ -79,6 +82,7 @@ mkdir -p "$(dirname "$INSTALLED")"
 cp -R build/serve/sweetch.app "$INSTALLED"
 restart
 if answers; then
+    echo "$after" > "$INSTALLED_COMMIT"
     log "running $short"
     exit 0
 fi

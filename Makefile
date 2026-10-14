@@ -191,7 +191,8 @@ mini:
 	$(MINI_SSH) $(MINI) 'export PATH=/opt/homebrew/bin:$$PATH; \
 		brew list whisper.cpp >/dev/null 2>&1 || brew install whisper.cpp; brew list ffmpeg >/dev/null 2>&1 || brew install ffmpeg; \
 		mkdir -p ~/.cache/whisper-cpp ~/Library/Logs ~/Library/LaunchAgents "$$HOME/Library/Application Support/sweetch"; \
-		test -d ~/$(MINI_ROOT) || git clone -q https://github.com/spaceorc/sweetch.git ~/$(MINI_ROOT)'
+		test -d ~/$(MINI_ROOT) || git clone -q https://github.com/spaceorc/sweetch.git ~/$(MINI_ROOT); \
+		git -C ~/$(MINI_ROOT) pull -q --ff-only origin main'
 	$(MINI_SSH) $(MINI) 'cat > ~/$(MINI_ROOT)/.env' < .env
 	rsync -a --ignore-existing -e "$(MINI_SSH)" $(HOME)/$(WHISPER_MODEL) $(MINI):$(WHISPER_MODEL)
 	@for f in server-token persona.txt; do \
