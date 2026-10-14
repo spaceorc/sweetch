@@ -51,7 +51,7 @@ struct Prefix {
     /// When the app is unknown — a phone's screenshot — the model names it as well.
     private static let nameTheApp = """
 
-    The app is unknown: the context is a screenshot of the user's phone. Also name the app it shows,     by its usual name (Telegram, Slack, WhatsApp, Claude, Safari…), or null when unsure:     {"terms": ["...", "..."], "app": "..."}
+    The app is unknown: the context is a screenshot of the user's phone. Also name the app it shows,     by its usual name, or null when unsure. The screenshot comes as its text, so go by the app's own wording: Telegram — "last seen", "online", "Message" in the input, "Outgoing Call"; Slack — "Add a reply", "Message #channel", "Thread", "Also send to"; WhatsApp — "Type a message" (rarely "online"), "tap here for contact info"; Messages (iMessage) — "iMessage", "Text Message", "Delivered", "Read"; also Claude, Safari, Notes, Mail:     {"terms": ["...", "..."], "app": "..."}
     """
 
     /// What the Mac's dictation server calls an app it can't see.

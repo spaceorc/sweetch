@@ -231,11 +231,13 @@ final class DictationServer {
             entry.prefix = prefix
             if !reused, screenshot != nil, let named = prefix.namedApp, let pid = fresh?.pid,
                Date().timeIntervalSince(fresh?.at ?? .distantPast) < Self.namingWithin {
-                let all = self.lock.withLock {
+                // Only a process not known yet: the user's own choice on the keyboard isn't overridden.
+                let all: [Int: String]? = self.lock.withLock {
+                    guard self.processApps[pid] == nil else { return nil }
                     self.processApps[pid] = named
                     return self.processApps
                 }
-                try? JSONEncoder().encode(all).write(to: Self.processAppsFile)
+                if let all { try? JSONEncoder().encode(all).write(to: Self.processAppsFile) }
                 log.info("dictation server: the phone's process \(pid) is \(named, privacy: .public)")
             }
             DictationStore.write([
@@ -313,6 +315,11 @@ final class DictationServer {
               let text = json["text"] as? String else { return (400, ["error": "expected {text}"]) }
         let pid = json["pid"] as? Int
         let app: String? = lock.withLock {
+            // The user named the app on the keyboard: its process is that app from now on.
+            if let named = json["app"] as? String, let pid, processApps[pid] != named {
+                processApps[pid] = named
+                try? JSONEncoder().encode(processApps).write(to: Self.processAppsFile)
+            }
             let app = json["app"] as? String ?? pid.flatMap { processApps[$0] }
             field = (String(text.suffix(2000)), app, pid, Date())
             return app

@@ -123,6 +123,9 @@ enum HostApp {
         "com.apple.mobilesafari": ("Safari", "x-web-search://"),
     ]
 
+    /// What the keyboard offers when it can't tell the app it's in.
+    static let choices = ["Telegram", "Slack", "WhatsApp", "Messages", "Notes", "Safari", "Other"]
+
     /// How to open an app named by its bundle id or by the name the Mac gave it.
     static func scheme(for app: String) -> String? {
         known[app]?.scheme ?? known.values.first { $0.name.caseInsensitiveCompare(app) == .orderedSame }?.scheme

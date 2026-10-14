@@ -114,11 +114,29 @@ final class KeyboardModel: ObservableObject {
 
     /// The host's process, when iOS tells it: the same process is the same app.
     private(set) var hostPID: Int32?
-    /// The app the Mac knows the host's process to be, from a screenshot taken in it.
-    private var named: String?
+    /// The app the Mac knows the host's process to be: named on the keyboard, or from a screenshot
+    /// taken in it.
+    @Published private(set) var named: String?
+    /// The apps to choose from, shown instead of the strip.
+    @Published var choosingApp = false
+
+    /// What the strip calls the app the keyboard is in.
+    var appName: String? { host.map(HostApp.name) ?? named }
+
+    /// The user says which app this is; the Mac keeps it for the app's process.
+    func choose(app: String) {
+        choosingApp = false
+        named = app
+        fieldNote?.cancel()
+        let pid = hostPID
+        Task {
+            guard let mac = await reach() else { return }
+            await mac.noteField(proxy?.documentContextBeforeInput ?? "", app: app, pid: pid)
+        }
+    }
 
     private func showReady() {
-        status = "ready · " + (host.map(HostApp.name) ?? named ?? "app unknown")
+        status = "ready"
     }
 
     /// How the host was looked for, step by step: sent to the Mac's log.
@@ -344,11 +362,8 @@ final class KeyboardModel: ObservableObject {
         fieldNote = Task {
             try? await Task.sleep(for: .milliseconds(600))
             guard !Task.isCancelled, let mac = await reach() else { return }
-            let named = await mac.noteField(proxy?.documentContextBeforeInput ?? "", app: host.map(HostApp.name), pid: hostPID)
-            if host == nil, let named, named != self.named {
-                self.named = named
-                if status.hasPrefix("ready") { showReady() }
-            }
+            let named = await mac.noteField(proxy?.documentContextBeforeInput ?? "", app: appName, pid: hostPID)
+            if host == nil, let named { self.named = named }
         }
     }
 }
@@ -394,9 +409,41 @@ struct KeyboardView: View {
         model.layout.isLetters && model.shift != .off ? key.uppercased() : key
     }
 
-    /// What the keyboard last typed, or how it's doing.
+    /// The app it's in, and what the keyboard last typed or how it's doing — or the apps to choose
+    /// from, when iOS didn't say which it's in.
+    @ViewBuilder
     private var strip: some View {
+        if model.choosingApp {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(HostApp.choices, id: \.self) { app in
+                        Button(app) { model.choose(app: app) }
+                            .font(.footnote.weight(.medium))
+                            .padding(.horizontal, 10).padding(.vertical, 3)
+                            .background(Capsule().fill(Color.accentColor.opacity(0.15)))
+                            .buttonStyle(.plain)
+                    }
+                    Button { model.choosingApp = false } label: { Image(systemName: "xmark") }
+                        .font(.footnote).buttonStyle(.plain).foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 8)
+            }
+            .frame(height: 22)
+        } else {
+            statusStrip
+        }
+    }
+
+    private var statusStrip: some View {
         HStack {
+            Button { model.choosingApp = true } label: {
+                Text(model.appName ?? "app?")
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(model.appName == nil ? Color.orange : Color.secondary)
+                    .padding(.horizontal, 8).padding(.vertical, 2)
+                    .background(Capsule().strokeBorder(Color.secondary.opacity(0.4)))
+            }
+            .buttonStyle(.plain)
             Text(model.last ?? model.status)
                 .font(.footnote)
                 .foregroundStyle(model.last == nil ? .secondary : .primary)
