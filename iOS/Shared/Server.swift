@@ -11,10 +11,16 @@ struct Server {
     /// Tried in order; the setting holds them comma-separated.
     static let defaultAddresses = "http://100.85.3.88:8180, http://ivans-macbook-pro.local:8180"
 
+    /// Put in the build from the Mac's `server-token` (see `make phone`), so neither the app nor the
+    /// keyboard needs it typed in; the app's setting overrides it.
+    static var builtInToken: String {
+        (Bundle.main.object(forInfoDictionaryKey: "SweetchToken") as? String) ?? ""
+    }
+
     /// The first address that answers, all asked at once; nil when none does.
     static func reachable() async -> Server? {
         let defaults = UserDefaults.standard
-        let token = defaults.string(forKey: tokenKey) ?? ""
+        let token = defaults.string(forKey: tokenKey).flatMap { $0.isEmpty ? nil : $0 } ?? builtInToken
         // The first build kept one address; that one is in the defaults now.
         var saved = defaults.string(forKey: addressKey) ?? defaultAddresses
         if saved == "http://100.85.3.88:8180" { saved = defaultAddresses }
@@ -49,6 +55,17 @@ struct Server {
         return id
     }
 
+    /// The next text the Mac hears after `seq`, waiting up to `wait` seconds (at most 25) for it.
+    func next(after seq: Int, wait: Int) async throws -> (seq: Int, text: String?) {
+        let reply = try await get("/next?after=\(seq)&wait=\(wait)", timeout: TimeInterval(wait) + 5)
+        return (reply["seq"] as? Int ?? seq, reply["text"] as? String)
+    }
+
+    /// What the field holds before the cursor, for the next dictation's prefix.
+    func noteField(_ text: String) async {
+        _ = try? await send("/field", body: JSONSerialization.data(withJSONObject: ["text": text]), timeout: 3)
+    }
+
     /// What the Mac heard in `recording`.
     func hear(_ recording: Data, contextID: String?, apple: String?) async throws -> String {
         var query = URLComponents()
@@ -59,10 +76,14 @@ struct Server {
         return text
     }
 
-    private func send(_ path: String, body: Data, timeout: TimeInterval) async throws -> [String: Any] {
+    private func get(_ path: String, timeout: TimeInterval) async throws -> [String: Any] {
+        try await send(path, body: nil, timeout: timeout)
+    }
+
+    private func send(_ path: String, body: Data?, timeout: TimeInterval) async throws -> [String: Any] {
         guard let url = URL(string: address + path) else { throw Failure("bad server address") }
         var request = URLRequest(url: url)
-        request.httpMethod = "POST"
+        request.httpMethod = body == nil ? "GET" : "POST"
         request.timeoutInterval = timeout
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.httpBody = body
@@ -72,4 +93,9 @@ struct Server {
         guard status == 200 else { throw Failure(reply["error"] as? String ?? "the Mac answered \(status)") }
         return reply
     }
+}
+
+struct Failure: LocalizedError {
+    let errorDescription: String?
+    init(_ description: String) { errorDescription = description }
 }

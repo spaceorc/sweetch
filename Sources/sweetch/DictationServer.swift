@@ -10,6 +10,10 @@ import Network
 ///         reads the screenshot and writes the prefix in the background
 ///     POST /hear?id=…&apple=…    the recording, in any format ffmpeg reads → {text, seconds, …}
 ///         `apple` is the phone's own live transcript, when it has one; `id` may be left out
+///     GET  /next?after=…&wait=…  → {seq, text}: the next text heard, waiting up to `wait` s (≤ 25) for it
+///         the keyboard's: it types each text once, as soon as it's heard
+///     POST /field                JSON {text} — what the field holds before the cursor, from the
+///         keyboard; the next context takes it
 ///     GET  /ping                 → {ok}
 ///
 /// Every request but /ping carries `Authorization: Bearer <token>`; the token is made on first start
@@ -44,6 +48,13 @@ final class DictationServer {
     private let lock = NSLock()
     private var listener: NWListener?
     private var pending: [String: Pending] = [:]
+    /// The field the keyboard last saw, for the next context.
+    private var field: (text: String, at: Date)?
+
+    /// The last text heard, numbered by when (ms) so the keyboard types each once — across restarts
+    /// too. Guarded by `heard`, which wakes the keyboard's waiting request.
+    private let heard = NSCondition()
+    private var latest: (seq: Int, text: String)?
 
     private static let maxBody = 50 << 20
 
@@ -141,6 +152,10 @@ final class DictationServer {
             switch (request.method, request.path) {
             case ("POST", "/context"): (status, reply) = context(request)
             case ("POST", "/hear"): (status, reply) = hear(request)
+            case ("GET", "/next"):
+                (status, reply) = next(after: Int(request.query["after"] ?? "") ?? 0,
+                                       wait: min(Double(request.query["wait"] ?? "") ?? 25, 25))
+            case ("POST", "/field"): (status, reply) = noteField(request)
             default: (status, reply) = (404, ["error": "no such endpoint"])
             }
         }
@@ -163,7 +178,9 @@ final class DictationServer {
             pending[id] = entry
         }
         let app = json["app"] as? String
-        let fieldBefore = json["field_before"] as? String
+        let fieldBefore = json["field_before"] as? String ?? lock.withLock {
+            field.flatMap { Date().timeIntervalSince($0.at) < 120 ? $0.text : nil }
+        }
         let screenshot = (json["screenshot"] as? String).flatMap { Data(base64Encoded: $0, options: .ignoreUnknownCharacters) }
 
         entry.ready.enter()
@@ -236,6 +253,10 @@ final class DictationServer {
             record["versions"] = settled.versions.map(\.text)
             record["settlement"] = settled.settlement ?? NSNull()
             record["text"] = settled.text
+            if !settled.text.isEmpty {
+                heard.withLock { latest = (Int(Date().timeIntervalSince1970 * 1000), settled.text) }
+                heard.broadcast()
+            }
             log.info("dictation server: heard '\(settled.text, privacy: .public)'")
             return (200, ["text": settled.text, "seconds": record["seconds"] ?? 0, "versions": settled.versions.map(\.text)])
         } catch {
@@ -243,5 +264,23 @@ final class DictationServer {
             log.error("dictation server: \(String(describing: error), privacy: .public)")
             return (500, ["error": String(describing: error)])
         }
+    }
+
+    // MARK: - The keyboard
+
+    private func next(after: Int, wait: TimeInterval) -> (Int, [String: Any]) {
+        let deadline = Date().addingTimeInterval(wait)
+        heard.lock()
+        defer { heard.unlock() }
+        while (latest?.seq ?? 0) <= after, heard.wait(until: deadline) {}
+        guard let latest, latest.seq > after else { return (200, ["seq": after]) }
+        return (200, ["seq": latest.seq, "text": latest.text])
+    }
+
+    private func noteField(_ request: Request) -> (Int, [String: Any]) {
+        guard let json = try? JSONSerialization.jsonObject(with: request.body) as? [String: Any],
+              let text = json["text"] as? String else { return (400, ["error": "expected {text}"]) }
+        lock.withLock { field = (String(text.suffix(2000)), Date()) }
+        return (200, ["ok": true])
     }
 }

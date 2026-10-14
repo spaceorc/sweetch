@@ -29,11 +29,13 @@ targets:
         NSSpeechRecognitionUsageDescription: sweetch shows the words as you say them.
         NSSupportsLiveActivities: true
         NSLocalNetworkUsageDescription: sweetch reaches your Mac on the local network when Tailscale is off.
+        SweetchToken: $(SWEETCH_TOKEN)
         UIBackgroundModes: [audio]
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
     dependencies:
       - target: SweetchWidget
+      - target: SweetchKeyboard
   SweetchWidget:
     type: app-extension
     platform: iOS
@@ -48,3 +50,27 @@ targets:
         CFBundleDisplayName: sweetch
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
+  SweetchKeyboard:
+    type: app-extension
+    platform: iOS
+    sources: [SweetchKeyboard, Shared]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.spaceorc.sweetch.phone.keyboard
+        GENERATE_INFOPLIST_FILE: YES
+    info:
+      path: SweetchKeyboard/Info.plist
+      properties:
+        CFBundleDisplayName: sweetch
+        SweetchToken: $(SWEETCH_TOKEN)
+        NSLocalNetworkUsageDescription: The keyboard reaches your Mac on the local network when Tailscale is off.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.keyboard-service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).KeyboardViewController
+          NSExtensionAttributes:
+            IsASCIICapable: false
+            PrefersRightToLeft: false
+            PrimaryLanguage: ru-RU
+            RequestsOpenAccess: true

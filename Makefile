@@ -159,6 +159,7 @@ XCODE_DEV  = /Applications/Xcode.app/Contents/Developer
 phone:
 	cd iOS && DEVELOPER_DIR=$(XCODE_DEV) xcodegen generate -q
 	cd iOS && DEVELOPER_DIR=$(XCODE_DEV) xcodebuild -quiet -project SweetchPhone.xcodeproj -scheme SweetchPhone \
-		-destination id=$(PHONE_ID) -derivedDataPath build -allowProvisioningUpdates build
+		-destination id=$(PHONE_ID) -derivedDataPath build -allowProvisioningUpdates \
+		SWEETCH_TOKEN="$$(cat "$(HOME)/Library/Application Support/sweetch/server-token")" build
 	DEVELOPER_DIR=$(XCODE_DEV) xcrun devicectl device install app --device $(PHONE_ID) \
 		iOS/build/Build/Products/Debug-iphoneos/SweetchPhone.app

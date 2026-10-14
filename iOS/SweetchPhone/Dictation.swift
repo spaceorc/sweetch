@@ -209,8 +209,3 @@ final class Dictation: ObservableObject {
         return error == nil && out.frameLength > 0 ? out : nil
     }
 }
-
-struct Failure: LocalizedError {
-    let errorDescription: String?
-    init(_ description: String) { errorDescription = description }
-}
