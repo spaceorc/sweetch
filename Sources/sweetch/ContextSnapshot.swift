@@ -128,7 +128,7 @@ enum ContextSnapshot {
 
     /// Every line of text in a screenshot, top to bottom — on this machine, with Apple's Vision.
     /// Where Accessibility shows nothing (Telegram), this is all there is.
-    private static func readText(in png: URL) -> String? {
+    static func readText(in png: URL) -> String? {
         guard let image = NSImage(contentsOf: png)?.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate

@@ -10,6 +10,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let loader = LoaderOverlay()
     private lazy var dictation = Dictation(overlay: loader)
     private static let dictationEnabledKey = "dictationEnabled"
+    private static let serverEnabledKey = "dictationServerEnabled"
+    private let server = DictationServer()
     private var converting = false
     private var llmCorrecting = false
     /// The last correction we applied (what we typed, and what was there before), for undo.
@@ -56,6 +58,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             Whisper.warmUp()   // the model takes seconds to load; not on the first hold
             if #available(macOS 26.0, *) { LivePreview.prepare() }
         }
+        if isServerEnabled { server.start() }
 
         let switchHotkey  = Hotkey(keyCode: 49, flags: .maskCommand)                    // Cmd+Space
         let convertHotkey = Hotkey(keyCode: 49, flags: .maskAlternate)                  // Option+Space
@@ -597,6 +600,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         dictationItem.toolTip = "Hold Space in a text field to dictate; Claude desktop and Claude Code keep their own"
         menu.addItem(dictationItem)
         menu.addItem(NSMenuItem(title: "Dictations…", action: #selector(showDictations), keyEquivalent: ""))
+        let serverItem = NSMenuItem(title: "Dictation Server for iPhone", action: #selector(toggleServer), keyEquivalent: "")
+        serverItem.toolTip = "Hear the iPhone's dictations on this Mac, on port \(DictationServer.port.rawValue)"
+        menu.addItem(serverItem)
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "New Screenshot", action: #selector(captureScreenshot), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Capture Whole Screen", action: #selector(captureFullScreen), keyEquivalent: ""))
@@ -701,6 +707,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         log.info("dictation \(self.isDictationEnabled ? "enabled" : "disabled", privacy: .public)")
     }
 
+    private var isServerEnabled: Bool {
+        UserDefaults.standard.bool(forKey: Self.serverEnabledKey)
+    }
+
+    @objc private func toggleServer() {
+        UserDefaults.standard.set(!isServerEnabled, forKey: Self.serverEnabledKey)
+        if isServerEnabled { server.start() } else { server.stop() }
+    }
+
     @objc private func showDictations() {
         if dictationsWindow == nil {
             let window = DictationsWindow()
@@ -724,6 +739,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         remapper.reloadIfChanged()   // pick up edits to remaps.txt without a restart
         if let item = menu.items.first(where: { $0.action == #selector(toggleDictation) }) {
             item.state = isDictationEnabled ? .on : .off
+        }
+        if let item = menu.items.first(where: { $0.action == #selector(toggleServer) }) {
+            item.state = isServerEnabled ? .on : .off
         }
         if let item = menu.items.first(where: { $0.action == #selector(toggleWatchdog) }) {
             item.state = Watchdog.isInstalled ? .on : .off
