@@ -195,7 +195,12 @@ final class DictationServer {
     private func hear(_ request: Request) -> (Int, [String: Any]) {
         guard !request.body.isEmpty else { return (400, ["error": "no recording"]) }
         let entry = request.query["id"].flatMap { id in lock.withLock { pending.removeValue(forKey: id) } }
-            ?? Pending(dir: DictationStore.newSessionDir())
+            ?? {
+                // No context came: an empty one, so the dictation can still be heard again offline.
+                let entry = Pending(dir: DictationStore.newSessionDir())
+                DictationStore.write(["app": "iPhone", "device": "iPhone"], to: entry.dir.appendingPathComponent("context.json"))
+                return entry
+            }()
         let apple = request.query["apple"].flatMap { $0.isEmpty ? nil : $0 }
         let started = Date()
         var record: [String: Any] = [

@@ -35,9 +35,19 @@ final class Dictation: ObservableObject {
 
     /// Starts when idle, stops when listening. True when it started.
     func toggle() async throws -> Bool {
+        Trace.note("toggle in \(phase)")
         switch phase {
         case .idle:
-            try start()
+            do {
+                try start()
+            } catch {
+                Trace.note("start failed: \(error)")
+                problem = error.localizedDescription
+                await activity?.end(.init(state: .init(phase: .failed, text: error.localizedDescription), staleDate: nil),
+                                    dismissalPolicy: .after(.now + 4))
+                activity = nil
+                throw error
+            }
             return true
         case .listening:
             await stop()
@@ -51,9 +61,19 @@ final class Dictation: ObservableObject {
         guard phase == .idle else { return }
         problem = nil
         preview = ""
+        // The Live Activity first: iOS ends an Action Button recording that has none, and checks as
+        // soon as the audio session is up.
+        do {
+            activity = try Activity.request(attributes: DictationActivity(),
+                                            content: .init(state: .init(phase: .listening, text: ""), staleDate: nil))
+        } catch {
+            throw Failure("no Live Activity: \(error.localizedDescription)")
+        }
+        Trace.note("activity \(activity?.id ?? "-")")
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playAndRecord, mode: .default, options: [.mixWithOthers, .defaultToSpeaker, .allowBluetoothHFP])
         try session.setActive(true)
+        Trace.note("audio session active")
 
         let engine = AVAudioEngine()
         let input = engine.inputNode
@@ -73,6 +93,7 @@ final class Dictation: ObservableObject {
         input.installTap(onBus: 0, bufferSize: 4096, format: inputFormat, block: Self.tap(live: live, converter: converter, file: file))
         engine.prepare()
         try engine.start()
+        Trace.note("engine started")
 
         self.engine = engine
         self.file = file
@@ -80,8 +101,6 @@ final class Dictation: ObservableObject {
         self.live = live
         startedAt = Date()
         phase = .listening
-        activity = try? Activity.request(attributes: DictationActivity(),
-                                         content: .init(state: .init(phase: .listening, text: ""), staleDate: nil))
     }
 
     /// The screenshot the Shortcut takes right after starting: sent at once, so the Mac reads it
@@ -113,11 +132,13 @@ final class Dictation: ObservableObject {
         do {
             let text = try await Server.current.hear(try Data(contentsOf: recording), contextID: contextID, apple: apple)
             lastSeconds = Date().timeIntervalSince(started)
+            Trace.note("heard in \(lastSeconds ?? 0)s: \(text)")
             last = text
             if !text.isEmpty { UIPasteboard.general.string = text }
             await show(.done, text.isEmpty ? "Nothing heard" : text)
         } catch {
             problem = error.localizedDescription
+            Trace.note("hearing failed: \(error)")
             if let apple, !apple.isEmpty {   // the Mac is out of reach: the phone's own hearing will do
                 last = apple
                 UIPasteboard.general.string = apple

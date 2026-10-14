@@ -2,7 +2,10 @@ import SwiftUI
 
 @main
 struct SweetchPhoneApp: App {
-    init() { LivePreview.prepare() }
+    init() {
+        Trace.note("launched")
+        LivePreview.prepare()
+    }
 
     var body: some Scene {
         WindowGroup { ContentView() }

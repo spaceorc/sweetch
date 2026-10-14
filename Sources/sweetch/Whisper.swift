@@ -193,7 +193,7 @@ enum Whisper {
     }
 
     private static func isPhantom(_ text: String) -> Bool {
-        let bare = text.lowercased().filter { $0.isLetter || $0 == " " }.trimmingCharacters(in: .whitespaces)
+        let bare = text.lowercased().filter { $0.isLetter || $0.isNumber || $0 == " " }.trimmingCharacters(in: .whitespaces)
         return bare.isEmpty || phantomPhrases.contains(bare)
     }
 

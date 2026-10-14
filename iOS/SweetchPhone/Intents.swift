@@ -1,15 +1,17 @@
 import AppIntents
 
 /// The Action Button's: the first press starts listening, the next stops it and puts what was said
-/// on the clipboard. Runs in the background; the Live Activity is what shows.
-struct ToggleDictationIntent: AudioRecordingIntent {
+/// on the clipboard. Runs in the background; the Live Activity is what shows — and being a
+/// `LiveActivityIntent` is what lets it start one from there.
+struct ToggleDictationIntent: AudioRecordingIntent, LiveActivityIntent {
     static let title: LocalizedStringResource = "Toggle Dictation"
     static let description = IntentDescription("Starts listening, or stops and copies what was said.")
     static let openAppWhenRun = false
 
     @MainActor
     func perform() async throws -> some IntentResult & ReturnsValue<Bool> {
-        .result(value: try await Dictation.shared.toggle())
+        Trace.note("intent: toggle")
+        return .result(value: try await Dictation.shared.toggle())
     }
 }
 
