@@ -30,6 +30,8 @@ final class Dictation: ObservableObject {
     private var activity: Activity<DictationActivity>?
     /// The context sent while the user speaks; its id goes with the recording.
     private var context: Task<String?, Never>?
+    /// Which of the Mac's addresses answers, found while the user speaks.
+    private var server: Task<Server?, Never>?
 
     private nonisolated static let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false)!
 
@@ -104,6 +106,7 @@ final class Dictation: ObservableObject {
         self.recording = url
         self.live = live
         startedAt = Date()
+        server = Task { await Server.reachable() }
         phase = .listening
     }
 
@@ -112,7 +115,11 @@ final class Dictation: ObservableObject {
     func attach(screenshot: Data) {
         guard phase == .listening, context == nil else { return }
         let jpeg = UIImage(data: screenshot)?.jpegData(compressionQuality: 0.8) ?? screenshot
-        context = Task { try? await Server.current.context(screenshot: jpeg, fieldBefore: nil) }
+        let server = server
+        context = Task {
+            guard let mac = await server?.value else { return nil }
+            return try? await mac.context(screenshot: jpeg, fieldBefore: nil)
+        }
     }
 
     func stop() async {
@@ -133,9 +140,11 @@ final class Dictation: ObservableObject {
         live = nil
         let contextID = await context?.value
         context = nil
+        defer { server = nil }
         let started = Date()
         do {
-            let text = try await Server.current.hear(try Data(contentsOf: recording), contextID: contextID, apple: apple)
+            guard let mac = await server?.value else { throw Failure("the Mac is out of reach") }
+            let text = try await mac.hear(try Data(contentsOf: recording), contextID: contextID, apple: apple)
             lastSeconds = Date().timeIntervalSince(started)
             Trace.note("heard in \(lastSeconds ?? 0)s: \(text)")
             last = text

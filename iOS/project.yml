@@ -28,6 +28,7 @@ targets:
         NSMicrophoneUsageDescription: sweetch records what you dictate and hears it on your Mac.
         NSSpeechRecognitionUsageDescription: sweetch shows the words as you say them.
         NSSupportsLiveActivities: true
+        NSLocalNetworkUsageDescription: sweetch reaches your Mac on the local network when Tailscale is off.
         UIBackgroundModes: [audio]
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true

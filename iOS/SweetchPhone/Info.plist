@@ -25,6 +25,8 @@
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>sweetch reaches your Mac on the local network when Tailscale is off.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>sweetch records what you dictate and hears it on your Mac.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>

@@ -1,24 +1,40 @@
 import Foundation
 
-/// sweetch on the Mac, reached over Tailscale: see DictationServer.swift there.
+/// sweetch on the Mac: see DictationServer.swift there. Reached over Tailscale from anywhere, or
+/// on the local network when Tailscale is off — iOS runs one VPN at a time, and the work one wins.
 struct Server {
     var address: String
     var token: String
 
     static let addressKey = "serverAddress"
     static let tokenKey = "serverToken"
-    static let defaultAddress = "http://100.85.3.88:8180"
+    /// Tried in order; the setting holds them comma-separated.
+    static let defaultAddresses = "http://100.85.3.88:8180, http://ivans-macbook-pro.local:8180"
 
-    static var current: Server {
+    /// The first address that answers, all asked at once; nil when none does.
+    static func reachable() async -> Server? {
         let defaults = UserDefaults.standard
-        return Server(address: defaults.string(forKey: addressKey) ?? defaultAddress,
-                      token: defaults.string(forKey: tokenKey) ?? "")
+        let token = defaults.string(forKey: tokenKey) ?? ""
+        // The first build kept one address; that one is in the defaults now.
+        var saved = defaults.string(forKey: addressKey) ?? defaultAddresses
+        if saved == "http://100.85.3.88:8180" { saved = defaultAddresses }
+        let addresses = saved
+            .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        let answered = await withTaskGroup(of: (Int, Bool).self) { group in
+            for (i, address) in addresses.enumerated() {
+                group.addTask { (i, await Server(address: address, token: token).ping()) }
+            }
+            var answered: [Int] = []
+            for await (i, ok) in group where ok { answered.append(i) }
+            return answered
+        }
+        return answered.min().map { Server(address: addresses[$0], token: token) }
     }
 
     func ping() async -> Bool {
         guard let url = URL(string: address + "/ping") else { return false }
         var request = URLRequest(url: url)
-        request.timeoutInterval = 3
+        request.timeoutInterval = 1.5
         return (try? await URLSession.shared.data(for: request)) != nil
     }
 

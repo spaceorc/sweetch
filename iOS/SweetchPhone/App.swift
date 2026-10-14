@@ -16,23 +16,23 @@ struct SweetchPhoneApp: App {
 /// drives it.
 struct ContentView: View {
     @ObservedObject private var dictation = Dictation.shared
-    @AppStorage(Server.addressKey) private var address = Server.defaultAddress
+    @AppStorage(Server.addressKey) private var address = Server.defaultAddresses
     @AppStorage(Server.tokenKey) private var token = ""
-    @State private var reachable: Bool?
+    @State private var reachable: String??
 
     var body: some View {
         NavigationStack {
             Form {
                 Section("Mac") {
-                    TextField("Address", text: $address)
+                    TextField("Addresses", text: $address, axis: .vertical)
                         .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
                     SecureField("Token", text: $token)
                     Button("Paste Token") { token = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? token }
                     HStack {
-                        Button("Check") { Task { reachable = await Server.current.ping() } }
+                        Button("Check") { Task { reachable = await Server.reachable()?.address } }
                         Spacer()
                         if let reachable {
-                            Text(reachable ? "reachable" : "out of reach").foregroundStyle(reachable ? .green : .red)
+                            Text(reachable ?? "out of reach").font(.caption).foregroundStyle(reachable == nil ? .red : .green)
                         }
                     }
                 }
