@@ -48,6 +48,10 @@ final class DictationServer {
     private let lock = NSLock()
     private var listener: NWListener?
     private var pending: [String: Pending] = [:]
+    /// Dictations being heard, and when the last one was: an update waits for a quiet moment
+    /// (`/ping` tells it, see Tools/mini/update.sh).
+    private var hearing = 0
+    private var lastDictation = Date.distantPast
     /// The field the keyboard last saw, for the next context.
     private var field: (text: String, at: Date)?
 
@@ -145,13 +149,22 @@ final class DictationServer {
     private func respond(to request: Request, on connection: NWConnection) {
         let (status, reply): (Int, [String: Any])
         if request.path == "/ping" {
-            (status, reply) = (200, ["ok": true])
+            let idle = lock.withLock { hearing > 0 ? 0 : Date().timeIntervalSince(lastDictation) }
+            (status, reply) = (200, ["ok": true, "idle": Int(min(idle, 86_400))])
         } else if request.headers["authorization"] != "Bearer \(Self.token)" {
             (status, reply) = (401, ["error": "unauthorized"])
         } else {
             switch (request.method, request.path) {
-            case ("POST", "/context"): (status, reply) = context(request)
-            case ("POST", "/hear"): (status, reply) = hear(request)
+            case ("POST", "/context"):
+                lock.withLock { lastDictation = Date() }
+                (status, reply) = context(request)
+            case ("POST", "/hear"):
+                lock.withLock { hearing += 1 }
+                (status, reply) = hear(request)
+                lock.withLock {
+                    hearing -= 1
+                    lastDictation = Date()
+                }
             case ("GET", "/next"):
                 (status, reply) = next(after: Int(request.query["after"] ?? "") ?? 0,
                                        wait: min(Double(request.query["wait"] ?? "") ?? 25, 25))

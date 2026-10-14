@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The Mac mini's sweetch updating itself from GitHub every five minutes (update.sh). Installed by
+     `make mini`; __ROOT__ and __HOME__ are filled in there. -->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.spaceorc.sweetch.update</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>__ROOT__/Tools/mini/update.sh</string>
+	</array>
+	<key>WorkingDirectory</key>
+	<string>__ROOT__</string>
+	<key>StartInterval</key>
+	<integer>300</integer>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StandardOutPath</key>
+	<string>__HOME__/Library/Logs/sweetch-update.log</string>
+	<key>StandardErrorPath</key>
+	<string>__HOME__/Library/Logs/sweetch-update.log</string>
+</dict>
+</plist>

@@ -27,7 +27,7 @@ ICON_TOOL  = Tools/make-icon.swift
 ICON_ICNS  = $(BUILD_DIR)/AppIcon.icns
 ICONSET    = $(BUILD_DIR)/AppIcon.iconset
 
-.PHONY: all build app run debug clean setup-signing tcc-reset icon stop start trace phone mini sync sync-install
+.PHONY: all build app run debug clean setup-signing tcc-reset icon stop start trace phone serve-app mini sync sync-install
 
 all: app
 
@@ -164,34 +164,45 @@ phone:
 	DEVELOPER_DIR=$(XCODE_DEV) xcrun devicectl device install app --device $(PHONE_ID) \
 		iOS/build/Build/Products/Debug-iphoneos/SweetchPhone.app
 
+# The dictation server's own bundle: no icon, no signing identity (it needs no Accessibility),
+# the LLM credentials in it. What the Mac mini builds and runs (Tools/mini/update.sh).
+SERVE_BUNDLE = $(BUILD_DIR)/serve/$(APP_NAME).app
+
+serve-app: build
+	@rm -rf $(SERVE_BUNDLE)
+	@mkdir -p $(SERVE_BUNDLE)/Contents/MacOS $(SERVE_BUNDLE)/Contents/Resources
+	@cp .build/release/$(APP_NAME) $(SERVE_BUNDLE)/Contents/MacOS/$(APP_NAME)
+	@cp $(PLIST_SRC) $(SERVE_BUNDLE)/Contents/Info.plist
+	@cp .env $(SERVE_BUNDLE)/Contents/Resources/sweetch.env
+	@codesign --force --sign - $(SERVE_BUNDLE)
+
 # The Mac mini at home: the iPhone's dictation server, headless (`sweetch --serve`), kept up by
-# launchd in the user's session there. Built here and shipped over ssh — through Tailscale, so it
-# works away from home too. The whisper model, the server's token (the one the iPhone's build
-# holds) and the persona go along once; whisper.cpp and ffmpeg come from Homebrew there.
+# launchd in the user's session there. `make mini` sets it up — a clone of this repo there, the
+# credentials, the whisper model, the server's token (the one the iPhone's build holds), the
+# persona — and from then on it updates itself from GitHub's main every five minutes, building
+# there (Tools/mini/update.sh). Over Tailscale, so it works away from home too.
 MINI       ?= ivandashkevich@100.102.243.87
 MINI_SSH    = ssh -i $(HOME)/.ssh/id_ed25519 -o IdentitiesOnly=yes -o BatchMode=yes -o HostKeyAlias=ivans-mac-mini.local
-MINI_BUNDLE = $(BUILD_DIR)/mini/$(APP_NAME).app
+MINI_ROOT   = work/personal/sweetch
 SUPPORT     = $(HOME)/Library/Application Support/sweetch
 WHISPER_MODEL = .cache/whisper-cpp/ggml-large-v3-turbo-q8_0.bin
 
-mini: build
-	@rm -rf $(BUILD_DIR)/mini
-	@mkdir -p $(MINI_BUNDLE)/Contents/MacOS $(MINI_BUNDLE)/Contents/Resources
-	@cp .build/release/$(APP_NAME) $(MINI_BUNDLE)/Contents/MacOS/$(APP_NAME)
-	@cp $(PLIST_SRC) $(MINI_BUNDLE)/Contents/Info.plist
-	@cp .env $(MINI_BUNDLE)/Contents/Resources/sweetch.env
-	@codesign --force --sign - $(MINI_BUNDLE)
-	$(MINI_SSH) $(MINI) 'export PATH=/opt/homebrew/bin:$$PATH; brew list whisper.cpp >/dev/null 2>&1 || brew install whisper.cpp; brew list ffmpeg >/dev/null 2>&1 || brew install ffmpeg; mkdir -p ~/sweetch ~/.cache/whisper-cpp ~/Library/Logs ~/Library/LaunchAgents "$$HOME/Library/Application Support/sweetch"'
-	rsync -a --delete -e "$(MINI_SSH)" $(MINI_BUNDLE)/ $(MINI):sweetch/$(APP_NAME).app/
+mini:
+	$(MINI_SSH) $(MINI) 'export PATH=/opt/homebrew/bin:$$PATH; \
+		brew list whisper.cpp >/dev/null 2>&1 || brew install whisper.cpp; brew list ffmpeg >/dev/null 2>&1 || brew install ffmpeg; \
+		mkdir -p ~/.cache/whisper-cpp ~/Library/Logs ~/Library/LaunchAgents "$$HOME/Library/Application Support/sweetch"; \
+		test -d ~/$(MINI_ROOT) || git clone -q https://github.com/spaceorc/sweetch.git ~/$(MINI_ROOT)'
+	$(MINI_SSH) $(MINI) 'cat > ~/$(MINI_ROOT)/.env' < .env
 	rsync -a --ignore-existing -e "$(MINI_SSH)" $(HOME)/$(WHISPER_MODEL) $(MINI):$(WHISPER_MODEL)
 	@for f in server-token persona.txt; do \
 		$(MINI_SSH) $(MINI) "test -e \"\$$HOME/Library/Application Support/sweetch/$$f\"" || \
 		$(MINI_SSH) $(MINI) "cat > \"\$$HOME/Library/Application Support/sweetch/$$f\"" < "$(SUPPORT)/$$f"; \
 	done
-	$(MINI_SSH) $(MINI) 'sed "s|__HOME__|$$HOME|g" > ~/Library/LaunchAgents/com.spaceorc.sweetch.server.plist; \
-		launchctl bootout gui/$$(id -u)/com.spaceorc.sweetch.server 2>/dev/null; \
-		launchctl bootstrap gui/$$(id -u) ~/Library/LaunchAgents/com.spaceorc.sweetch.server.plist' < Tools/mini/server.plist
-	@sleep 3; $(MINI_SSH) $(MINI) 'curl -s -m 3 http://127.0.0.1:8180/ping' && echo " — the Mac mini's server answers"
+	$(MINI_SSH) $(MINI) 'cd ~/$(MINI_ROOT) && sed -e "s|__ROOT__|$$PWD|g" -e "s|__HOME__|$$HOME|g" Tools/mini/update.plist \
+		> ~/Library/LaunchAgents/com.spaceorc.sweetch.update.plist; \
+		launchctl bootout gui/$$(id -u)/com.spaceorc.sweetch.update 2>/dev/null; \
+		launchctl bootstrap gui/$$(id -u) ~/Library/LaunchAgents/com.spaceorc.sweetch.update.plist'
+	@echo "the Mac mini updates itself from GitHub's main every five minutes; log: ~/Library/Logs/sweetch-update.log there"
 
 # Two-way sync of the recordings with the Mac mini: `make sync` once, `make sync-install` every
 # five minutes from now on (a launchd agent here). See Tools/mini/sync.sh.
