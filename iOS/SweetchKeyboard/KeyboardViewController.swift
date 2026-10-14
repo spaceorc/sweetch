@@ -88,6 +88,19 @@ final class KeyboardModel: ObservableObject {
 
     private var proxy: UITextDocumentProxy? { controller?.textDocumentProxy }
 
+    /// The app the keyboard is typing into. iOS doesn't say; these private keys have, on some
+    /// versions — whichever answers.
+    private(set) lazy var host: String? = {
+        guard let controller else { return nil }
+        let holders: [NSObject?] = [controller, controller.parent, controller.parent?.parent]
+        for holder in holders.compactMap({ $0 }) {
+            for key in ["_hostBundleID", "_hostApplicationBundleIdentifier", "hostBundleID"]
+            where holder.responds(to: NSSelectorFromString(key)) {
+                if let id = holder.value(forKey: key) as? String, !id.isEmpty, id != "<null>" { return id }
+            }
+        }
+        return nil
+    }()
     func appeared() {
         listening?.cancel()
         listening = Task { await listen() }
@@ -211,7 +224,9 @@ final class KeyboardModel: ObservableObject {
     /// A keyboard has no UIApplication to open URLs with; the responder chain reaches the host's
     /// scene and application. A scene takes its own options object, an application a dictionary.
     private func openApp() {
-        guard let url = URL(string: "sweetch://dictate") else { return }
+        var link = URLComponents(string: "sweetch://dictate")!
+        if let host { link.queryItems = [URLQueryItem(name: "back", value: host)] }
+        guard let url = link.url else { return }
         let selector = NSSelectorFromString("openURL:options:completionHandler:")
         typealias Open = @convention(c) (AnyObject, Selector, URL, AnyObject?, AnyObject?) -> Void
         var responder: UIResponder? = controller
@@ -251,7 +266,7 @@ final class KeyboardModel: ObservableObject {
                 seq = next
                 UserDefaults.standard.set(seq, forKey: lastSeqKey)
                 caughtUp = true
-                status = "ready"
+                status = "ready" + (host.map { " · \(HostApp.name($0))" } ?? " · app unknown")
             } catch {
                 if Task.isCancelled { return }
                 server = nil
@@ -294,7 +309,7 @@ final class KeyboardModel: ObservableObject {
         fieldNote = Task {
             try? await Task.sleep(for: .milliseconds(600))
             guard !Task.isCancelled, let mac = await reach() else { return }
-            await mac.noteField(proxy?.documentContextBeforeInput ?? "")
+            await mac.noteField(proxy?.documentContextBeforeInput ?? "", app: host.map(HostApp.name))
         }
     }
 }

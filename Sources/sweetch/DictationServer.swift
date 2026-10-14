@@ -12,8 +12,8 @@ import Network
 ///         `apple` is the phone's own live transcript, when it has one; `id` may be left out
 ///     GET  /next?after=…&wait=…  → {seq, text}: the next text heard, waiting up to `wait` s (≤ 25) for it
 ///         the keyboard's: it types each text once, as soon as it's heard
-///     POST /field                JSON {text} — what the field holds before the cursor, from the
-///         keyboard; the next context takes it
+///     POST /field                JSON {text, app?} — what the field holds before the cursor and the
+///         app it's in, from the keyboard; the next context takes them
 ///     GET  /ping                 → {ok}
 ///
 /// Every request but /ping carries `Authorization: Bearer <token>`; the token is made on first start
@@ -48,8 +48,12 @@ final class DictationServer {
     private let lock = NSLock()
     private var listener: NWListener?
     private var pending: [String: Pending] = [:]
-    /// The field the keyboard last saw, for the next context.
-    private var field: (text: String, at: Date)?
+    /// The field the keyboard last saw and the app it's in, for the next context.
+    private var field: (text: String, app: String?, at: Date)?
+    /// The phone's last screenshot: a dictation started from the keyboard has none of its own (only
+    /// a Shortcut can take one), and the conversation on screen is usually still the same.
+    private var lastShot: (data: Data, app: String?, at: Date)?
+    private static let shotLasts: TimeInterval = 600
 
     /// The last text heard, numbered by when (ms) so the keyboard types each once — across restarts
     /// too. Guarded by `heard`, which wakes the keyboard's waiting request.
@@ -177,11 +181,20 @@ final class DictationServer {
             pending = pending.filter { Date().timeIntervalSince($0.value.startedAt) < 300 }
             pending[id] = entry
         }
-        let app = json["app"] as? String
-        let fieldBefore = json["field_before"] as? String ?? lock.withLock {
-            field.flatMap { Date().timeIntervalSince($0.at) < 120 ? $0.text : nil }
+        let fresh = lock.withLock { field.flatMap { Date().timeIntervalSince($0.at) < 120 ? $0 : nil } }
+        let app = json["app"] as? String ?? fresh?.app
+        let fieldBefore = json["field_before"] as? String ?? fresh?.text
+        var screenshot = (json["screenshot"] as? String).flatMap { Data(base64Encoded: $0, options: .ignoreUnknownCharacters) }
+        var reused = false
+        lock.withLock {
+            if let screenshot {
+                lastShot = (screenshot, app, Date())
+            } else if let shot = lastShot, Date().timeIntervalSince(shot.at) < Self.shotLasts,
+                      shot.app == nil || app == nil || shot.app == app {
+                screenshot = shot.data
+                reused = true
+            }
         }
-        let screenshot = (json["screenshot"] as? String).flatMap { Data(base64Encoded: $0, options: .ignoreUnknownCharacters) }
 
         entry.ready.enter()
         DispatchQueue.global(qos: .userInitiated).async {
@@ -194,6 +207,7 @@ final class DictationServer {
                 let png = entry.dir.appendingPathComponent("window.png")
                 try? screenshot.write(to: png)
                 saved["screenshot"] = png.lastPathComponent
+                if reused { saved["screenshot_reused"] = true }
                 let ocrStarted = Date()
                 ocr = ContextSnapshot.readText(in: png)
                 saved["ocr"] = ocr
@@ -280,7 +294,7 @@ final class DictationServer {
     private func noteField(_ request: Request) -> (Int, [String: Any]) {
         guard let json = try? JSONSerialization.jsonObject(with: request.body) as? [String: Any],
               let text = json["text"] as? String else { return (400, ["error": "expected {text}"]) }
-        lock.withLock { field = (String(text.suffix(2000)), Date()) }
+        lock.withLock { field = (String(text.suffix(2000)), json["app"] as? String, Date()) }
         return (200, ["ok": true])
     }
 }

@@ -61,9 +61,11 @@ struct Server {
         return (reply["seq"] as? Int ?? seq, reply["text"] as? String)
     }
 
-    /// What the field holds before the cursor, for the next dictation's prefix.
-    func noteField(_ text: String) async {
-        _ = try? await send("/field", body: JSONSerialization.data(withJSONObject: ["text": text]), timeout: 3)
+    /// What the field holds before the cursor and the app it's in, for the next dictation's prefix.
+    func noteField(_ text: String, app: String?) async {
+        var body: [String: Any] = ["text": text]
+        if let app { body["app"] = app }
+        _ = try? await send("/field", body: JSONSerialization.data(withJSONObject: body), timeout: 3)
     }
 
     /// What the Mac heard in `recording`.
@@ -98,4 +100,21 @@ struct Server {
 struct Failure: LocalizedError {
     let errorDescription: String?
     init(_ description: String) { errorDescription = description }
+}
+
+/// The apps dictated into most, by bundle id: their names for the prefix, and how to go back to
+/// them — iOS has no "back" an app can press, but these open by their URL schemes.
+enum HostApp {
+    static let known: [String: (name: String, scheme: String)] = [
+        "ph.telegra.Telegraph": ("Telegram", "tg://"),
+        "com.tinyspeck.chatlyio": ("Slack", "slack://open"),
+        "net.whatsapp.WhatsApp": ("WhatsApp", "whatsapp://"),
+        "com.apple.MobileSMS": ("Messages", "sms://"),
+        "com.apple.mobilenotes": ("Notes", "mobilenotes://"),
+        "com.apple.mobilesafari": ("Safari", "x-web-search://"),
+    ]
+
+    static func name(_ bundleID: String) -> String {
+        known[bundleID]?.name ?? bundleID.split(separator: ".").last.map(String.init) ?? bundleID
+    }
 }

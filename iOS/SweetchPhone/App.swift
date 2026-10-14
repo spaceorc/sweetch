@@ -15,7 +15,17 @@ struct SweetchPhoneApp: App {
                 // it can be turned on; the user goes back by the status bar's "◀ Telegram".
                 .onOpenURL { url in
                     guard url.host == "dictate", Dictation.shared.phase != .listening else { return }
-                    Task { _ = try? await Dictation.shared.toggle(waitingForScreenshot: false) }
+                    let back = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
+                        .first { $0.name == "back" }?.value
+                    Task {
+                        _ = try? await Dictation.shared.toggle(waitingForScreenshot: false)
+                        // Listening: back to the app the keyboard was in, when it can be opened.
+                        if Dictation.shared.phase == .listening, let back, let scheme = HostApp.known[back]?.scheme,
+                           let url = URL(string: scheme) {
+                            Trace.note("back to \(back)")
+                            await UIApplication.shared.open(url)
+                        }
+                    }
                 }
         }
     }
