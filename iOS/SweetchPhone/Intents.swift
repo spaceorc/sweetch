@@ -20,7 +20,7 @@ struct AttachScreenshotIntent: AppIntent {
     static let title: LocalizedStringResource = "Attach Screenshot to Dictation"
     static let openAppWhenRun = false
 
-    @Parameter(title: "Screenshot", supportedContentTypes: [.image])
+    @Parameter(title: "Screenshot", supportedContentTypes: [.image], inputConnectionBehavior: .connectToPreviousIntentResult)
     var screenshot: IntentFile
 
     @MainActor
