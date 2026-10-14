@@ -9,9 +9,10 @@ struct ToggleDictationIntent: AudioRecordingIntent, LiveActivityIntent {
     static let openAppWhenRun = false
 
     @MainActor
-    func perform() async throws -> some IntentResult & ReturnsValue<String> {
+    func perform() async throws -> some IntentResult & ReturnsValue<String?> {
         Trace.note("intent: toggle")
-        return .result(value: try await Dictation.shared.toggle() ?? "")
+        // Nil when it started — "no value" to the Shortcut, which an empty text is not.
+        return .result(value: try await Dictation.shared.toggle())
     }
 }
 
