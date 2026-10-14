@@ -111,6 +111,7 @@ final class KeyboardModel: ObservableObject {
         let before = proxy?.documentContextBeforeInput ?? ""
         let spaced = before.isEmpty || before.last?.isWhitespace == true ? text : " " + text
         proxy?.insertText(spaced)
+        fieldChanged()   // the keyboard's own typing raises no textDidChange
     }
 
     func typeLast() {
@@ -127,9 +128,9 @@ final class KeyboardModel: ObservableObject {
         }
     }
 
-    func space() { proxy?.insertText(" ") }
-    func newline() { proxy?.insertText("\n") }
-    func backspace() { proxy?.deleteBackward() }
+    func space() { proxy?.insertText(" "); fieldChanged() }
+    func newline() { proxy?.insertText("\n"); fieldChanged() }
+    func backspace() { proxy?.deleteBackward(); fieldChanged() }
     func nextKeyboard() { controller?.advanceToNextInputMode() }
 }
 
