@@ -14,7 +14,12 @@ targets:
   SweetchPhone:
     type: application
     platform: iOS
-    sources: [SweetchPhone, Shared]
+    sources:
+      - SweetchPhone
+      - Shared
+      # The keyboard's code too, for `--keyboard-preview`.
+      - path: SweetchKeyboard
+        excludes: [Info.plist]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.spaceorc.sweetch.phone
@@ -33,9 +38,6 @@ targets:
         UIBackgroundModes: [audio]
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
-        CFBundleURLTypes:
-          - CFBundleURLName: com.spaceorc.sweetch.phone
-            CFBundleURLSchemes: [sweetch]
     dependencies:
       - target: SweetchWidget
       - target: SweetchKeyboard

@@ -44,7 +44,6 @@ private func phaseSymbol(_ phase: DictationActivity.ContentState.Phase) -> Strin
     case .recognizing: "waveform"
     case .done: "checkmark"
     case .failed: "exclamationmark.triangle"
-    case .warm: "mic"
     }
 }
 
@@ -54,7 +53,6 @@ private func phaseTint(_ phase: DictationActivity.ContentState.Phase) -> Color {
     case .recognizing: .orange
     case .done: .green
     case .failed: .yellow
-    case .warm: .secondary
     }
 }
 
@@ -62,8 +60,7 @@ private func phaseCaption(_ phase: DictationActivity.ContentState.Phase) -> Stri
     switch phase {
     case .listening: "listening…"
     case .recognizing: "recognizing…"
-    case .done: "copied"
+    case .done: "done"
     case .failed: "failed"
-    case .warm: "mic on — keyboard ready"
     }
 }
