@@ -111,7 +111,9 @@ final class KeyboardModel {
     private weak var controller: UIInputViewController?
     private var listening: Task<Void, Never>?
     private var fieldNote: Task<Void, Never>?
-    private var server: Server?
+    /// The Macs the keyboard is waiting on, by Mac, as each answered.
+    private var connected: [String: Server] = [:]
+    private var lastHeard: (text: String, at: Date)?
     private var lastSpaceAt = Date.distantPast
     private var lastShiftAt = Date.distantPast
     private var word = ""
@@ -291,8 +293,9 @@ final class KeyboardModel {
         fieldNote?.cancel()
         fieldNote = Task {
             try? await Task.sleep(for: .milliseconds(600))
-            guard !Task.isCancelled, let mac = await reach() else { return }
-            await mac.noteField(proxy?.documentContextBeforeInput ?? "")
+            guard !Task.isCancelled else { return }
+            let field = proxy?.documentContextBeforeInput ?? ""
+            for mac in connected.values { await mac.noteField(field) }
         }
     }
 
@@ -332,45 +335,66 @@ final class KeyboardModel {
 
     // MARK: Dictation
 
-    /// Waits on the Mac for what it hears next, and types it. What was heard before the keyboard
-    /// came up isn't typed — it may have been meant for another field — but stays a tap away.
+    /// Waits on every Mac for what it hears next, and types it: a dictation goes to whichever Mac
+    /// was reachable. What was heard before the keyboard came up isn't typed — it may have been
+    /// meant for another field — but stays a tap away.
     private func listen() async {
-        var seq = UserDefaults.standard.integer(forKey: lastSeqKey)
+        await withTaskGroup(of: Void.self) { group in
+            for (index, addresses) in Server.macs.enumerated() {
+                group.addTask { await self.listen(to: addresses, first: index == 0) }
+            }
+        }
+    }
+
+    private func listen(to addresses: [String], first: Bool) async {
+        let mac = addresses[0]
+        let seqKey = "lastSeq-\(mac)"
+        // Earlier builds waited on one Mac, the first, and kept its place under one key.
+        var seq = UserDefaults.standard.object(forKey: seqKey) as? Int
+            ?? (first ? UserDefaults.standard.integer(forKey: lastSeqKey) : 0)
         var caughtUp = false
         while !Task.isCancelled {
-            guard let mac = await reach() else {
-                status = "Mac out of reach"
-                try? await Task.sleep(for: .seconds(3))
+            var found = connected[mac]
+            if found == nil { found = await Server.answering(addresses) }
+            guard let server = found else {
+                connected[mac] = nil
+                showStatus()
+                try? await Task.sleep(for: .seconds(caughtUp ? 5 : 3))
                 continue
             }
+            connected[mac] = server
             do {
-                let (next, text) = try await mac.next(after: seq, wait: caughtUp ? 25 : 0)
+                let (next, text) = try await server.next(after: seq, wait: caughtUp ? 25 : 0)
                 if Task.isCancelled { return }
                 if next > seq, let text, !text.isEmpty {
-                    if caughtUp { insertHeard(text) } else { last = text }
+                    if caughtUp { insertHeard(text) } else if last == nil { last = text }
                 }
                 seq = next
-                UserDefaults.standard.set(seq, forKey: lastSeqKey)
+                UserDefaults.standard.set(seq, forKey: seqKey)
+                if !caughtUp { fieldChanged() }   // the field, to the Mac just reached
                 caughtUp = true
-                status = "ready — hold the Action Button to dictate"
+                showStatus()
             } catch {
                 if Task.isCancelled { return }
-                server = nil
-                status = "Mac: \(error.localizedDescription)"
+                connected[mac] = nil
+                showStatus()
                 try? await Task.sleep(for: .seconds(2))
             }
         }
     }
 
-    private func reach() async -> Server? {
-        if let server { return server }
-        server = await Server.reachable()
-        return server
+    private func showStatus() {
+        let names = Server.macs.map(\.[0]).filter { connected[$0] != nil }.map(Server.name)
+        status = names.isEmpty ? "no Mac in reach" : "ready · " + names.joined(separator: ", ") + " — hold the Action Button to dictate"
     }
 
     /// With a space before it when the field's text runs right up to the cursor; the layout then
     /// follows the language of what was said.
     private func insertHeard(_ text: String) {
+        // The same words from a second Mac: one that seemed gone while hearing, and the next heard
+        // them again.
+        if let lastHeard, lastHeard.text == text, Date().timeIntervalSince(lastHeard.at) < 60 { return }
+        lastHeard = (text, Date())
         last = text
         let before = proxy?.documentContextBeforeInput ?? ""
         let spaced = before.isEmpty || before.last?.isWhitespace == true ? text : " " + text
@@ -385,6 +409,8 @@ final class KeyboardModel {
     }
 
     func typeLast() {
-        if let last { insertHeard(last) }
+        guard let last else { return }
+        lastHeard = nil
+        insertHeard(last)
     }
 }

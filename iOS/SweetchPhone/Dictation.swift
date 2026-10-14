@@ -156,7 +156,18 @@ final class Dictation: ObservableObject {
         let started = Date()
         do {
             guard let mac = await server?.value else { throw Failure("the Mac is out of reach") }
-            let text = try await mac.hear(try Data(contentsOf: recording), contextID: contextID, apple: apple)
+            let audio = try Data(contentsOf: recording)
+            let text: String
+            do {
+                text = try await mac.hear(audio, contextID: contextID, apple: apple)
+            } catch let error as URLError {
+                // The Mac went away while hearing: the next one hears it, without the screen's context
+                // (that stayed on the first).
+                Trace.note("\(mac.address) failed: \(error.code.rawValue); trying the next Mac")
+                Server.markDown(mac.mac)
+                guard let next = await Server.reachable(), next.mac != mac.mac else { throw error }
+                text = try await next.hear(audio, contextID: nil, apple: apple)
+            }
             lastSeconds = Date().timeIntervalSince(started)
             Trace.note("heard in \(lastSeconds ?? 0)s: \(text)")
             last = text

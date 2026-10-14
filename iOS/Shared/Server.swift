@@ -1,15 +1,29 @@
 import Foundation
 
-/// sweetch on the Mac: see DictationServer.swift there. Reached over Tailscale from anywhere, or
-/// on the local network when Tailscale is off — iOS runs one VPN at a time, and the work one wins.
+/// sweetch on a Mac: see DictationServer.swift there. Several Macs, in the order they're preferred
+/// — the MacBook, whose whisper is twice as fast, then the Mac mini at home, which is always on —
+/// each reached over Tailscale from anywhere, or on the local network when Tailscale is off (iOS
+/// runs one VPN at a time, and the work one wins).
 struct Server {
     var address: String
     var token: String
+    /// Which Mac: the first of its addresses.
+    var mac: String
 
     static let addressKey = "serverAddress"
     static let tokenKey = "serverToken"
-    /// Tried in order; the setting holds them comma-separated.
-    static let defaultAddresses = "http://100.85.3.88:8180, http://ivans-macbook-pro.local:8180"
+    /// One Mac per line, preferred first; a Mac's addresses comma-separated, tried at once.
+    static let defaultAddresses = """
+        http://100.85.3.88:8180, http://ivans-macbook-pro.local:8180
+        http://100.102.243.87:8180, http://ivans-mac-mini.local:8180
+        """
+    /// What earlier builds kept, which meant only the MacBook.
+    private static let formerDefaults = ["http://100.85.3.88:8180", "http://100.85.3.88:8180, http://ivans-macbook-pro.local:8180"]
+
+    /// A Mac that didn't answer is passed over this long: a closed MacBook costs one wait, not one
+    /// per dictation, and the phone doesn't flit between Macs.
+    static let downFor: TimeInterval = 300
+    private static let downKey = "serverDownUntil"
 
     /// Put in the build from the Mac's `server-token` (see `make phone`), so neither the app nor the
     /// keyboard needs it typed in; the app's setting overrides it.
@@ -17,24 +31,88 @@ struct Server {
         (Bundle.main.object(forInfoDictionaryKey: "SweetchToken") as? String) ?? ""
     }
 
-    /// The first address that answers, all asked at once; nil when none does.
+    private static var token: String {
+        UserDefaults.standard.string(forKey: tokenKey).flatMap { $0.isEmpty ? nil : $0 } ?? builtInToken
+    }
+
+    /// The Macs, preferred first, each by its addresses.
+    static var macs: [[String]] {
+        var saved = UserDefaults.standard.string(forKey: addressKey) ?? defaultAddresses
+        if formerDefaults.contains(saved.trimmingCharacters(in: .whitespacesAndNewlines)) { saved = defaultAddresses }
+        return saved.split(whereSeparator: \.isNewline).map { line in
+            line.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        }.filter { !$0.isEmpty }
+    }
+
+    /// A Mac's name for showing: its host on the local network.
+    static func name(of mac: String) -> String {
+        let hosts = macs.first { $0.first == mac }?.compactMap { URL(string: $0)?.host } ?? []
+        let host = hosts.first { $0.hasSuffix(".local") } ?? hosts.first ?? mac
+        return host.replacingOccurrences(of: ".local", with: "").replacingOccurrences(of: "ivans-", with: "")
+    }
+
+    /// The preferred Mac that answers, passing over those that didn't lately; nil when none does.
     static func reachable() async -> Server? {
-        let defaults = UserDefaults.standard
-        let token = defaults.string(forKey: tokenKey).flatMap { $0.isEmpty ? nil : $0 } ?? builtInToken
-        // The first build kept one address; that one is in the defaults now.
-        var saved = defaults.string(forKey: addressKey) ?? defaultAddresses
-        if saved == "http://100.85.3.88:8180" { saved = defaultAddresses }
-        let addresses = saved
-            .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-        let answered = await withTaskGroup(of: (Int, Bool).self) { group in
-            for (i, address) in addresses.enumerated() {
-                group.addTask { (i, await Server(address: address, token: token).ping()) }
+        let macs = Self.macs
+        let now = Date().timeIntervalSince1970
+        let down = UserDefaults.standard.dictionary(forKey: downKey) as? [String: Double] ?? [:]
+        var asked = macs.filter { (down[$0[0]] ?? 0) <= now }
+        if asked.isEmpty { asked = macs }   // all passed over: ask them all again
+        // Each answer as it comes: once every Mac preferred to one that answered has failed, that one
+        // is it — no waiting on the less preferred.
+        let chosen = await withTaskGroup(of: (Int, Server?).self) { group -> Server? in
+            for (rank, addresses) in asked.enumerated() {
+                group.addTask { (rank, await answering(addresses)) }
             }
-            var answered: [Int] = []
-            for await (i, ok) in group where ok { answered.append(i) }
-            return answered
+            var answers: [Int: Server?] = [:]
+            for await (rank, server) in group {
+                answers[rank] = server
+                if server == nil { markDown(asked[rank][0]) }
+                for preferred in asked.indices {
+                    guard let answer = answers[preferred] else { break }   // not in yet: wait for it
+                    if let answer {
+                        group.cancelAll()
+                        return answer
+                    }
+                }
+            }
+            return nil
         }
-        return answered.min().map { Server(address: addresses[$0], token: token) }
+        if let chosen { markUp(chosen.mac) }
+        return chosen
+    }
+
+    /// The first of a Mac's addresses to answer: they're all the same Mac.
+    static func answering(_ addresses: [String]) async -> Server? {
+        let token = Self.token
+        return await withTaskGroup(of: Server?.self) { group -> Server? in
+            for address in addresses {
+                group.addTask {
+                    let server = Server(address: address, token: token, mac: addresses[0])
+                    return await server.ping() ? server : nil
+                }
+            }
+            for await server in group {
+                if let server {
+                    group.cancelAll()
+                    return server
+                }
+            }
+            return nil
+        }
+    }
+
+    /// This Mac failed: the next dictation goes elsewhere for a while.
+    static func markDown(_ mac: String) {
+        var down = UserDefaults.standard.dictionary(forKey: downKey) as? [String: Double] ?? [:]
+        down[mac] = Date().timeIntervalSince1970 + downFor
+        UserDefaults.standard.set(down, forKey: downKey)
+    }
+
+    private static func markUp(_ mac: String) {
+        var down = UserDefaults.standard.dictionary(forKey: downKey) as? [String: Double] ?? [:]
+        guard down.removeValue(forKey: mac) != nil else { return }
+        UserDefaults.standard.set(down, forKey: downKey)
     }
 
     func ping() async -> Bool {
