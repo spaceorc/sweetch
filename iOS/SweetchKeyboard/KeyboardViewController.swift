@@ -208,18 +208,25 @@ final class KeyboardModel: ObservableObject {
         }
     }
 
-    /// A keyboard has no UIApplication to open URLs with; the responder chain reaches the host's.
+    /// A keyboard has no UIApplication to open URLs with; the responder chain reaches the host's
+    /// scene and application. A scene takes its own options object, an application a dictionary.
     private func openApp() {
         guard let url = URL(string: "sweetch://dictate") else { return }
         let selector = NSSelectorFromString("openURL:options:completionHandler:")
+        typealias Open = @convention(c) (AnyObject, Selector, URL, AnyObject?, AnyObject?) -> Void
         var responder: UIResponder? = controller
+        var scene: UIResponder?
         while let current = responder {
-            if current !== controller, current.responds(to: selector) {
-                typealias Open = @convention(c) (AnyObject, Selector, URL, NSDictionary, AnyObject?) -> Void
+            if NSStringFromClass(Swift.type(of: current)).contains("Application"), current.responds(to: selector) {
                 unsafeBitCast(current.method(for: selector), to: Open.self)(current, selector, url, NSDictionary(), nil)
                 return
             }
+            if scene == nil, current is UIScene, current.responds(to: selector) { scene = current }
             responder = current.next
+        }
+        if let scene, let options = (NSClassFromString("UISceneOpenExternalURLOptions") as? NSObject.Type)?.init() {
+            unsafeBitCast(scene.method(for: selector), to: Open.self)(scene, selector, url, options, nil)
+            return
         }
         status = "open sweetch to turn the microphone on"
     }
