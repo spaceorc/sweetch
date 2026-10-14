@@ -20,7 +20,7 @@ struct SweetchPhoneApp: App {
                     Task {
                         _ = try? await Dictation.shared.toggle(waitingForScreenshot: false)
                         // Listening: back to the app the keyboard was in, when it can be opened.
-                        if Dictation.shared.phase == .listening, let back, let scheme = HostApp.known[back]?.scheme,
+                        if Dictation.shared.phase == .listening, let back, let scheme = HostApp.scheme(for: back),
                            let url = URL(string: scheme) {
                             Trace.note("back to \(back)")
                             await UIApplication.shared.open(url)

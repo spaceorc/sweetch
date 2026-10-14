@@ -62,10 +62,14 @@ struct Server {
     }
 
     /// What the field holds before the cursor and the app it's in, for the next dictation's prefix.
-    func noteField(_ text: String, app: String?) async {
+    /// Tells the Mac the field; answers which app the Mac knows the keyboard's process to be.
+    @discardableResult
+    func noteField(_ text: String, app: String?, pid: Int32?) async -> String? {
         var body: [String: Any] = ["text": text]
         if let app { body["app"] = app }
-        _ = try? await send("/field", body: JSONSerialization.data(withJSONObject: body), timeout: 3)
+        if let pid { body["pid"] = Int(pid) }
+        let reply = try? await send("/field", body: JSONSerialization.data(withJSONObject: body), timeout: 3)
+        return reply?["app"] as? String
     }
 
     /// A line for the Mac's `phone.log`: how things went where the phone can't be watched.
@@ -118,6 +122,11 @@ enum HostApp {
         "com.apple.mobilenotes": ("Notes", "mobilenotes://"),
         "com.apple.mobilesafari": ("Safari", "x-web-search://"),
     ]
+
+    /// How to open an app named by its bundle id or by the name the Mac gave it.
+    static func scheme(for app: String) -> String? {
+        known[app]?.scheme ?? known.values.first { $0.name.caseInsensitiveCompare(app) == .orderedSame }?.scheme
+    }
 
     static func name(_ bundleID: String) -> String {
         known[bundleID]?.name ?? bundleID.split(separator: ".").last.map(String.init) ?? bundleID

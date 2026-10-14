@@ -49,7 +49,13 @@ final class DictationServer {
     private var listener: NWListener?
     private var pending: [String: Pending] = [:]
     /// The field the keyboard last saw and the app it's in, for the next context.
-    private var field: (text: String, app: String?, at: Date)?
+    private var field: (text: String, app: String?, pid: Int?, at: Date)?
+    /// Which app each of the phone's processes is: iOS tells the keyboard only the process it's in,
+    /// so an app is named once, from a screenshot taken while the keyboard was up in it.
+    private var processApps: [Int: String] = (try? JSONDecoder().decode([Int: String].self, from: Data(contentsOf: processAppsFile))) ?? [:]
+    private static let processAppsFile = AppSupport.dir.appendingPathComponent("phone-processes.json")
+    /// How fresh the keyboard's word must be for a screenshot to name its process.
+    private static let namingWithin: TimeInterval = 30
     /// The phone's last screenshot: a dictation started from the keyboard has none of its own (only
     /// a Shortcut can take one), and the conversation on screen is usually still the same.
     private var lastShot: (data: Data, app: String?, at: Date)?
@@ -184,6 +190,7 @@ final class DictationServer {
         }
         let fresh = lock.withLock { field.flatMap { Date().timeIntervalSince($0.at) < 120 ? $0 : nil } }
         let app = json["app"] as? String ?? fresh?.app
+            ?? lock.withLock { fresh?.pid.flatMap { processApps[$0] } }
         let fieldBefore = json["field_before"] as? String ?? fresh?.text
         var screenshot = (json["screenshot"] as? String).flatMap { Data(base64Encoded: $0, options: .ignoreUnknownCharacters) }
         var reused = false
@@ -222,6 +229,15 @@ final class DictationServer {
             let gatheredSeconds = Date().timeIntervalSince(started)
             let prefix = Prefix.build(from: gathered)
             entry.prefix = prefix
+            if !reused, screenshot != nil, let named = prefix.namedApp, let pid = fresh?.pid,
+               Date().timeIntervalSince(fresh?.at ?? .distantPast) < Self.namingWithin {
+                let all = self.lock.withLock {
+                    self.processApps[pid] = named
+                    return self.processApps
+                }
+                try? JSONEncoder().encode(all).write(to: Self.processAppsFile)
+                log.info("dictation server: the phone's process \(pid) is \(named, privacy: .public)")
+            }
             DictationStore.write([
                 "spoken": prefix.spoken, "preceding": prefix.preceding ?? NSNull(),
                 "context_seconds": gatheredSeconds, "seconds": Date().timeIntervalSince(started),
@@ -295,8 +311,13 @@ final class DictationServer {
     private func noteField(_ request: Request) -> (Int, [String: Any]) {
         guard let json = try? JSONSerialization.jsonObject(with: request.body) as? [String: Any],
               let text = json["text"] as? String else { return (400, ["error": "expected {text}"]) }
-        lock.withLock { field = (String(text.suffix(2000)), json["app"] as? String, Date()) }
-        return (200, ["ok": true])
+        let pid = json["pid"] as? Int
+        let app: String? = lock.withLock {
+            let app = json["app"] as? String ?? pid.flatMap { processApps[$0] }
+            field = (String(text.suffix(2000)), app, pid, Date())
+            return app
+        }
+        return (200, app.map { ["ok": true, "app": $0] } ?? ["ok": true])
     }
 
     /// What the phone wants kept for debugging: a line appended to `phone.log` in App Support.

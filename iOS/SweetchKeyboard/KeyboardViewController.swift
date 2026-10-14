@@ -88,52 +88,48 @@ final class KeyboardModel: ObservableObject {
 
     private var proxy: UITextDocumentProxy? { controller?.textDocumentProxy }
 
-    /// The app the keyboard is typing into. iOS doesn't say. Before iOS 16 a private key did; since,
-    /// the host's process id leads to its connection with the keyboard, and that to its bundle id.
+    /// The app the keyboard is typing into. iOS doesn't say; the controller knows privately — by its
+    /// bundle id on some versions, by its process on others. (Its
+    /// `_hostAuditToken` crashes in a keyboard.)
     private(set) lazy var host: String? = {
         guard let controller else { return nil }
-        for holder in [controller, controller.parent].compactMap({ $0 as NSObject? })
-        where holder.responds(to: NSSelectorFromString("_hostBundleID")) {
-            if let id = holder.value(forKey: "_hostBundleID") as? String, !id.isEmpty, id != "<null>" {
-                hostTrail.append("_hostBundleID")
-                return id
+        let holders = [controller, controller.parent].compactMap { $0 as NSObject? }
+        for holder in holders {
+            for key in ["_hostApplicationBundleIdentifier", "_hostBundleID"] where holder.responds(to: NSSelectorFromString(key)) {
+                let value = holder.value(forKey: key)
+                hostTrail.append("\(key)=\(value.map { "\($0)" } ?? "nil")")
+                if let id = value as? String, !id.isEmpty, id != "<null>" { return id }
             }
         }
-        return hostByProcess()
+        for holder in holders where holder.responds(to: NSSelectorFromString("_hostProcessIdentifier")) {
+            guard let pid = (holder.value(forKey: "_hostProcessIdentifier") as? NSNumber)?.int32Value, pid > 0 else { continue }
+            hostPID = pid
+            hostTrail.append("pid \(pid)")
+            let name = Self.processName(pid)
+            hostTrail.append("proc_name=\(name ?? "nil")")
+            if let name { return name }
+        }
+        return nil
     }()
+
+    /// The host's process, when iOS tells it: the same process is the same app.
+    private(set) var hostPID: Int32?
+    /// The app the Mac knows the host's process to be, from a screenshot taken in it.
+    private var named: String?
+
+    private func showReady() {
+        status = "ready · " + (host.map(HostApp.name) ?? named ?? "app unknown")
+    }
 
     /// How the host was looked for, step by step: sent to the Mac's log.
     private var hostTrail: [String] = []
 
-    private func hostByProcess() -> String? {
-        let parent = controller?.parent as NSObject?
-        guard let parent, parent.responds(to: NSSelectorFromString("_hostPID")),
-              let pid = parent.value(forKey: "_hostPID") else { hostTrail.append("no _hostPID"); return nil }
-        hostTrail.append("pid \(pid)")
-        guard let service = NSClassFromString("PKService") as AnyObject as? NSObjectProtocol,
-              service.responds(to: NSSelectorFromString("defaultService")),
-              let shared = service.perform(NSSelectorFromString("defaultService"))?.takeUnretainedValue() as? NSObjectProtocol
-        else { hostTrail.append("no PKService"); return nil }
-        guard shared.responds(to: NSSelectorFromString("personalities")),
-              let personalities = shared.perform(NSSelectorFromString("personalities"))?.takeUnretainedValue() as? [String: Any],
-              let infos = personalities.first?.value as? [AnyHashable: Any]
-        else { hostTrail.append("no personalities"); return nil }
-        hostTrail.append("\(personalities.count) personalities, \(infos.count) infos")
-        guard let info = infos.first(where: { "\($0.key)".contains("\(pid)") })?.value as? NSObjectProtocol,
-              info.responds(to: NSSelectorFromString("connection")),
-              let connection = info.perform(NSSelectorFromString("connection"))?.takeUnretainedValue() as? NSObjectProtocol,
-              connection.responds(to: NSSelectorFromString("_xpcConnection")),
-              let xpc = connection.perform(NSSelectorFromString("_xpcConnection"))?.takeUnretainedValue()
-        else { hostTrail.append("no connection for the pid among \(infos.keys.map { "\($0)" })"); return nil }
-        guard let symbol = dlsym(dlopen(nil, RTLD_NOW), "xpc_connection_copy_bundle_id") else {
-            hostTrail.append("no xpc_connection_copy_bundle_id")
-            return nil
-        }
-        typealias CopyBundleID = @convention(c) (AnyObject) -> UnsafeMutablePointer<CChar>?
-        guard let id = unsafeBitCast(symbol, to: CopyBundleID.self)(xpc) else { hostTrail.append("no bundle id"); return nil }
-        defer { free(id) }
-        hostTrail.append("xpc")
-        return String(cString: id)
+    private static func processName(_ pid: Int32) -> String? {
+        guard let symbol = dlsym(dlopen(nil, RTLD_NOW), "proc_name") else { return nil }
+        typealias ProcName = @convention(c) (Int32, UnsafeMutableRawPointer, UInt32) -> Int32
+        var buffer = [CChar](repeating: 0, count: 256)
+        let length = buffer.withUnsafeMutableBytes { unsafeBitCast(symbol, to: ProcName.self)(pid, $0.baseAddress!, 256) }
+        return length > 0 ? String(cString: buffer) : nil
     }
 
     func appeared() {
@@ -264,7 +260,7 @@ final class KeyboardModel: ObservableObject {
     /// scene and application. A scene takes its own options object, an application a dictionary.
     private func openApp() {
         var link = URLComponents(string: "sweetch://dictate")!
-        if let host { link.queryItems = [URLQueryItem(name: "back", value: host)] }
+        if let app = host ?? named { link.queryItems = [URLQueryItem(name: "back", value: app)] }
         guard let url = link.url else { return }
         let selector = NSSelectorFromString("openURL:options:completionHandler:")
         typealias Open = @convention(c) (AnyObject, Selector, URL, AnyObject?, AnyObject?) -> Void
@@ -305,7 +301,7 @@ final class KeyboardModel: ObservableObject {
                 seq = next
                 UserDefaults.standard.set(seq, forKey: lastSeqKey)
                 caughtUp = true
-                status = "ready" + (host.map { " · \(HostApp.name($0))" } ?? " · app unknown")
+                showReady()
             } catch {
                 if Task.isCancelled { return }
                 server = nil
@@ -348,7 +344,11 @@ final class KeyboardModel: ObservableObject {
         fieldNote = Task {
             try? await Task.sleep(for: .milliseconds(600))
             guard !Task.isCancelled, let mac = await reach() else { return }
-            await mac.noteField(proxy?.documentContextBeforeInput ?? "", app: host.map(HostApp.name))
+            let named = await mac.noteField(proxy?.documentContextBeforeInput ?? "", app: host.map(HostApp.name), pid: hostPID)
+            if host == nil, let named, named != self.named {
+                self.named = named
+                if status.hasPrefix("ready") { showReady() }
+            }
         }
     }
 }
