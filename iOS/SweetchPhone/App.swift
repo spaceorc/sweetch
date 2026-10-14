@@ -4,11 +4,20 @@ import SwiftUI
 struct SweetchPhoneApp: App {
     init() {
         Trace.note("launched")
+        _ = Dictation.shared   // answers the keyboard from the start
         LivePreview.prepare()
     }
 
     var body: some Scene {
-        WindowGroup { ContentView() }
+        WindowGroup {
+            ContentView()
+                // sweetch://dictate — the keyboard's microphone key when the microphone is off: here
+                // it can be turned on; the user goes back by the status bar's "◀ Telegram".
+                .onOpenURL { url in
+                    guard url.host == "dictate", Dictation.shared.phase != .listening else { return }
+                    Task { _ = try? await Dictation.shared.toggle(waitingForScreenshot: false) }
+                }
+        }
     }
 }
 
@@ -38,10 +47,13 @@ struct ContentView: View {
                 }
                 Section("Try") {
                     Button(dictation.phase == .listening ? "Stop" : "Dictate") {
-                        Task { _ = try? await dictation.toggle() }
+                        Task { _ = try? await dictation.toggle(waitingForScreenshot: false) }
                     }
                     .disabled(dictation.phase == .recognizing)
-                    if dictation.phase != .idle { Text(dictation.preview.isEmpty ? "…" : dictation.preview).foregroundStyle(.secondary) }
+                    if dictation.phase == .warm {
+                        Button("Turn the Microphone Off") { Task { await dictation.coolDown(showing: nil) } }
+                    }
+                    if dictation.phase == .listening { Text(dictation.preview.isEmpty ? "…" : dictation.preview).foregroundStyle(.secondary) }
                     if let last = dictation.last {
                         Text(last)
                         if let seconds = dictation.lastSeconds { Text(String(format: "%.2f s after release", seconds)).font(.caption).foregroundStyle(.secondary) }
