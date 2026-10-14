@@ -303,25 +303,26 @@ struct KeyboardView: View {
 
     var body: some View {
         GeometryReader { geometry in
-            let unit = (geometry.size.width - 6 - spacing * 10) / 11   // eleven keys fit the widest row
+            let width = geometry.size.width - 6
+            let unit = (width - spacing * 10) / 11   // eleven keys fit the widest row
+            let letter = model.layout.rows[0].count == 10 ? (width - spacing * 9) / 10 : unit
             VStack(spacing: 9) {
                 strip
                 ForEach(Array(model.layout.rows.enumerated()), id: \.offset) { index, row in
+                    // The third row's shift and backspace take what the letters leave.
+                    let side = (width - CGFloat(row.count) * letter - CGFloat(row.count + 1) * spacing) / 2
                     HStack(spacing: spacing) {
-                        if index == 2 { leftOfThirdRow(unit: unit) }
-                        if index == 2 { Spacer(minLength: 0) }
+                        if index == 2 { leftOfThirdRow(width: max(side, 0)) }
                         ForEach(Array(row), id: \.self) { character in
                             let key = String(character)
-                            Key(label: label(key), width: unit * (model.layout.rows[0].count == 10 ? 1.1 : 1), height: keyHeight) {
-                                model.tap(key)
-                            }
+                            Key(label: label(key), width: letter, height: keyHeight) { model.tap(key) }
                         }
-                        if index == 2 { Spacer(minLength: 0) }
-                        if index == 2 { Repeating(width: unit * 1.4, height: keyHeight, action: model.backspace) }
+                        if index == 2 { Repeating(width: max(side, 0), height: keyHeight, action: model.backspace) }
                     }
-                    .frame(maxWidth: .infinity)
+                    .frame(width: width)
                 }
                 bottomRow(unit: unit)
+                    .frame(width: width)
             }
             .padding(.horizontal, 3)
             .padding(.top, 6)
@@ -351,12 +352,12 @@ struct KeyboardView: View {
     }
 
     @ViewBuilder
-    private func leftOfThirdRow(unit: CGFloat) -> some View {
+    private func leftOfThirdRow(width: CGFloat) -> some View {
         if model.layout.isLetters {
             Key(systemImage: model.shift == .locked ? "capslock.fill" : (model.shift == .once ? "shift.fill" : "shift"),
-                width: unit * 1.4, height: keyHeight, dark: true, action: model.shiftTapped)
+                width: width, height: keyHeight, dark: true, action: model.shiftTapped)
         } else {
-            Key(label: model.layout == .digits ? "#+=" : "123", width: unit * 1.4, height: keyHeight, dark: true,
+            Key(label: model.layout == .digits ? "#+=" : "123", width: width, height: keyHeight, dark: true,
                 action: model.switchSymbols)
         }
     }
