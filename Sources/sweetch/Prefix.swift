@@ -46,6 +46,15 @@ struct Prefix {
     Reply with ONE JSON object and nothing else: {"terms": ["...", "..."]}
     """
 
+    /// When the app is unknown — a phone's screenshot — the model names it as well.
+    private static let nameTheApp = """
+
+    The app is unknown: the context is a screenshot of the user's phone. Also name the app it shows,     by its usual name (Telegram, Slack, WhatsApp, Claude, Safari…), or null when unsure:     {"terms": ["...", "..."], "app": "..."}
+    """
+
+    /// What the Mac's dictation server calls an app it can't see.
+    static let unknownApp = "iPhone"
+
     /// Blocks on the network — call off the main thread. Never throws: without the model there is
     /// still the field's text.
     static func build(from context: ContextSnapshot.Gathered) -> Prefix {
@@ -54,10 +63,13 @@ struct Prefix {
         guard LLMClient.isConfigured else { return Prefix(spoken: [:], preceding: preceding) }
         let screen = ([context.windowTitle ?? "", context.ocrText ?? "", context.textBeforeCursor ?? ""] + context.windowTexts)
             .joined(separator: "\n")
-        let terms = pickTerms(context.described(screenLimit: 2000, fieldLimit: 600))
+        let unknown = context.app == unknownApp
+        let picked = pickTerms(context.described(screenLimit: 2000, fieldLimit: 600), namingTheApp: unknown)
+        let terms = picked.terms
             .filter { screen.contains($0) && !isSpeaker($0) }
             .prefix(maxTerms)
-        return Prefix(spoken: sentences(app: context.app, terms: Array(terms)), preceding: preceding)
+        let app = unknown ? picked.app ?? "телефоне" : context.app
+        return Prefix(spoken: sentences(app: app, terms: Array(terms)), preceding: preceding)
     }
 
     /// The scene in the user's voice, once per language, with the terms as the screen spells them.
@@ -70,24 +82,27 @@ struct Prefix {
                 "en": "I'm in \(app) now, talking about \(listed(terms, and: "and"))."]
     }
 
-    private static func pickTerms(_ context: String) -> [String] {
+    private static func pickTerms(_ context: String, namingTheApp: Bool) -> (terms: [String], app: String?) {
         let done = DispatchSemaphore(value: 0)
         var terms: [String] = []
+        var app: String?
         Task {
             defer { done.signal() }
             do {
-                let system = system.replacingOccurrences(of: "USER_NAME", with: NSFullUserName())
+                let system = system.replacingOccurrences(of: "USER_NAME", with: NSFullUserName()) + (namingTheApp ? nameTheApp : "")
                 let raw = try await LLMClient.complete(system: system, messages: [["role": "user", "content": context]],
                                                        maxTokens: 200)
-                terms = (LLMJSON.object(raw)?["terms"] as? [String] ?? [])
+                let reply = LLMJSON.object(raw)
+                terms = (reply?["terms"] as? [String] ?? [])
                     .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                     .filter { !$0.isEmpty }
+                app = (reply?["app"] as? String).flatMap { $0.isEmpty || $0.count > 30 ? nil : $0 }
             } catch {
                 log.error("dictation: prefix failed: \(String(describing: error), privacy: .public)")
             }
         }
         done.wait()
-        return terms
+        return (terms, app)
     }
 
     /// Whether a term is the speaker: their first name as a word in it, in Latin or Cyrillic letters

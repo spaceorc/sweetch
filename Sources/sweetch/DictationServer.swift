@@ -187,7 +187,7 @@ final class DictationServer {
         DispatchQueue.global(qos: .userInitiated).async {
             defer { entry.ready.leave() }
             let started = Date()
-            var saved: [String: Any] = ["app": app ?? "iPhone", "device": "iPhone"]
+            var saved: [String: Any] = ["app": app ?? Prefix.unknownApp, "device": "iPhone"]
             if let fieldBefore { saved["text_before_cursor"] = String(fieldBefore.suffix(2000)) }
             var ocr: String?
             if let screenshot {
@@ -201,7 +201,7 @@ final class DictationServer {
             }
             saved["seconds"] = Date().timeIntervalSince(started)
             DictationStore.write(saved, to: entry.dir.appendingPathComponent("context.json"))
-            let gathered = ContextSnapshot.Gathered(app: app ?? "iPhone", windowTitle: nil, textBeforeCursor: fieldBefore,
+            let gathered = ContextSnapshot.Gathered(app: app ?? Prefix.unknownApp, windowTitle: nil, textBeforeCursor: fieldBefore,
                                                     windowTexts: [], ocrText: ocr)
             entry.context = gathered
             let gatheredSeconds = Date().timeIntervalSince(started)
