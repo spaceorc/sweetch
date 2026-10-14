@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The Mac mini's sweetch: only the iPhone's dictation server. Installed by `make mini`;
+     __HOME__ is filled in there. -->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.spaceorc.sweetch.server</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>__HOME__/sweetch/sweetch.app/Contents/MacOS/sweetch</string>
+		<string>--serve</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+	<key>StandardErrorPath</key>
+	<string>__HOME__/Library/Logs/sweetch-server.log</string>
+	<key>StandardOutPath</key>
+	<string>__HOME__/Library/Logs/sweetch-server.log</string>
+</dict>
+</plist>

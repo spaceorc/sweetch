@@ -1,6 +1,7 @@
 import Cocoa
 
 let app = NSApplication.shared
+nonisolated(unsafe) var signalSources: [DispatchSourceSignal] = []
 
 // `sweetch --rehear <dictation folder>…`: run stored dictations through today's pipeline.
 if let i = CommandLine.arguments.firstIndex(of: "--rehear") {
@@ -21,6 +22,25 @@ if let i = CommandLine.arguments.firstIndex(of: "--render-dictations"), i + 1 < 
     let window = DictationsWindow()
     try? window.debugRenderContent()?.write(to: URL(fileURLWithPath: CommandLine.arguments[i + 1]))
     exit(0)
+}
+// `sweetch --serve`: only the iPhone's dictation server, with no menu, keys or windows — for a Mac
+// nobody sits at (the Mac mini, run by launchd: see `make mini`).
+if CommandLine.arguments.contains("--serve") {
+    let server = DictationServer()
+    server.start()
+    for signo in [SIGTERM, SIGINT] {
+        signal(signo, SIG_IGN)
+        let source = DispatchSource.makeSignalSource(signal: signo, queue: .main)
+        source.setEventHandler {
+            server.stop()
+            Whisper.shutDown()
+            exit(0)
+        }
+        source.resume()
+        signalSources.append(source)
+    }
+    if let missing = Whisper.missing() { log.error("dictation server: missing \(missing, privacy: .public)") }
+    dispatchMain()
 }
 let delegate = AppDelegate()
 app.delegate = delegate

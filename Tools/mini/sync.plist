@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- This Mac's side of the two-way sync with the Mac mini, every five minutes. Installed by
+     `make sync-install`; __SCRIPT__ and __HOME__ are filled in there. -->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.spaceorc.sweetch.sync</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/sh</string>
+		<string>__SCRIPT__</string>
+	</array>
+	<key>StartInterval</key>
+	<integer>300</integer>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StandardErrorPath</key>
+	<string>__HOME__/Library/Logs/sweetch-sync.log</string>
+	<key>StandardOutPath</key>
+	<string>__HOME__/Library/Logs/sweetch-sync.log</string>
+</dict>
+</plist>
