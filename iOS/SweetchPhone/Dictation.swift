@@ -33,8 +33,9 @@ final class Dictation: ObservableObject {
 
     private nonisolated static let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false)!
 
-    /// Starts when idle, stops when listening. True when it started.
-    func toggle() async throws -> Bool {
+    /// Starts when idle, stops when listening. Nil when it started; what was heard when it stopped
+    /// (empty when nothing was).
+    func toggle() async throws -> String? {
         Trace.note("toggle in \(phase)")
         switch phase {
         case .idle:
@@ -51,12 +52,12 @@ final class Dictation: ObservableObject {
                 activity = nil
                 throw error
             }
-            return true
+            return nil
         case .listening:
             await stop()
-            return false
+            return last ?? ""
         case .recognizing:
-            return false
+            return ""
         }
     }
 
@@ -115,6 +116,7 @@ final class Dictation: ObservableObject {
     }
 
     func stop() async {
+        last = nil
         guard phase == .listening, let engine, let recording else { return }
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
