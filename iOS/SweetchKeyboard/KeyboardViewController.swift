@@ -47,6 +47,18 @@ final class KeyboardViewController: UIInputViewController {
         model.appeared()
     }
 
+    /// iOS holds back touches near the screen's edges, to see whether they're an edge swipe: the
+    /// keys at the ends (backspace, shift) would act late. The window's recognizers stop holding them.
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        var holder: UIView? = view
+        while let current = holder {
+            current.gestureRecognizers?.forEach { $0.delaysTouchesBegan = false }
+            holder = current.superview
+        }
+        view.window?.gestureRecognizers?.forEach { $0.delaysTouchesBegan = false }
+    }
+
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         model.disappeared()
