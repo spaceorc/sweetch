@@ -12,8 +12,8 @@ import Network
 ///         `apple` is the phone's own live transcript, when it has one; `id` may be left out
 ///     GET  /next?after=…&wait=…  → {seq, text}: the next text heard, waiting up to `wait` s (≤ 25) for it
 ///         the keyboard's: it types each text once, as soon as it's heard
-///     POST /field                JSON {text, app?} — what the field holds before the cursor and the
-///         app it's in, from the keyboard; the next context takes them
+///     POST /field                JSON {text} — what the field holds before the cursor, from the
+///         keyboard; the next context takes it
 ///     GET  /ping                 → {ok}
 ///
 /// Every request but /ping carries `Authorization: Bearer <token>`; the token is made on first start
@@ -48,18 +48,8 @@ final class DictationServer {
     private let lock = NSLock()
     private var listener: NWListener?
     private var pending: [String: Pending] = [:]
-    /// The field the keyboard last saw and the app it's in, for the next context.
-    private var field: (text: String, app: String?, pid: Int?, at: Date)?
-    /// Which app each of the phone's processes is: iOS tells the keyboard only the process it's in,
-    /// so an app is named once, from a screenshot taken while the keyboard was up in it.
-    private var processApps: [Int: String] = (try? JSONDecoder().decode([Int: String].self, from: Data(contentsOf: processAppsFile))) ?? [:]
-    private static let processAppsFile = AppSupport.dir.appendingPathComponent("phone-processes.json")
-    /// How fresh the keyboard's word must be for a screenshot to name its process.
-    private static let namingWithin: TimeInterval = 30
-    /// The phone's last screenshot: a dictation started from the keyboard has none of its own (only
-    /// a Shortcut can take one), and the conversation on screen is usually still the same.
-    private var lastShot: (data: Data, app: String?, at: Date)?
-    private static let shotLasts: TimeInterval = 600
+    /// The field the keyboard last saw, for the next context.
+    private var field: (text: String, at: Date)?
 
     /// The last text heard, numbered by when (ms) so the keyboard types each once — across restarts
     /// too. Guarded by `heard`, which wakes the keyboard's waiting request.
@@ -166,7 +156,6 @@ final class DictationServer {
                 (status, reply) = next(after: Int(request.query["after"] ?? "") ?? 0,
                                        wait: min(Double(request.query["wait"] ?? "") ?? 25, 25))
             case ("POST", "/field"): (status, reply) = noteField(request)
-            case ("POST", "/log"): (status, reply) = phoneLog(request)
             default: (status, reply) = (404, ["error": "no such endpoint"])
             }
         }
@@ -188,21 +177,11 @@ final class DictationServer {
             pending = pending.filter { Date().timeIntervalSince($0.value.startedAt) < 300 }
             pending[id] = entry
         }
-        let fresh = lock.withLock { field.flatMap { Date().timeIntervalSince($0.at) < 120 ? $0 : nil } }
-        let app = json["app"] as? String ?? fresh?.app
-            ?? lock.withLock { fresh?.pid.flatMap { processApps[$0] } }
-        let fieldBefore = json["field_before"] as? String ?? fresh?.text
-        var screenshot = (json["screenshot"] as? String).flatMap { Data(base64Encoded: $0, options: .ignoreUnknownCharacters) }
-        var reused = false
-        lock.withLock {
-            if let screenshot {
-                lastShot = (screenshot, app, Date())
-            } else if let shot = lastShot, Date().timeIntervalSince(shot.at) < Self.shotLasts,
-                      shot.app == nil || app == nil || shot.app == app {
-                screenshot = shot.data
-                reused = true
-            }
+        let app = json["app"] as? String
+        let fieldBefore = json["field_before"] as? String ?? lock.withLock {
+            field.flatMap { Date().timeIntervalSince($0.at) < 120 ? $0.text : nil }
         }
+        let screenshot = (json["screenshot"] as? String).flatMap { Data(base64Encoded: $0, options: .ignoreUnknownCharacters) }
 
         entry.ready.enter()
         DispatchQueue.global(qos: .userInitiated).async {
@@ -215,7 +194,6 @@ final class DictationServer {
                 let png = entry.dir.appendingPathComponent("window.png")
                 try? screenshot.write(to: png)
                 saved["screenshot"] = png.lastPathComponent
-                if reused { saved["screenshot_reused"] = true }
                 let ocrStarted = Date()
                 ocr = ContextSnapshot.readText(in: png)
                 saved["ocr"] = ocr
@@ -229,17 +207,6 @@ final class DictationServer {
             let gatheredSeconds = Date().timeIntervalSince(started)
             let prefix = Prefix.build(from: gathered)
             entry.prefix = prefix
-            if !reused, screenshot != nil, let named = prefix.namedApp, let pid = fresh?.pid,
-               Date().timeIntervalSince(fresh?.at ?? .distantPast) < Self.namingWithin {
-                // Only a process not known yet: the user's own choice on the keyboard isn't overridden.
-                let all: [Int: String]? = self.lock.withLock {
-                    guard self.processApps[pid] == nil else { return nil }
-                    self.processApps[pid] = named
-                    return self.processApps
-                }
-                if let all { try? JSONEncoder().encode(all).write(to: Self.processAppsFile) }
-                log.info("dictation server: the phone's process \(pid) is \(named, privacy: .public)")
-            }
             DictationStore.write([
                 "spoken": prefix.spoken, "preceding": prefix.preceding ?? NSNull(),
                 "context_seconds": gatheredSeconds, "seconds": Date().timeIntervalSince(started),
@@ -313,31 +280,7 @@ final class DictationServer {
     private func noteField(_ request: Request) -> (Int, [String: Any]) {
         guard let json = try? JSONSerialization.jsonObject(with: request.body) as? [String: Any],
               let text = json["text"] as? String else { return (400, ["error": "expected {text}"]) }
-        let pid = json["pid"] as? Int
-        let app: String? = lock.withLock {
-            // The user named the app on the keyboard: its process is that app from now on.
-            if let named = json["app"] as? String, let pid, processApps[pid] != named {
-                processApps[pid] = named
-                try? JSONEncoder().encode(processApps).write(to: Self.processAppsFile)
-            }
-            let app = json["app"] as? String ?? pid.flatMap { processApps[$0] }
-            field = (String(text.suffix(2000)), app, pid, Date())
-            return app
-        }
-        return (200, app.map { ["ok": true, "app": $0] } ?? ["ok": true])
-    }
-
-    /// What the phone wants kept for debugging: a line appended to `phone.log` in App Support.
-    private func phoneLog(_ request: Request) -> (Int, [String: Any]) {
-        let line = "\(Date().ISO8601Format()) \(String(decoding: request.body, as: UTF8.self))\n"
-        let url = AppSupport.dir.appendingPathComponent("phone.log")
-        if let handle = try? FileHandle(forWritingTo: url) {
-            handle.seekToEndOfFile()
-            handle.write(Data(line.utf8))
-            try? handle.close()
-        } else {
-            try? Data(line.utf8).write(to: url)
-        }
+        lock.withLock { field = (String(text.suffix(2000)), Date()) }
         return (200, ["ok": true])
     }
 }

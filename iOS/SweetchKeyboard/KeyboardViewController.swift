@@ -88,73 +88,7 @@ final class KeyboardModel: ObservableObject {
 
     private var proxy: UITextDocumentProxy? { controller?.textDocumentProxy }
 
-    /// The app the keyboard is typing into. iOS doesn't say; the controller knows privately — by its
-    /// bundle id on some versions, by its process on others. (Its
-    /// `_hostAuditToken` crashes in a keyboard.)
-    private(set) lazy var host: String? = {
-        guard let controller else { return nil }
-        let holders = [controller, controller.parent].compactMap { $0 as NSObject? }
-        for holder in holders {
-            for key in ["_hostApplicationBundleIdentifier", "_hostBundleID"] where holder.responds(to: NSSelectorFromString(key)) {
-                let value = holder.value(forKey: key)
-                hostTrail.append("\(key)=\(value.map { "\($0)" } ?? "nil")")
-                if let id = value as? String, !id.isEmpty, id != "<null>" { return id }
-            }
-        }
-        for holder in holders where holder.responds(to: NSSelectorFromString("_hostProcessIdentifier")) {
-            guard let pid = (holder.value(forKey: "_hostProcessIdentifier") as? NSNumber)?.int32Value, pid > 0 else { continue }
-            hostPID = pid
-            hostTrail.append("pid \(pid)")
-            let name = Self.processName(pid)
-            hostTrail.append("proc_name=\(name ?? "nil")")
-            if let name { return name }
-        }
-        return nil
-    }()
-
-    /// The host's process, when iOS tells it: the same process is the same app.
-    private(set) var hostPID: Int32?
-    /// The app the Mac knows the host's process to be: named on the keyboard, or from a screenshot
-    /// taken in it.
-    @Published private(set) var named: String?
-    /// The apps to choose from, shown instead of the strip.
-    @Published var choosingApp = false
-
-    /// What the strip calls the app the keyboard is in.
-    var appName: String? { host.map(HostApp.name) ?? named }
-
-    /// The user says which app this is; the Mac keeps it for the app's process.
-    func choose(app: String) {
-        choosingApp = false
-        named = app
-        fieldNote?.cancel()
-        let pid = hostPID
-        Task {
-            guard let mac = await reach() else { return }
-            await mac.noteField(proxy?.documentContextBeforeInput ?? "", app: app, pid: pid)
-        }
-    }
-
-    private func showReady() {
-        status = "ready"
-    }
-
-    /// How the host was looked for, step by step: sent to the Mac's log.
-    private var hostTrail: [String] = []
-
-    private static func processName(_ pid: Int32) -> String? {
-        guard let symbol = dlsym(dlopen(nil, RTLD_NOW), "proc_name") else { return nil }
-        typealias ProcName = @convention(c) (Int32, UnsafeMutableRawPointer, UInt32) -> Int32
-        var buffer = [CChar](repeating: 0, count: 256)
-        let length = buffer.withUnsafeMutableBytes { unsafeBitCast(symbol, to: ProcName.self)(pid, $0.baseAddress!, 256) }
-        return length > 0 ? String(cString: buffer) : nil
-    }
-
     func appeared() {
-        let found = host
-        Task { [hostTrail] in
-            await reach()?.log("keyboard host: \(found ?? "unknown") — \(hostTrail.joined(separator: "; "))")
-        }
         listening?.cancel()
         listening = Task { await listen() }
         Signal.ping.post()
@@ -277,9 +211,7 @@ final class KeyboardModel: ObservableObject {
     /// A keyboard has no UIApplication to open URLs with; the responder chain reaches the host's
     /// scene and application. A scene takes its own options object, an application a dictionary.
     private func openApp() {
-        var link = URLComponents(string: "sweetch://dictate")!
-        if let app = host ?? named { link.queryItems = [URLQueryItem(name: "back", value: app)] }
-        guard let url = link.url else { return }
+        guard let url = URL(string: "sweetch://dictate") else { return }
         let selector = NSSelectorFromString("openURL:options:completionHandler:")
         typealias Open = @convention(c) (AnyObject, Selector, URL, AnyObject?, AnyObject?) -> Void
         var responder: UIResponder? = controller
@@ -319,7 +251,7 @@ final class KeyboardModel: ObservableObject {
                 seq = next
                 UserDefaults.standard.set(seq, forKey: lastSeqKey)
                 caughtUp = true
-                showReady()
+                status = "ready"
             } catch {
                 if Task.isCancelled { return }
                 server = nil
@@ -362,8 +294,7 @@ final class KeyboardModel: ObservableObject {
         fieldNote = Task {
             try? await Task.sleep(for: .milliseconds(600))
             guard !Task.isCancelled, let mac = await reach() else { return }
-            let named = await mac.noteField(proxy?.documentContextBeforeInput ?? "", app: appName, pid: hostPID)
-            if host == nil, let named { self.named = named }
+            await mac.noteField(proxy?.documentContextBeforeInput ?? "")
         }
     }
 }
@@ -409,41 +340,9 @@ struct KeyboardView: View {
         model.layout.isLetters && model.shift != .off ? key.uppercased() : key
     }
 
-    /// The app it's in, and what the keyboard last typed or how it's doing — or the apps to choose
-    /// from, when iOS didn't say which it's in.
-    @ViewBuilder
+    /// What the keyboard last typed, or how it's doing.
     private var strip: some View {
-        if model.choosingApp {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    ForEach(HostApp.choices, id: \.self) { app in
-                        Button(app) { model.choose(app: app) }
-                            .font(.footnote.weight(.medium))
-                            .padding(.horizontal, 10).padding(.vertical, 3)
-                            .background(Capsule().fill(Color.accentColor.opacity(0.15)))
-                            .buttonStyle(.plain)
-                    }
-                    Button { model.choosingApp = false } label: { Image(systemName: "xmark") }
-                        .font(.footnote).buttonStyle(.plain).foregroundStyle(.secondary)
-                }
-                .padding(.horizontal, 8)
-            }
-            .frame(height: 22)
-        } else {
-            statusStrip
-        }
-    }
-
-    private var statusStrip: some View {
         HStack {
-            Button { model.choosingApp = true } label: {
-                Text(model.appName ?? "app?")
-                    .font(.footnote.weight(.medium))
-                    .foregroundStyle(model.appName == nil ? Color.orange : Color.secondary)
-                    .padding(.horizontal, 8).padding(.vertical, 2)
-                    .background(Capsule().strokeBorder(Color.secondary.opacity(0.4)))
-            }
-            .buttonStyle(.plain)
             Text(model.last ?? model.status)
                 .font(.footnote)
                 .foregroundStyle(model.last == nil ? .secondary : .primary)

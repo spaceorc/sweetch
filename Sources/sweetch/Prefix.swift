@@ -18,8 +18,6 @@ struct Prefix {
     let spoken: [String: String]
     /// The tail of the field's text before the cursor, when it's prose.
     let preceding: String?
-    /// The app the model named from the screenshot, when it wasn't known.
-    var namedApp: String? = nil
 
     /// The whole prompt for a listening in `language`.
     func text(for language: String) -> String? {
@@ -71,8 +69,7 @@ struct Prefix {
             .filter { screen.contains($0) && !isSpeaker($0) }
             .prefix(maxTerms)
         let app = unknown ? picked.app ?? "телефоне" : context.app
-        return Prefix(spoken: sentences(app: app, terms: Array(terms)), preceding: preceding,
-                      namedApp: unknown && picked.app?.caseInsensitiveCompare(unknownApp) != .orderedSame ? picked.app : nil)
+        return Prefix(spoken: sentences(app: app, terms: Array(terms)), preceding: preceding)
     }
 
     /// The scene in the user's voice, once per language, with the terms as the screen spells them.

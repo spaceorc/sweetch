@@ -33,7 +33,6 @@ targets:
         UIBackgroundModes: [audio]
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
-        LSApplicationQueriesSchemes: [tg, slack, whatsapp, sms, mobilenotes, x-web-search]
         CFBundleURLTypes:
           - CFBundleURLName: com.spaceorc.sweetch.phone
             CFBundleURLSchemes: [sweetch]

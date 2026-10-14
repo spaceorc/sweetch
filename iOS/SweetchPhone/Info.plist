@@ -31,15 +31,6 @@
 	</array>
 	<key>CFBundleVersion</key>
 	<string>1</string>
-	<key>LSApplicationQueriesSchemes</key>
-	<array>
-		<string>tg</string>
-		<string>slack</string>
-		<string>whatsapp</string>
-		<string>sms</string>
-		<string>mobilenotes</string>
-		<string>x-web-search</string>
-	</array>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
