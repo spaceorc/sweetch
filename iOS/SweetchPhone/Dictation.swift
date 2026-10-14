@@ -29,8 +29,9 @@ final class Dictation: ObservableObject {
     @Published private(set) var lastSeconds: Double?
     @Published private(set) var problem: String?
 
-    /// How long the microphone stays warm after a dictation.
-    static let warmFor: Duration = .seconds(600)
+    /// How long the microphone stays warm after a dictation, in minutes: a setting, off by default.
+    static let warmMinutesKey = "warmMinutes"
+    static var warmFor: Duration { .seconds(60 * UserDefaults.standard.integer(forKey: warmMinutesKey)) }
 
     private var engine: AVAudioEngine?
     private let tap = Tap()
@@ -200,6 +201,10 @@ final class Dictation: ObservableObject {
         }
         try? FileManager.default.removeItem(at: recording)
         self.recording = nil
+        guard Self.warmFor > .zero else {
+            await coolDown(showing: .init(phase: .done, text: last ?? ""))
+            return
+        }
         phase = .warm
         cooling = Task { [weak self] in
             try? await Task.sleep(for: .seconds(4))

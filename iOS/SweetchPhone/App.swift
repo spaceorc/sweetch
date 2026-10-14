@@ -28,6 +28,7 @@ struct ContentView: View {
     @AppStorage(Server.addressKey) private var address = Server.defaultAddresses
     @AppStorage(Server.tokenKey) private var token = ""
     @State private var reachable: String??
+    @AppStorage(Dictation.warmMinutesKey) private var warmMinutes = 0
 
     var body: some View {
         NavigationStack {
@@ -44,6 +45,16 @@ struct ContentView: View {
                             Text(reachable ?? "out of reach").font(.caption).foregroundStyle(reachable == nil ? .red : .green)
                         }
                     }
+                }
+                Section {
+                    Picker("Keep the microphone on", selection: $warmMinutes) {
+                        Text("Off").tag(0)
+                        Text("2 min").tag(2)
+                        Text("10 min").tag(10)
+                        Text("1 hour").tag(60)
+                    }
+                } footer: {
+                    Text("After a dictation, so the keyboard's microphone key starts the next one at once. Off: the key opens sweetch.")
                 }
                 Section("Try") {
                     Button(dictation.phase == .listening ? "Stop" : "Dictate") {
