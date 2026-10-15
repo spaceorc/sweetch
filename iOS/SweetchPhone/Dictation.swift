@@ -42,13 +42,11 @@ final class Dictation: ObservableObject {
     /// Starts when not listening, stops when listening. Nil when it started; what was heard when it
     /// stopped (empty when nothing was). `waitingForScreenshot`: a Shortcut is about to attach one.
     func toggle(waitingForScreenshot: Bool = true) async throws -> String? {
-        Trace.note("toggle in \(phase)")
         switch phase {
         case .idle:
             do {
                 try start(waitingForScreenshot: waitingForScreenshot)
             } catch {
-                Trace.note("start failed: \(error)")
                 problem = error.localizedDescription
                 microphoneOff()
                 await endActivity(showing: .init(phase: .failed, text: error.localizedDescription))
@@ -84,7 +82,6 @@ final class Dictation: ObservableObject {
         sendContext(waitingForScreenshot: waitingForScreenshot)
         phase = .listening
         Task { await show(.listening, "") }
-        Trace.note("listening")
     }
 
     private func microphoneOn() throws {
@@ -113,12 +110,10 @@ final class Dictation: ObservableObject {
         engine.prepare()
         try engine.start()
         self.engine = engine
-        Trace.note("microphone on")
     }
 
     /// The screenshot the Shortcut takes right after starting: the context waits a moment for it.
     func attach(screenshot: Data) {
-        Trace.note("screenshot: \(screenshot.count) bytes")
         guard phase == .listening else { return }
         self.screenshot = UIImage(data: screenshot)?.jpegData(compressionQuality: 0.8) ?? screenshot
     }
@@ -163,18 +158,15 @@ final class Dictation: ObservableObject {
             } catch let error as URLError {
                 // The Mac went away while hearing: the next one hears it, without the screen's context
                 // (that stayed on the first).
-                Trace.note("\(mac.address) failed: \(error.code.rawValue); trying the next Mac")
                 Server.markDown(mac.mac)
                 guard let next = await Server.reachable(), next.mac != mac.mac else { throw error }
                 text = try await next.hear(audio, contextID: nil, apple: apple)
             }
             lastSeconds = Date().timeIntervalSince(started)
-            Trace.note("heard in \(lastSeconds ?? 0)s: \(text)")
             last = text
             copyInFront(text)
         } catch {
             problem = error.localizedDescription
-            Trace.note("hearing failed: \(error)")
             if let apple, !apple.isEmpty {   // the Mac is out of reach: the phone's own hearing will do
                 last = apple
                 copyInFront(apple)
@@ -194,7 +186,6 @@ final class Dictation: ObservableObject {
         }
         engine = nil
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-        Trace.note("microphone off")
     }
 
     private func endActivity(showing final: DictationActivity.ContentState) async {

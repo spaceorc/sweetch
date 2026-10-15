@@ -7,6 +7,7 @@ final class KeyboardViewController: UIInputViewController {
     private(set) lazy var model = KeyboardModel(controller: self)
     private let strip = KeyboardStrip()
     private lazy var surface = KeyboardSurface(model: model)
+    private let stalls = StallWatch()
 
     override func loadView() {
         let view = ClickingInputView(frame: .zero, inputViewStyle: .keyboard)
@@ -16,6 +17,7 @@ final class KeyboardViewController: UIInputViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        KeyLog.note("load")
         strip.model = model
         for part in [strip, surface] as [UIView] {
             part.translatesAutoresizingMaskIntoConstraints = false
@@ -45,6 +47,22 @@ final class KeyboardViewController: UIInputViewController {
         super.viewWillAppear(animated)
         surface.showsGlobe = needsInputModeSwitchKey
         model.appeared()
+        stalls.start()
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        let size = view.bounds.size
+        if size != loggedSize {
+            loggedSize = size
+            KeyLog.note("size", ["w": KeyLog.round1(size.width), "h": KeyLog.round1(size.height)])
+        }
+    }
+    private var loggedSize = CGSize.zero
+
+    override func didReceiveMemoryWarning() {
+        super.didReceiveMemoryWarning()
+        KeyLog.note("memory-warning")
     }
 
     /// iOS holds back touches near the screen's edges, to see whether they're an edge swipe: the
@@ -61,12 +79,18 @@ final class KeyboardViewController: UIInputViewController {
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        stalls.stop()
         model.disappeared()
     }
 
     override func textDidChange(_ textInput: UITextInput?) {
         super.textDidChange(textInput)
         model.hostChanged()
+    }
+
+    override func selectionDidChange(_ textInput: UITextInput?) {
+        super.selectionDidChange(textInput)
+        KeyLog.note("selection-change", model.fieldState)
     }
 }
 
@@ -97,16 +121,40 @@ final class KeyboardModel {
     /// Called on every change the keys or the strip show.
     var changed: () -> Void = {}
 
-    private(set) var layout: Layout = .russian { didSet { if layout != oldValue { changed() } } }
+    private(set) var layout: Layout = .russian {
+        didSet {
+            guard layout != oldValue else { return }
+            KeyLog.note("layout", ["to": "\(layout)"])
+            changed()
+        }
+    }
     /// The letters the digits go back to.
     private(set) var letters: Layout = .russian
-    private(set) var shift: Shift = .once { didSet { if shift != oldValue { changed() } } }
+    private(set) var shift: Shift = .once {
+        didSet {
+            guard shift != oldValue else { return }
+            KeyLog.note("shift", ["to": "\(shift)"])
+            changed()
+        }
+    }
     /// The space bar is held: the keys are a trackpad moving the cursor.
     private(set) var trackpad = false { didSet { if trackpad != oldValue { changed() } } }
-    private(set) var status = "connecting…" { didSet { if status != oldValue { changed() } } }
+    private(set) var status = "connecting…" {
+        didSet {
+            guard status != oldValue else { return }
+            KeyLog.note("status", ["to": status])
+            changed()
+        }
+    }
     private(set) var last: String? { didSet { if last != oldValue { changed() } } }
     /// Words the one being typed may be, from the system's dictionary.
-    private(set) var suggestions: [String] = [] { didSet { if suggestions != oldValue { changed() } } }
+    private(set) var suggestions: [String] = [] {
+        didSet {
+            guard suggestions != oldValue else { return }
+            if !suggestions.isEmpty { KeyLog.note("suggestions", ["for": word, "words": suggestions]) }
+            changed()
+        }
+    }
 
     private weak var controller: UIInputViewController?
     private var listening: Task<Void, Never>?
@@ -122,11 +170,41 @@ final class KeyboardModel {
 
     init(controller: UIInputViewController) {
         self.controller = controller
+        KeyLog.deliver = { [weak self] batch in
+            guard let self else { return false }
+            for addresses in Server.macs {
+                if let mac = connected[addresses[0]], await mac.keyboardLog(batch) { return true }
+            }
+            return false
+        }
+    }
+
+    /// The field around the cursor, for the log: a little of it either side, and what the host says
+    /// it is.
+    var fieldState: [String: Any] {
+        let before = proxy?.documentContextBeforeInput ?? ""
+        let after = proxy?.documentContextAfterInput ?? ""
+        return ["before": String(before.suffix(24)), "after": String(after.prefix(12)),
+                "before_len": before.count, "has_text": proxy?.hasText ?? false]
+    }
+
+    private func log(_ event: String, _ fields: [String: Any] = [:]) {
+        KeyLog.note(event, fields.merging(fieldState) { a, _ in a })
     }
 
     private var proxy: UITextDocumentProxy? { controller?.textDocumentProxy }
 
     func appeared() {
+        let proxy = proxy
+        log("appear", [
+            "keyboard_type": proxy?.keyboardType?.rawValue ?? -1,
+            "return_type": proxy?.returnKeyType?.rawValue ?? -1,
+            "autocap": proxy?.autocapitalizationType?.rawValue ?? -1,
+            "autocorrect": proxy?.autocorrectionType?.rawValue ?? -1,
+            "content_type": proxy?.textContentType?.rawValue ?? "",
+            "appearance": proxy?.keyboardAppearance?.rawValue ?? -1,
+            "layout": "\(layout)", "shift": "\(shift)",
+        ])
         listening?.cancel()
         listening = Task { await listen() }
         autoCapitalise()
@@ -134,12 +212,15 @@ final class KeyboardModel {
     }
 
     func disappeared() {
+        log("disappear")
         listening?.cancel()
         listening = nil
+        Task { await KeyLog.flush() }
     }
 
     /// The host moved the cursor or changed the text.
     func hostChanged() {
+        log("host-change")
         autoCapitalise()
         fieldChanged()
     }
@@ -152,7 +233,9 @@ final class KeyboardModel {
     }
 
     func typeCharacter(_ key: String) {
-        proxy?.insertText(display(key))
+        let typed = display(key)
+        proxy?.insertText(typed)
+        log("type", ["char": typed])
         if shift == .once { shift = .off }
         if !layout.isLetters, key == "'" {
             layout = letters   // as iOS does: after an apostrophe, back to the letters
@@ -168,22 +251,29 @@ final class KeyboardModel {
             proxy?.deleteBackward()
             proxy?.insertText(". ")
             lastSpaceAt = .distantPast
+            log("space", ["period": true])
         } else {
             proxy?.insertText(" ")
             lastSpaceAt = Date()
+            log("space")
         }
         if !layout.isLetters { layout = letters }
         afterTyping()
     }
 
     func newline() {
-        guard returnKey.enabled else { return }
+        guard returnKey.enabled else {
+            log("return-disabled")
+            return
+        }
         proxy?.insertText("\n")
+        log("return")
         afterTyping()
     }
 
     func backspace() {
         proxy?.deleteBackward()
+        log("delete")
         afterTyping()
     }
 
@@ -193,6 +283,7 @@ final class KeyboardModel {
         let spaces = before.reversed().prefix { $0.isWhitespace }.count
         let word = before.dropLast(spaces).reversed().prefix { !$0.isWhitespace }.count
         for _ in 0..<max(spaces + word, 1) { proxy?.deleteBackward() }
+        log("delete-word", ["chars": max(spaces + word, 1)])
         afterTyping()
     }
 
@@ -232,7 +323,10 @@ final class KeyboardModel {
         if layout.isLetters { autoCapitalise() }
     }
 
-    func nextKeyboard() { controller?.advanceToNextInputMode() }
+    func nextKeyboard() {
+        log("next-keyboard")
+        controller?.advanceToNextInputMode()
+    }
 
     func setTrackpad(_ on: Bool) { trackpad = on }
 
@@ -263,6 +357,7 @@ final class KeyboardModel {
     func choose(suggestion: String) {
         for _ in word { proxy?.deleteBackward() }
         proxy?.insertText(suggestion + " ")
+        log("choose", ["word": word, "suggestion": suggestion])
         lastSpaceAt = Date()
         afterTyping()
     }
@@ -399,6 +494,7 @@ final class KeyboardModel {
         let before = proxy?.documentContextBeforeInput ?? ""
         let spaced = before.isEmpty || before.last?.isWhitespace == true ? text : " " + text
         proxy?.insertText(spaced)
+        log("heard", ["text": text])
         let latin = text.unicodeScalars.filter { ("a"..."z").contains($0) || ("A"..."Z").contains($0) }.count
         let cyrillic = text.unicodeScalars.filter { (0x0400...0x04FF).contains($0.value) }.count
         if latin + cyrillic > 0 {

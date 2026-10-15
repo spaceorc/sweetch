@@ -14,7 +14,7 @@ if ! $SSH "$MINI" true 2>/dev/null; then
     exit 0
 fi
 status=0
-for dir in dictation wispr-flow; do
+for dir in dictation wispr-flow keyboard; do
     mkdir -p "$HERE/$dir"
     $SSH "$MINI" "mkdir -p $THERE/$dir"
     rsync -a --update -e "$SSH" "$HERE/$dir/" "$MINI:$THERE/$dir/" || status=1

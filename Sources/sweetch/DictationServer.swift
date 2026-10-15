@@ -169,6 +169,7 @@ final class DictationServer {
                 (status, reply) = next(after: Int(request.query["after"] ?? "") ?? 0,
                                        wait: min(Double(request.query["wait"] ?? "") ?? 25, 25))
             case ("POST", "/field"): (status, reply) = noteField(request)
+            case ("POST", "/keyboard-log"): (status, reply) = keepKeyboardLog(request)
             default: (status, reply) = (404, ["error": "no such endpoint"])
             }
         }
@@ -295,5 +296,33 @@ final class DictationServer {
               let text = json["text"] as? String else { return (400, ["error": "expected {text}"]) }
         lock.withLock { field = (String(text.suffix(2000)), Date()) }
         return (200, ["ok": true])
+    }
+
+    /// The iPhone keyboard's events (its KeyLog), one JSON line each, in a file per day and per Mac
+    /// — the Macs sync `keyboard/` both ways, and two Macs appending to one file would lose lines.
+    private func keepKeyboardLog(_ request: Request) -> (Int, [String: Any]) {
+        guard let events = try? JSONSerialization.jsonObject(with: request.body) as? [[String: Any]] else {
+            return (400, ["error": "expected a JSON array"])
+        }
+        let dir = AppSupport.dir.appendingPathComponent("keyboard", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let day = String(DictationStore.stamp(Date()).prefix(10))
+        let host = (ProcessInfo.processInfo.hostName.split(separator: ".").first.map(String.init) ?? "mac").lowercased()
+        let url = dir.appendingPathComponent("\(day)-\(host).jsonl")
+        var lines = Data()
+        for event in events {
+            guard let line = try? JSONSerialization.data(withJSONObject: event, options: [.sortedKeys, .withoutEscapingSlashes]) else { continue }
+            lines += line + Data("\n".utf8)
+        }
+        lock.withLock {
+            if let handle = try? FileHandle(forWritingTo: url) {
+                handle.seekToEndOfFile()
+                handle.write(lines)
+                try? handle.close()
+            } else {
+                try? lines.write(to: url)
+            }
+        }
+        return (200, ["ok": true, "kept": events.count])
     }
 }

@@ -50,7 +50,6 @@ final class KeyboardSurface: UIView {
     private var keyViews: [KeyView] = []
     private var built: (layout: KeyboardModel.Layout, width: CGFloat, globe: Bool)?
     private var presses: [UITouch: Press] = [:]
-    private let haptic = UIImpactFeedbackGenerator(style: .light)
 
     init(model: KeyboardModel) {
         self.model = model
@@ -159,19 +158,38 @@ final class KeyboardSurface: UIView {
         var typedWith = false
         /// The page before a page key was touched, and the one it showed.
         var pages: (from: KeyboardModel.Layout, to: KeyboardModel.Layout)?
+        /// For the log: where and when the finger came down, and how far it wandered.
+        let start: CGPoint
+        let began = ProcessInfo.processInfo.systemUptime
+        var travel: CGFloat = 0
+        let touch: Int
 
-        init(key: KeySpec) { self.key = key }
+        init(key: KeySpec, start: CGPoint, touch: Int) {
+            self.key = key
+            self.start = start
+            self.touch = touch
+        }
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         for touch in touches {
-            guard let key = key(at: touch.location(in: self)) else { continue }
+            let point = touch.location(in: self)
+            var fields = KeyLog.touch(touch, in: self)
+            fields["held"] = presses.count
+            fields["all_touches"] = event?.allTouches?.count ?? 0
+            guard let key = key(at: point) else {
+                KeyLog.note("down-nokey", fields)
+                continue
+            }
+            KeyLog.note("down", fields.merging(KeyLog.key(key, at: point)) { a, _ in a })
             // A new finger commits a character still held: two thumbs typing.
             for (other, press) in presses where press.key.character != nil && press.alternates == nil {
                 presses[other] = nil
+                KeyLog.note("rollover", ["touch": press.touch, "key": KeyLog.name(of: press.key.kind),
+                                         "held_ms": Int((ProcessInfo.processInfo.systemUptime - press.began) * 1000)])
                 finish(press, at: nil)
             }
-            let press = Press(key: key)
+            let press = Press(key: key, start: point, touch: ObjectIdentifier(touch).hashValue & 0xFFFF)
             presses[touch] = press
             begin(press)
         }
@@ -182,18 +200,24 @@ final class KeyboardSurface: UIView {
         for touch in touches {
             guard let press = presses[touch] else { continue }
             let point = touch.location(in: self)
+            press.travel = max(press.travel, hypot(point.x - press.start.x, point.y - press.start.y))
             if let alternates = press.alternates {
+                let was = alternates.chosen
                 alternates.select(at: convert(point, to: alternates.superview))
+                if alternates.chosen != was { KeyLog.note("alternate", ["touch": press.touch, "chosen": alternates.chosen ?? -1]) }
             } else if let start = press.trackpadX {
                 press.carry += point.x - start
                 press.trackpadX = point.x
                 let steps = Int(press.carry / 9)
                 if steps != 0 {
+                    KeyLog.note("trackpad", ["touch": press.touch, "steps": steps])
                     model.moveCursor(by: steps)
                     press.carry -= CGFloat(steps) * 9
                 }
             } else if press.key.character != nil, let key = key(at: point), key.character != nil, key != press.key {
                 // Sliding onto another key: that one is meant.
+                KeyLog.note("slide", ["touch": press.touch, "from": KeyLog.name(of: press.key.kind)]
+                    .merging(KeyLog.key(key, at: point)) { a, _ in a }.merging(KeyLog.touch(touch, in: self)) { a, _ in a })
                 press.timer?.invalidate()
                 press.callout?.removeFromSuperview()
                 press.key = key
@@ -205,15 +229,31 @@ final class KeyboardSurface: UIView {
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         for touch in touches {
-            guard let press = presses.removeValue(forKey: touch) else { continue }
-            finish(press, at: touch.location(in: self))
+            let point = touch.location(in: self)
+            guard let press = presses.removeValue(forKey: touch) else {
+                KeyLog.note("up-untracked", KeyLog.touch(touch, in: self).merging(KeyLog.key(key(at: point), at: point)) { a, _ in a })
+                continue
+            }
+            KeyLog.note("up", KeyLog.touch(touch, in: self)
+                .merging(KeyLog.key(press.key, at: point)) { a, _ in a }
+                .merging(KeyLog.key(key(at: point), at: point, prefix: "under")) { a, _ in a }
+                .merging(["held_ms": Int((ProcessInfo.processInfo.systemUptime - press.began) * 1000),
+                          "travel": KeyLog.round1(press.travel)]) { a, _ in a })
+            finish(press, at: point)
         }
         render()
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
         for touch in touches {
-            guard let press = presses.removeValue(forKey: touch) else { continue }
+            guard let press = presses.removeValue(forKey: touch) else {
+                KeyLog.note("cancel-untracked", KeyLog.touch(touch, in: self))
+                continue
+            }
+            KeyLog.note("cancel", KeyLog.touch(touch, in: self)
+                .merging(KeyLog.key(press.key, at: touch.location(in: self))) { a, _ in a }
+                .merging(["held_ms": Int((ProcessInfo.processInfo.systemUptime - press.began) * 1000),
+                          "travel": KeyLog.round1(press.travel)]) { a, _ in a })
             press.timer?.invalidate()
             press.callout?.removeFromSuperview()
             press.alternates?.removeFromSuperview()
@@ -223,11 +263,7 @@ final class KeyboardSurface: UIView {
     }
 
     private func begin(_ press: Press, quietly: Bool = false) {
-        if !quietly {
-            UIDevice.current.playInputClick()
-            haptic.impactOccurred(intensity: 0.6)
-            haptic.prepare()
-        }
+        if !quietly { UIDevice.current.playInputClick() }
         switch press.key.kind {
         case .character(let character):
             press.callout = showCallout(for: press.key, labels: [model.display(character)])
@@ -239,7 +275,7 @@ final class KeyboardSurface: UIView {
                         press.callout = nil
                         let labels = [character] + press.key.alternates
                         press.alternates = self.showCallout(for: press.key, labels: labels.map(self.model.display), selected: 1)
-                        self.haptic.impactOccurred(intensity: 0.4)
+                        KeyLog.note("alternates-shown", ["touch": press.touch, "key": character])
                     }
                 }
             }
@@ -258,8 +294,14 @@ final class KeyboardSurface: UIView {
                     press.repeats += 1
                     switch press.repeats {
                     case ..<5: break   // held half a second before repeating
-                    case ..<25: self.model.backspace()
-                    default: if press.repeats % 2 == 0 { self.model.deleteWord() }
+                    case ..<25:
+                        KeyLog.note("repeat", ["touch": press.touch, "n": press.repeats])
+                        self.model.backspace()
+                    default:
+                        if press.repeats % 2 == 0 {
+                            KeyLog.note("repeat-word", ["touch": press.touch, "n": press.repeats])
+                            self.model.deleteWord()
+                        }
                     }
                     UIDevice.current.playInputClick()
                 }
@@ -269,8 +311,8 @@ final class KeyboardSurface: UIView {
                 MainActor.assumeIsolated {
                     guard let self, let press, let touch = self.presses.first(where: { $0.value === press })?.key else { return }
                     press.trackpadX = touch.location(in: self).x
+                    KeyLog.note("trackpad-on", ["touch": press.touch])
                     self.model.setTrackpad(true)
-                    self.haptic.impactOccurred(intensity: 0.8)
                 }
             }
         default:

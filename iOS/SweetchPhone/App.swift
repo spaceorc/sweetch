@@ -3,8 +3,9 @@ import SwiftUI
 @main
 struct SweetchPhoneApp: App {
     init() {
-        Trace.note("launched")
         LivePreview.prepare()
+        // What earlier builds traced here (see the keyboard's KeyLog for what's kept now).
+        try? FileManager.default.removeItem(at: URL.documentsDirectory.appendingPathComponent("trace.log"))
         // `--check-servers`: which Mac answers, twice, timed — for trying the choice in the simulator.
         if ProcessInfo.processInfo.arguments.contains("--check-servers") {
             Task {

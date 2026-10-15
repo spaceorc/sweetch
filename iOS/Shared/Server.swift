@@ -144,6 +144,12 @@ struct Server {
         _ = try? await send("/field", body: JSONSerialization.data(withJSONObject: ["text": text]), timeout: 3)
     }
 
+    /// The keyboard's events, for the Mac to keep (see KeyLog). True when it took them.
+    func keyboardLog(_ events: [[String: Any]]) async -> Bool {
+        guard let body = try? JSONSerialization.data(withJSONObject: events) else { return true }
+        return (try? await send("/keyboard-log", body: body, timeout: 10)) != nil
+    }
+
     /// What the Mac heard in `recording`.
     func hear(_ recording: Data, contextID: String?, apple: String?) async throws -> String {
         var query = URLComponents()
