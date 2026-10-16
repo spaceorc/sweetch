@@ -120,6 +120,7 @@ final class StallWatch: NSObject {
 
     @objc private func tick(_ link: CADisplayLink) {
         defer { last = link.timestamp }
+        EventSpy.checkRecognizers()   // and those that move on a timer, between events
         guard last > 0 else { return }
         let gap = link.timestamp - last
         if gap > 0.1 { KeyLog.note("stall", ["ms": Int(gap * 1000)]) }
@@ -164,32 +165,49 @@ enum EventSpy {
         }
     }
 
-    /// Every recognizer whose state is being followed, by recognizer.
-    private static var watching: [ObjectIdentifier: NSKeyValueObservation] = [:]
+    /// Every recognizer met — those between the keys and the screen, and those on each touch —
+    /// with the state it was last seen in.
+    private final class Watched {
+        weak var recognizer: UIGestureRecognizer?
+        var state: UIGestureRecognizer.State
+        let name: String
+        let id: Int
+        init(_ recognizer: UIGestureRecognizer) {
+            self.recognizer = recognizer
+            state = recognizer.state
+            name = String(describing: type(of: recognizer))
+            id = ObjectIdentifier(recognizer).hashValue & 0xFFFF
+        }
+    }
+    private static var watched: [ObjectIdentifier: Watched] = [:]
 
-    /// Each change of a recognizer's state, from the moment it's met: one that recognizes may take
-    /// the touch it was watching away from the keys.
     static func watch(_ recognizer: UIGestureRecognizer) {
-        let id = ObjectIdentifier(recognizer)
-        guard watching[id] == nil else { return }
-        let name = String(describing: type(of: recognizer))
-        let holder = recognizer.view.map { String(describing: type(of: $0)) } ?? "none"
-        watching[id] = recognizer.observe(\.state, options: [.old, .new]) { recognizer, change in
-            let from = change.oldValue.map(state) ?? "?"
-            let to = change.newValue.map(state) ?? "?"
-            guard from != to else { return }
-            let point = recognizer.view.map { recognizer.location(in: $0.window) }
-            MainActor.assumeIsolated {
-                var fields: [String: Any] = [
-                    "recognizer": name, "id": id.hashValue & 0xFFFF, "on": holder, "from": from, "to": to,
-                    "touches": recognizer.numberOfTouches,
-                ]
-                if let point, recognizer.numberOfTouches > 0 {
-                    fields["x"] = KeyLog.round1(point.x)
-                    fields["y"] = KeyLog.round1(point.y)
-                }
-                KeyLog.note("gesture", fields)
+        let key = ObjectIdentifier(recognizer)
+        if watched[key] == nil { watched[key] = Watched(recognizer) }
+    }
+
+    /// After each event iOS hands the process: every recognizer whose state moved since — system
+    /// recognizers change it without telling observers, so it's looked at, not listened for.
+    static func checkRecognizers() {
+        for (key, entry) in watched {
+            guard let recognizer = entry.recognizer else {
+                watched[key] = nil
+                continue
             }
+            let now = recognizer.state
+            guard now != entry.state else { continue }
+            var fields: [String: Any] = [
+                "recognizer": entry.name, "id": entry.id,
+                "on": recognizer.view.map { String(describing: type(of: $0)) } ?? "none",
+                "from": state(entry.state), "to": state(now), "touches": recognizer.numberOfTouches,
+            ]
+            if recognizer.numberOfTouches > 0, let window = recognizer.view?.window {
+                let point = recognizer.location(in: window)
+                fields["x"] = KeyLog.round1(point.x)
+                fields["y"] = KeyLog.round1(point.y)
+            }
+            entry.state = now
+            KeyLog.note("gesture", fields)
         }
     }
 
@@ -242,5 +260,6 @@ extension UIWindow {
     @objc func sweetch_sendEvent(_ event: UIEvent) {
         MainActor.assumeIsolated { EventSpy.saw(event, in: self) }
         sweetch_sendEvent(event)
+        MainActor.assumeIsolated { EventSpy.checkRecognizers() }
     }
 }
