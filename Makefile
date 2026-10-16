@@ -181,7 +181,7 @@ serve-app: build
 # credentials, the whisper model, the server's token (the one the iPhone's build holds), the
 # persona — and from then on it updates itself from GitHub's main every five minutes, building
 # there (Tools/mini/update.sh). Over Tailscale, so it works away from home too.
-MINI       ?= ivandashkevich@100.102.243.87
+MINI       ?= ivandashkevich@100.64.10.10
 MINI_SSH    = ssh -i $(HOME)/.ssh/id_ed25519 -o IdentitiesOnly=yes -o BatchMode=yes -o HostKeyAlias=ivans-mac-mini.local
 MINI_ROOT   = work/personal/sweetch
 SUPPORT     = $(HOME)/Library/Application Support/sweetch

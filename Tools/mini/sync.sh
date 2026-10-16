@@ -4,7 +4,7 @@
 # Mac is still on the other. Each dictation is its own timestamped folder, so the two Macs never
 # write the same one. Over Tailscale, so it works away from home too.
 set -u
-MINI=${MINI:-ivandashkevich@100.102.243.87}
+MINI=${MINI:-ivandashkevich@100.64.10.10}
 SSH="ssh -i $HOME/.ssh/id_ed25519 -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=8 -o HostKeyAlias=ivans-mac-mini.local"
 HERE="$HOME/Library/Application Support/sweetch"
 THERE='Library/Application\ Support/sweetch'

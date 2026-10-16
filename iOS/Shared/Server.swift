@@ -15,10 +15,14 @@ struct Server {
     /// One Mac per line, preferred first; a Mac's addresses comma-separated, tried at once.
     static let defaultAddresses = """
         http://100.85.3.88:8180, http://ivans-macbook-pro.local:8180
-        http://100.102.243.87:8180, http://ivans-mac-mini.local:8180
+        http://100.64.10.10:8180, http://ivans-mac-mini.local:8180
         """
     /// What earlier builds kept, which meant only the MacBook.
-    private static let formerDefaults = ["http://100.85.3.88:8180", "http://100.85.3.88:8180, http://ivans-macbook-pro.local:8180"]
+    private static let formerDefaults = [
+        "http://100.85.3.88:8180", "http://100.85.3.88:8180, http://ivans-macbook-pro.local:8180",
+        // The Mac mini's Tailscale address used to be inside the work VPN's range.
+        "http://100.85.3.88:8180, http://ivans-macbook-pro.local:8180\nhttp://100.102.243.87:8180, http://ivans-mac-mini.local:8180",
+    ]
 
     /// A Mac that didn't answer is passed over this long: a closed MacBook costs one wait, not one
     /// per dictation, and the phone doesn't flit between Macs.
