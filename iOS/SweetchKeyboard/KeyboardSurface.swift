@@ -79,6 +79,12 @@ final class KeyboardSurface: UIView {
             keyViews = keys.map { KeyView(spec: $0) }
             keyViews.forEach(addSubview)
             built = (model.layout, width, showsGlobe)
+            // Where every key is: a touch can be measured against any of them later, not only the
+            // one it went to.
+            KeyLog.note("keys", ["layout": "\(model.layout)", "width": KeyLog.round1(width), "keys": keys.map {
+                [KeyLog.name(of: $0.kind), KeyLog.round1($0.frame.minX), KeyLog.round1($0.frame.minY),
+                 KeyLog.round1($0.frame.width), KeyLog.round1($0.frame.height)]
+            }])
         }
         let held = Set(presses.values.map(\.key.frame.origin.debugDescription))
         for view in keyViews {

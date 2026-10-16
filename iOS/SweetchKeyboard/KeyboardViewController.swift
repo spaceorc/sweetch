@@ -170,6 +170,9 @@ final class KeyboardModel {
     private var connected: [String: Server] = [:]
     private var lastHeard: (text: String, at: Date)?
     private var lastSpaceAt = Date.distantPast
+    /// The space after the word was the keyboard's (a suggestion picked), not the user's: a
+    /// punctuation mark typed next goes before it, as on iOS.
+    private var spaceIsOurs = false
     private var lastShiftAt = Date.distantPast
     private var word = ""
     private let lastSeqKey = "lastSeq"
@@ -226,6 +229,7 @@ final class KeyboardModel {
 
     /// The host moved the cursor or changed the text.
     func hostChanged() {
+        if !(proxy?.documentContextBeforeInput?.hasSuffix(" ") ?? false) { spaceIsOurs = false }
         log("host-change")
         autoCapitalise()
         fieldChanged()
@@ -240,6 +244,17 @@ final class KeyboardModel {
 
     func typeCharacter(_ key: String) {
         let typed = display(key)
+        if !(typed.first?.isLetter ?? true) { noteWordEnd(typed) }
+        if spaceIsOurs, ".,!?:;".contains(typed), proxy?.documentContextBeforeInput?.hasSuffix(" ") == true {
+            spaceIsOurs = false
+            proxy?.deleteBackward()
+            proxy?.insertText(typed + " ")
+            log("type", ["char": typed, "before_our_space": true])
+            if !layout.isLetters { layout = letters }
+            afterTyping()
+            return
+        }
+        spaceIsOurs = false
         proxy?.insertText(typed)
         log("type", ["char": typed])
         if shift == .once { shift = .off }
@@ -251,6 +266,8 @@ final class KeyboardModel {
 
     /// A double space ends the sentence, as on iOS's own keyboard.
     func space() {
+        spaceIsOurs = false
+        noteWordEnd(" ")
         let before = proxy?.documentContextBeforeInput ?? ""
         if Date().timeIntervalSince(lastSpaceAt) < 0.4, before.hasSuffix(" "), let previous = before.dropLast().last,
            previous.isLetter || previous.isNumber {
@@ -268,16 +285,19 @@ final class KeyboardModel {
     }
 
     func newline() {
+        spaceIsOurs = false
         guard returnKey.enabled else {
             log("return-disabled")
             return
         }
+        noteWordEnd("\n")
         proxy?.insertText("\n")
         log("return")
         afterTyping()
     }
 
     func backspace() {
+        spaceIsOurs = false
         proxy?.deleteBackward()
         log("delete")
         afterTyping()
@@ -364,8 +384,19 @@ final class KeyboardModel {
         for _ in word { proxy?.deleteBackward() }
         proxy?.insertText(suggestion + " ")
         log("choose", ["word": word, "suggestion": suggestion])
+        KeyLog.note("word", ["word": suggestion, "boundary": "suggestion"])
+        spaceIsOurs = true
         lastSpaceAt = Date()
         afterTyping()
+    }
+
+    /// The word just finished, as it ended up — what the user's taps were meant to make, unless
+    /// they go back to it. The log's labels come from these and from corrections.
+    private func noteWordEnd(_ boundary: String) {
+        let before = proxy?.documentContextBeforeInput ?? ""
+        let word = String(before.reversed().prefix { $0.isLetter || $0 == "'" || $0 == "’" || $0 == "-" }.reversed())
+        guard !word.isEmpty else { return }
+        KeyLog.note("word", ["word": word, "boundary": boundary])
     }
 
     private func afterTyping() {
