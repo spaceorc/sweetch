@@ -178,6 +178,15 @@ def label(events):
                              "retyped": retyped[ri] if isinstance(retyped[ri], Tap) else None})
         episode = None
 
+    def settled():
+        """The retyping has caught up with what was deleted: it ends as that did, or ran two past."""
+        if episode is None or not episode["deleted"]:
+            return
+        deleted, retyped = episode["deleted"], episode["retyped"]
+        char = lambda x: (x.char if isinstance(x, Tap) else x).lower()
+        if len(retyped) >= len(deleted) and char(retyped[-1]) == char(deleted[-1]) or len(retyped) >= len(deleted) + 2:
+            finish()
+
     for e in events:
         kind = e["e"]
         if kind == "appear":
@@ -197,18 +206,20 @@ def label(events):
             if prev is not None and down and prev.down and down["t"] - prev.down.get("t", 0) > 1.5:
                 prev = None
             tap = Tap(e["char"], down, last_up, last_touch in slid, script(e["char"]), prev)
+            # The word this tap went on: the field's text before it, up to the last non-letter.
+            before = e.get("before", "")[:-len(e["char"])] if e.get("before", "").endswith(e["char"]) else e.get("before", "")
+            tap.word_before = "".join(reversed(list(__import__("itertools").takewhile(str.isalpha, reversed(before)))))
             taps.append(tap)
             buffer.append(tap)
             if episode is not None:
                 episode["retyped"].append(tap)
+                settled()
         elif kind == "space":
             text = ". " if e.get("period") else " "
             buffer.extend(text)
             if episode is not None:
-                if len(episode["retyped"]) >= len(episode["deleted"]):
-                    finish()
-                else:
-                    episode["retyped"].extend(text)
+                episode["retyped"].extend(text)
+                settled()
         elif kind in ("delete", "delete-word"):
             count = e.get("chars", 1) if kind == "delete-word" else 1
             for _ in range(count):
@@ -232,8 +243,7 @@ def label(events):
                 if buffer:
                     buffer.pop()
             buffer.extend(e.get("suggestion", "") + " ")
-        if episode is not None and len(episode["retyped"]) >= len(episode["deleted"]) + 3:
-            finish()
+
     finish()
     return taps, lost
 
