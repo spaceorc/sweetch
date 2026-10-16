@@ -9,9 +9,14 @@ SSH="ssh -i $HOME/.ssh/id_ed25519 -o IdentitiesOnly=yes -o BatchMode=yes -o Conn
 HERE="$HOME/Library/Application Support/sweetch"
 THERE='Library/Application\ Support/sweetch'
 
+# Over Tailscale, or on the home network when Tailscale can't get through (the work VPN claims part
+# of Tailscale's addresses).
 if ! $SSH "$MINI" true 2>/dev/null; then
-    echo "$(date '+%F %T') the Mac mini is out of reach"
-    exit 0
+    MINI="${MINI%@*}@ivans-mac-mini.local"
+    if ! $SSH "$MINI" true 2>/dev/null; then
+        echo "$(date '+%F %T') the Mac mini is out of reach"
+        exit 0
+    fi
 fi
 status=0
 for dir in dictation wispr-flow keyboard; do
