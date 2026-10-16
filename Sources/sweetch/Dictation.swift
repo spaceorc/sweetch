@@ -21,6 +21,10 @@ final class Dictation {
     /// A hold handed to an app's own dictation, which we hear too, silently, to compare.
     private var shadow: (session: Session, recorder: AudioRecorder, preview: AnyObject?, target: String)?
     private let shadowQueue = DispatchQueue(label: "sweetch.dictation.shadow")
+    /// Only the microphone starting and stopping, never waiting on hearing: a hold that follows the
+    /// last one closely starts recording at once, not when the last one's been heard (and its field
+    /// watched — up to ten seconds for a shadow), which cut off its first words.
+    private let microphone = DispatchQueue(label: "sweetch.dictation.microphone")
     private var current: Session?
 
     private struct Session {
@@ -119,7 +123,7 @@ final class Dictation {
         overlay.show(caption: "listening…", spinning: false, symbol: "mic.fill")
         log.info("dictation: listening in \(app.bundleIdentifier ?? "?", privacy: .public) → \(dir.lastPathComponent, privacy: .public)")
 
-        queue.async {
+        microphone.async {
             do {
                 try recorder.start(to: dir.appendingPathComponent("recording.caf"))
             } catch {
@@ -155,7 +159,7 @@ final class Dictation {
         self.recorder = nil
         cancelPreview()
         overlay.hide()
-        queue.async {
+        microphone.async {
             recorder.stop()
             Self.dropSelectedSpace(session)
             DictationStore.write(["cancelled": true, "started_at": DictationStore.stamp(session.startedAt)],
@@ -171,54 +175,56 @@ final class Dictation {
         let previewText = finishPreview()   // its last words stay on screen while whisper works
         overlay.show(caption: "recognizing…", spinning: true, symbol: "waveform")
 
-        queue.async { [weak self] in
+        microphone.async { [weak self] in
             let duration = recorder.stop()
-            var record: [String: Any] = [
-                "started_at": DictationStore.stamp(session.startedAt),
-                "app": session.app.localizedName ?? "",
-                "bundle_id": session.app.bundleIdentifier ?? "",
-                "recording_seconds": duration,
-            ]
-            defer { DictationStore.write(record, to: session.dir.appendingPathComponent("session.json")) }
-            let done = { DispatchQueue.main.async { self?.overlay.hide() } }
-            defer { if record["inserted"] == nil { Self.dropSelectedSpace(session) } }
+            self?.queue.async { [weak self] in
+                var record: [String: Any] = [
+                    "started_at": DictationStore.stamp(session.startedAt),
+                    "app": session.app.localizedName ?? "",
+                    "bundle_id": session.app.bundleIdentifier ?? "",
+                    "recording_seconds": duration,
+                ]
+                defer { DictationStore.write(record, to: session.dir.appendingPathComponent("session.json")) }
+                let done = { DispatchQueue.main.async { self?.overlay.hide() } }
+                defer { if record["inserted"] == nil { Self.dropSelectedSpace(session) } }
 
-            guard duration >= 0.4 else {
-                record["skipped"] = "too short"
-                log.info("dictation: \(duration, privacy: .public)s is too short to hold speech")
-                return done()
-            }
-            let settled: Hearing.Settled?
-            do {
-                let started = Date()
-                let wav = session.dir.appendingPathComponent("recording.wav")
-                try Whisper.normalise(session.dir.appendingPathComponent("recording.caf"), to: wav)
-                try? FileManager.default.removeItem(at: session.dir.appendingPathComponent("recording.caf"))
-                settled = try Hearing.hear(wav, dir: session.dir) {
-                    // The listening without a prefix has run by now; the prefix gets a moment more.
-                    let ready = session.prepared.take(waiting: 0.3)
-                    if ready.prefix == nil { log.info("dictation: prefix not ready — hearing without it") }
-                    return (ready.prefix, ready.context, previewText(0.2))
+                guard duration >= 0.4 else {
+                    record["skipped"] = "too short"
+                    log.info("dictation: \(duration, privacy: .public)s is too short to hold speech")
+                    return done()
                 }
-                record["seconds"] = Date().timeIntervalSince(started)
-                if let settled {
-                    record["listenings"] = settled.versions.flatMap(\.members).map(\.record)
-                    record["versions"] = settled.versions.map(\.text)
-                    record["settlement"] = settled.settlement ?? NSNull()
-                    record["text"] = settled.text
+                let settled: Hearing.Settled?
+                do {
+                    let started = Date()
+                    let wav = session.dir.appendingPathComponent("recording.wav")
+                    try Whisper.normalise(session.dir.appendingPathComponent("recording.caf"), to: wav)
+                    try? FileManager.default.removeItem(at: session.dir.appendingPathComponent("recording.caf"))
+                    settled = try Hearing.hear(wav, dir: session.dir) {
+                        // The listening without a prefix has run by now; the prefix gets a moment more.
+                        let ready = session.prepared.take(waiting: 0.3)
+                        if ready.prefix == nil { log.info("dictation: prefix not ready — hearing without it") }
+                        return (ready.prefix, ready.context, previewText(0.2))
+                    }
+                    record["seconds"] = Date().timeIntervalSince(started)
+                    if let settled {
+                        record["listenings"] = settled.versions.flatMap(\.members).map(\.record)
+                        record["versions"] = settled.versions.map(\.text)
+                        record["settlement"] = settled.settlement ?? NSNull()
+                        record["text"] = settled.text
+                    }
+                } catch {
+                    record["error"] = String(describing: error)
+                    log.error("dictation: recognition failed: \(String(describing: error), privacy: .public)")
+                    return done()
                 }
-            } catch {
-                record["error"] = String(describing: error)
-                log.error("dictation: recognition failed: \(String(describing: error), privacy: .public)")
-                return done()
+                done()
+                guard let heard = settled, !heard.text.isEmpty else {
+                    log.info("dictation: nothing heard")
+                    return
+                }
+                log.info("dictation: heard '\(heard.text, privacy: .public)' from \(heard.versions.map(\.text), privacy: .public)")
+                record.merge(self?.insert(heard.text, session: session) ?? [:]) { $1 }
             }
-            done()
-            guard let heard = settled, !heard.text.isEmpty else {
-                log.info("dictation: nothing heard")
-                return
-            }
-            log.info("dictation: heard '\(heard.text, privacy: .public)' from \(heard.versions.map(\.text), privacy: .public)")
-            record.merge(self?.insert(heard.text, session: session) ?? [:]) { $1 }
         }
     }
 
@@ -240,7 +246,7 @@ final class Dictation {
         }
         shadow = (session, recorder, preview, target)
         log.info("dictation: shadowing \(target, privacy: .public) → \(dir.lastPathComponent, privacy: .public)")
-        shadowQueue.async {
+        microphone.async {
             do { try recorder.start(to: dir.appendingPathComponent("recording.caf")) } catch {
                 log.error("dictation: shadow recording failed to start: \(String(describing: error), privacy: .public)")
             }
@@ -269,37 +275,39 @@ final class Dictation {
             theirs.value = Theirs.watch(after: before, in: session.app.processIdentifier, dir: session.dir)
         }
 
-        shadowQueue.async {
+        microphone.async { [shadowQueue] in
             let duration = recorder.stop()
-            var record: [String: Any] = [
-                "handoff": target, "shadow": true,
-                "started_at": DictationStore.stamp(session.startedAt),
-                "app": session.app.localizedName ?? "", "bundle_id": session.app.bundleIdentifier ?? "",
-                "hold_seconds": held, "recording_seconds": duration,
-            ]
-            do {
-                let started = Date()
-                let wav = session.dir.appendingPathComponent("recording.wav")
-                try Whisper.normalise(session.dir.appendingPathComponent("recording.caf"), to: wav)
-                try? FileManager.default.removeItem(at: session.dir.appendingPathComponent("recording.caf"))
-                let settled = try Hearing.hear(wav, dir: session.dir) {
-                    let ready = session.prepared.take(waiting: 0.3)
-                    return (ready.prefix, ready.context, appleText(0.2))
+            shadowQueue.async {
+                var record: [String: Any] = [
+                    "handoff": target, "shadow": true,
+                    "started_at": DictationStore.stamp(session.startedAt),
+                    "app": session.app.localizedName ?? "", "bundle_id": session.app.bundleIdentifier ?? "",
+                    "hold_seconds": held, "recording_seconds": duration,
+                ]
+                do {
+                    let started = Date()
+                    let wav = session.dir.appendingPathComponent("recording.wav")
+                    try Whisper.normalise(session.dir.appendingPathComponent("recording.caf"), to: wav)
+                    try? FileManager.default.removeItem(at: session.dir.appendingPathComponent("recording.caf"))
+                    let settled = try Hearing.hear(wav, dir: session.dir) {
+                        let ready = session.prepared.take(waiting: 0.3)
+                        return (ready.prefix, ready.context, appleText(0.2))
+                    }
+                    record["seconds"] = Date().timeIntervalSince(started)
+                    if let settled {
+                        record["listenings"] = settled.versions.flatMap(\.members).map(\.record)
+                        record["versions"] = settled.versions.map(\.text)
+                        record["settlement"] = settled.settlement ?? NSNull()
+                        record["text"] = settled.text
+                    }
+                } catch {
+                    record["error"] = String(describing: error)
                 }
-                record["seconds"] = Date().timeIntervalSince(started)
-                if let settled {
-                    record["listenings"] = settled.versions.flatMap(\.members).map(\.record)
-                    record["versions"] = settled.versions.map(\.text)
-                    record["settlement"] = settled.settlement ?? NSNull()
-                    record["text"] = settled.text
-                }
-            } catch {
-                record["error"] = String(describing: error)
+                watched.wait()
+                record["theirs"] = theirs.value ?? NSNull()
+                DictationStore.write(record, to: session.dir.appendingPathComponent("session.json"))
+                log.info("dictation: \(target, privacy: .public) wrote '\(theirs.value ?? "?", privacy: .public)'; we heard '\(record["text"] as? String ?? "-", privacy: .public)'")
             }
-            watched.wait()
-            record["theirs"] = theirs.value ?? NSNull()
-            DictationStore.write(record, to: session.dir.appendingPathComponent("session.json"))
-            log.info("dictation: \(target, privacy: .public) wrote '\(theirs.value ?? "?", privacy: .public)'; we heard '\(record["text"] as? String ?? "-", privacy: .public)'")
         }
     }
 
