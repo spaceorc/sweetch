@@ -23,6 +23,25 @@ final class Suggester: @unchecked Sendable {
         }
     }
 
+    /// How many dictionary words start with each of `starts` (capped at what the dictionary lists):
+    /// none means no word begins so. `done` runs on the main thread.
+    func plausibility(of starts: [String], done: @escaping @MainActor ([Int]) -> Void) {
+        queue.async { [self] in
+            let checker = checker ?? UITextChecker()
+            self.checker = checker
+            let counts = starts.map { start -> Int in
+                let cyrillic = start.unicodeScalars.contains { (0x0400...0x04FF).contains($0.value) }
+                let language = cyrillic ? "ru_RU" : "en_US"
+                let range = NSRange(location: 0, length: (start as NSString).length)
+                let words = checker.completions(forPartialWordRange: range, in: start, language: language) ?? []
+                let whole = checker.rangeOfMisspelledWord(in: start, range: range, startingAt: 0, wrap: false,
+                                                          language: language).location == NSNotFound
+                return words.count + (whole ? 1 : 0)
+            }
+            DispatchQueue.main.async { MainActor.assumeIsolated { done(counts) } }
+        }
+    }
+
     /// `done` runs on the main thread with up to three words and how long they took.
     func suggest(for word: String, done: @escaping @MainActor ([String], Double) -> Void) {
         let ticket = lock.withLock {

@@ -450,6 +450,24 @@ final class KeyboardModel {
         }
     }
 
+    /// A tap that came down near another letter's key: whether the word would have picked that
+    /// one instead — the start of the word with each letter, as the system dictionary knows it. The
+    /// first letter of a word isn't judged: nothing comes before it. Logged only; it types as ever.
+    func shadow(typed: String, other: String, gap: CGFloat, touch: Int, held: Int, travel: CGFloat) {
+        let before = proxy?.documentContextBeforeInput ?? ""
+        let prefix = String(before.reversed().prefix { $0.isLetter }.reversed())
+        guard !prefix.isEmpty else { return }
+        let typedStart = prefix + display(typed), otherStart = prefix + display(other)
+        Suggester.shared.plausibility(of: [typedStart, otherStart]) { counts in
+            let (typedN, otherN) = (counts[0], counts[1])
+            let would = typedN == 0 && otherN > 0 ? other : typed
+            KeyLog.note("shadow", [
+                "touch": touch, "typed": typed, "other": other, "gap": KeyLog.round1(gap), "prefix": prefix,
+                "typed_n": typedN, "other_n": otherN, "would": would, "held_ms": held, "travel": KeyLog.round1(travel),
+            ])
+        }
+    }
+
     /// The dictionary loaded before the first key is touched.
     func warmUp() { Suggester.shared.warmUp() }
 

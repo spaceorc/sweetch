@@ -352,6 +352,7 @@ final class KeyboardSurface: UIView {
                     model.typeCharacter(chosen == 0 ? character : press.key.alternates[chosen - 1])
                 }
             } else {
+                shadow(press, typed: character)
                 model.typeCharacter(character)
             }
             for held in presses.values where held.key.kind == .shift { held.typedWith = true }
@@ -376,6 +377,27 @@ final class KeyboardSurface: UIView {
         case .globe: model.nextKeyboard()
         case .backspace: break
         }
+    }
+
+    /// How near a tap must come down to another letter's key for the word to have a say.
+    static let ambiguous: CGFloat = 9
+
+    /// The shadow of a decoder that lets the word decide a tap near the edge between two letters:
+    /// what it would have typed is logged, nothing more (see KeyboardModel.shadow).
+    private func shadow(_ press: Press, typed: String) {
+        let point = press.start
+        func distance(_ key: KeySpec) -> CGFloat {
+            let dx = max(key.frame.minX - point.x, point.x - key.frame.maxX, 0)
+            let dy = max(key.frame.minY - point.y, point.y - key.frame.maxY, 0)
+            return hypot(dx, dy)
+        }
+        let nearest = keys.filter { $0.character != nil && $0 != press.key && $0.character!.first!.isLetter }
+            .min { distance($0) < distance($1) }
+        guard let nearest, let other = nearest.character, typed.first?.isLetter == true else { return }
+        let gap = distance(nearest)
+        guard gap <= Self.ambiguous else { return }
+        model.shadow(typed: typed, other: other, gap: gap, touch: press.touch,
+                     held: Int((ProcessInfo.processInfo.systemUptime - press.began) * 1000), travel: press.travel)
     }
 
     private func showCallout(for key: KeySpec, labels: [String], selected: Int? = nil) -> Callout? {

@@ -103,6 +103,7 @@ class Tap:
         self.prev = prev            # the tap before, if close in time
         self.meant = None           # set by a correction
         self.fate = "hit"           # hit | miss | extra | deleted
+        self.shadow = None          # what the shadow decoder would have typed (its event)
 
     @property
     def quick(self):
@@ -234,6 +235,12 @@ def label(events):
                         gone.fate = "deleted"
                 else:
                     episode["deleted"].insert(0, gone)
+        elif kind == "shadow":
+            # Comes a moment after its tap: the latest tap from the same touch.
+            for tap in reversed(taps[-5:]):
+                if tap.down.get("touch") == e.get("touch") and e["t"] - tap.down.get("t", 0) < 2:
+                    tap.shadow = e
+                    break
         elif kind == "heard":
             finish()
             buffer.extend(e.get("text", ""))
@@ -311,6 +318,21 @@ def report(events):
     all_dy = [o[1] for v in by_key.values() for o in v]
     if all_dx:
         print(f"  overall ({statistics.mean(all_dx):+.1f},{statistics.mean(all_dy):+.1f}) over {len(all_dx)} hits")
+
+    shadowed = [t for t in letters if t.shadow and t.fate in ("hit", "miss")]
+    if shadowed:
+        flips = [t for t in shadowed if t.shadow["would"] != t.shadow["typed"]]
+        saved = [t for t in flips if t.fate == "miss" and t.meant.lower() == t.shadow["would"].lower()]
+        broken = [t for t in flips if t.fate == "hit"]
+        missed = [t for t in shadowed if t.fate == "miss" and t not in saved]
+        print(f"\nshadow decoder (taps within {shadowed[0].shadow.get('gap') is not None and 9} pt of another letter, "
+              f"not a word's first): judged {len(shadowed)}, would change {len(flips)} — "
+              f"saves {len(saved)} misses, breaks {len(broken)} hits; misses it left: {len(missed)}")
+        for t in flips:
+            sh = t.shadow
+            verdict = "SAVES" if t in saved else ("BREAKS" if t in broken else "?")
+            print(f"  {verdict:<6} {sh['prefix']}[{sh['typed']}→{sh['would']}] gap {sh['gap']} "
+                  f"dictionary {sh['typed_n']} vs {sh['other_n']}")
 
     transitions = collections.Counter((t.prev.key, t.key) for t in misses if t.prev)
     if transitions:
