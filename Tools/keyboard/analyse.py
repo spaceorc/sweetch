@@ -325,7 +325,7 @@ def report(events):
         saved = [t for t in flips if t.fate == "miss" and t.meant.lower() == t.shadow["would"].lower()]
         broken = [t for t in flips if t.fate == "hit"]
         missed = [t for t in shadowed if t.fate == "miss" and t not in saved]
-        print(f"\nshadow decoder (taps within {shadowed[0].shadow.get('gap') is not None and 9} pt of another letter, "
+        print(f"\nshadow decoder (taps within 9 pt of another letter, "
               f"not a word's first): judged {len(shadowed)}, would change {len(flips)} — "
               f"saves {len(saved)} misses, breaks {len(broken)} hits; misses it left: {len(missed)}")
         for t in flips:
