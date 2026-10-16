@@ -153,6 +153,7 @@ enum EventSpy {
             fields["view"] = touch.view.map { String(describing: type(of: $0)) } ?? "none"
             fields["window"] = String(describing: type(of: window))
             fields["touches"] = event.allTouches?.count ?? 0
+            if touch.phase == .began { (touch.gestureRecognizers ?? []).forEach(watch) }
             if touch.phase == .began || touch.phase == .ended || touch.phase == .cancelled {
                 fields["recognizers"] = (touch.gestureRecognizers ?? []).map { recognizer in
                     "\(type(of: recognizer)):\(recognizer.state.rawValue)" + (recognizer.delaysTouchesBegan ? ":delays" : "")
@@ -163,17 +164,61 @@ enum EventSpy {
         }
     }
 
+    /// Every recognizer whose state is being followed, by recognizer.
+    private static var watching: [ObjectIdentifier: NSKeyValueObservation] = [:]
+
+    /// Each change of a recognizer's state, from the moment it's met: one that recognizes may take
+    /// the touch it was watching away from the keys.
+    static func watch(_ recognizer: UIGestureRecognizer) {
+        let id = ObjectIdentifier(recognizer)
+        guard watching[id] == nil else { return }
+        let name = String(describing: type(of: recognizer))
+        let holder = recognizer.view.map { String(describing: type(of: $0)) } ?? "none"
+        watching[id] = recognizer.observe(\.state, options: [.old, .new]) { recognizer, change in
+            let from = change.oldValue.map(state) ?? "?"
+            let to = change.newValue.map(state) ?? "?"
+            guard from != to else { return }
+            let point = recognizer.view.map { recognizer.location(in: $0.window) }
+            MainActor.assumeIsolated {
+                var fields: [String: Any] = [
+                    "recognizer": name, "id": id.hashValue & 0xFFFF, "on": holder, "from": from, "to": to,
+                    "touches": recognizer.numberOfTouches,
+                ]
+                if let point, recognizer.numberOfTouches > 0 {
+                    fields["x"] = KeyLog.round1(point.x)
+                    fields["y"] = KeyLog.round1(point.y)
+                }
+                KeyLog.note("gesture", fields)
+            }
+        }
+    }
+
+    private static func state(_ state: UIGestureRecognizer.State) -> String {
+        switch state {
+        case .possible: "possible"
+        case .began: "began"
+        case .changed: "changed"
+        case .ended: "ended"
+        case .cancelled: "cancelled"
+        case .failed: "failed"
+        @unknown default: "\(state.rawValue)"
+        }
+    }
+
     /// The recognizers between the keys and the screen, as the keyboard comes up: any of them may
-    /// hold a touch back or take it.
+    /// hold a touch back or take it. Each is followed from then on (see `watch`).
     static func recognizers(from view: UIView) -> [String] {
         var found: [String] = []
         var current: UIView? = view
+        var all = view.window?.gestureRecognizers ?? []
         while let holder = current {
+            all += holder.gestureRecognizers ?? []
             for recognizer in holder.gestureRecognizers ?? [] {
                 found.append("\(type(of: holder))/\(type(of: recognizer)) enabled:\(recognizer.isEnabled) delays:\(recognizer.delaysTouchesBegan) cancels:\(recognizer.cancelsTouchesInView)")
             }
             current = holder.superview
         }
+        all.forEach(watch)
         return found
     }
 
