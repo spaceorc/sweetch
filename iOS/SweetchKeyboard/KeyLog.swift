@@ -10,9 +10,12 @@ enum KeyLog {
     /// One run of the keyboard's process: a new one means iOS started it again.
     static let run = String(UUID().uuidString.prefix(8))
     /// Posts a batch to a Mac; false when none took it. Set by the model, which knows the Macs.
-    static var deliver: (([[String: Any]]) async -> Bool)?
+    static var deliver: (([[String: Any]], String) async -> Bool)?
 
     private static var buffer: [[String: Any]] = []
+    /// A batch no Mac took yet: sent again as it was, under the same id, so a Mac that did keep it
+    /// (its answer lost on the way) drops the copy.
+    private static var unsent: (id: String, events: [[String: Any]])?
     private static var flushing: Task<Void, Never>?
     private static let limit = 20_000
 
@@ -28,21 +31,28 @@ enum KeyLog {
                 try? await Task.sleep(for: .seconds(3))
                 await flush()
                 flushing = nil
-                if !buffer.isEmpty { note("flush-pending", ["left": buffer.count]) }
+                if !buffer.isEmpty || unsent != nil { note("flush-pending", ["left": buffer.count + (unsent?.events.count ?? 0)]) }
             }
         }
     }
 
     /// Sends what's gathered; what no Mac took stays for the next time.
     static func flush() async {
-        guard !buffer.isEmpty, let deliver else { return }
-        let batch = Array(buffer.prefix(2000))
-        buffer.removeFirst(batch.count)
-        if !(await deliver(batch)) {
-            buffer.insert(contentsOf: batch, at: 0)
-            if buffer.count > limit { buffer.removeLast(buffer.count - limit) }
+        guard let deliver, !sending else { return }
+        sending = true
+        defer { sending = false }
+        while true {
+            if unsent == nil {
+                guard !buffer.isEmpty else { return }
+                let events = Array(buffer.prefix(2000))
+                buffer.removeFirst(events.count)
+                unsent = (UUID().uuidString, events)
+            }
+            guard let batch = unsent, await deliver(batch.events, batch.id) else { return }
+            unsent = nil
         }
     }
+    private static var sending = false
 
     /// A touch as iOS gave it: where, how big and how firm, and how long iOS held it before
     /// delivering it (edge gestures and the like delay touches).
@@ -113,5 +123,79 @@ final class StallWatch: NSObject {
         guard last > 0 else { return }
         let gap = link.timestamp - last
         if gap > 0.1 { KeyLog.note("stall", ["ms": Int(gap * 1000)]) }
+    }
+}
+
+/// Every event iOS hands the keyboard's process, before any view sees it: `UIWindow.sendEvent` is
+/// where they all pass. A touch that reaches the process but never a key shows here and not in the
+/// keys' own log; one that's missing here never reached the process at all.
+@MainActor
+enum EventSpy {
+    private static var installed = false
+
+    static func install() {
+        guard !installed,
+              let original = class_getInstanceMethod(UIWindow.self, #selector(UIWindow.sendEvent(_:))),
+              let spying = class_getInstanceMethod(UIWindow.self, #selector(UIWindow.sweetch_sendEvent(_:)))
+        else { return }
+        method_exchangeImplementations(original, spying)
+        installed = true
+    }
+
+    static func saw(_ event: UIEvent, in window: UIWindow) {
+        guard event.type == .touches else {
+            KeyLog.note("event", ["type": event.type.rawValue, "subtype": event.subtype.rawValue])
+            return
+        }
+        for touch in event.allTouches ?? [] where touch.phase != .stationary {
+            var fields = KeyLog.touch(touch, in: window)
+            fields["phase"] = phase(touch.phase)
+            fields["view"] = touch.view.map { String(describing: type(of: $0)) } ?? "none"
+            fields["window"] = String(describing: type(of: window))
+            fields["touches"] = event.allTouches?.count ?? 0
+            if touch.phase == .began || touch.phase == .ended || touch.phase == .cancelled {
+                fields["recognizers"] = (touch.gestureRecognizers ?? []).map { recognizer in
+                    "\(type(of: recognizer)):\(recognizer.state.rawValue)" + (recognizer.delaysTouchesBegan ? ":delays" : "")
+                        + (recognizer.cancelsTouchesInView ? ":cancels" : "")
+                }
+            }
+            KeyLog.note("raw", fields)
+        }
+    }
+
+    /// The recognizers between the keys and the screen, as the keyboard comes up: any of them may
+    /// hold a touch back or take it.
+    static func recognizers(from view: UIView) -> [String] {
+        var found: [String] = []
+        var current: UIView? = view
+        while let holder = current {
+            for recognizer in holder.gestureRecognizers ?? [] {
+                found.append("\(type(of: holder))/\(type(of: recognizer)) enabled:\(recognizer.isEnabled) delays:\(recognizer.delaysTouchesBegan) cancels:\(recognizer.cancelsTouchesInView)")
+            }
+            current = holder.superview
+        }
+        return found
+    }
+
+    private static func phase(_ phase: UITouch.Phase) -> String {
+        switch phase {
+        case .began: "began"
+        case .moved: "moved"
+        case .stationary: "stationary"
+        case .ended: "ended"
+        case .cancelled: "cancelled"
+        case .regionEntered: "region-entered"
+        case .regionMoved: "region-moved"
+        case .regionExited: "region-exited"
+        @unknown default: "\(phase.rawValue)"
+        }
+    }
+}
+
+extension UIWindow {
+    /// Swapped with `sendEvent(_:)` by EventSpy: this name calls the original.
+    @objc func sweetch_sendEvent(_ event: UIEvent) {
+        MainActor.assumeIsolated { EventSpy.saw(event, in: self) }
+        sweetch_sendEvent(event)
     }
 }

@@ -172,6 +172,8 @@ final class KeyboardSurface: UIView {
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        let started = ProcessInfo.processInfo.systemUptime
+        defer { noteIfSlow("began", since: started) }
         for touch in touches {
             let point = touch.location(in: self)
             var fields = KeyLog.touch(touch, in: self)
@@ -228,6 +230,8 @@ final class KeyboardSurface: UIView {
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        let started = ProcessInfo.processInfo.systemUptime
+        defer { noteIfSlow("ended", since: started) }
         for touch in touches {
             let point = touch.location(in: self)
             guard let press = presses.removeValue(forKey: touch) else {
@@ -260,6 +264,12 @@ final class KeyboardSurface: UIView {
             if press.trackpadX != nil { model.setTrackpad(false) }
         }
         render()
+    }
+
+    /// A touch whose handling held the main thread long enough to delay the next one.
+    private func noteIfSlow(_ phase: String, since started: TimeInterval) {
+        let ms = (ProcessInfo.processInfo.systemUptime - started) * 1000
+        if ms > 8 { KeyLog.note("slow-handler", ["phase": phase, "ms": Int(ms)]) }
     }
 
     private func begin(_ press: Press, quietly: Bool = false) {

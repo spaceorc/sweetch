@@ -145,8 +145,8 @@ struct Server {
     }
 
     /// The keyboard's events, for the Mac to keep (see KeyLog). True when it took them.
-    func keyboardLog(_ events: [[String: Any]]) async -> Bool {
-        guard let body = try? JSONSerialization.data(withJSONObject: events) else { return true }
+    func keyboardLog(_ events: [[String: Any]], batch: String) async -> Bool {
+        guard let body = try? JSONSerialization.data(withJSONObject: ["batch": batch, "events": events]) else { return true }
         return (try? await send("/keyboard-log", body: body, timeout: 10)) != nil
     }
 

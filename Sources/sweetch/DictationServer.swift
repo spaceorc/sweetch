@@ -51,6 +51,8 @@ final class DictationServer {
     /// Dictations being heard, and when the last one was: an update waits for a quiet moment
     /// (`/ping` tells it, see Tools/mini/update.sh).
     private var hearing = 0
+    /// The keyboard log's batches already kept.
+    private var keyboardBatches: [String] = []
     private var lastDictation = Date.distantPast
     /// The field the keyboard last saw, for the next context.
     private var field: (text: String, at: Date)?
@@ -301,8 +303,19 @@ final class DictationServer {
     /// The iPhone keyboard's events (its KeyLog), one JSON line each, in a file per day and per Mac
     /// — the Macs sync `keyboard/` both ways, and two Macs appending to one file would lose lines.
     private func keepKeyboardLog(_ request: Request) -> (Int, [String: Any]) {
-        guard let events = try? JSONSerialization.jsonObject(with: request.body) as? [[String: Any]] else {
-            return (400, ["error": "expected a JSON array"])
+        // {batch, events}: a batch the keyboard sent again — its answer lost on the way — is kept once.
+        let json = try? JSONSerialization.jsonObject(with: request.body)
+        guard let events = (json as? [String: Any])?["events"] as? [[String: Any]] ?? json as? [[String: Any]] else {
+            return (400, ["error": "expected {batch, events}"])
+        }
+        if let batch = (json as? [String: Any])?["batch"] as? String {
+            let seen = lock.withLock {
+                if keyboardBatches.contains(batch) { return true }
+                keyboardBatches.append(batch)
+                if keyboardBatches.count > 2000 { keyboardBatches.removeFirst(1000) }
+                return false
+            }
+            if seen { return (200, ["ok": true, "kept": 0, "duplicate": true]) }
         }
         let dir = AppSupport.dir.appendingPathComponent("keyboard", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

@@ -17,6 +17,7 @@ final class KeyboardViewController: UIInputViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        EventSpy.install()
         KeyLog.note("load")
         strip.model = model
         for part in [strip, surface] as [UIView] {
@@ -75,6 +76,12 @@ final class KeyboardViewController: UIInputViewController {
             holder = current.superview
         }
         view.window?.gestureRecognizers?.forEach { $0.delaysTouchesBegan = false }
+        var recognizers = EventSpy.recognizers(from: view)
+        for recognizer in view.window?.gestureRecognizers ?? [] {
+            recognizers.append("window/\(type(of: recognizer)) enabled:\(recognizer.isEnabled) delays:\(recognizer.delaysTouchesBegan) cancels:\(recognizer.cancelsTouchesInView)")
+        }
+        KeyLog.note("recognizers", ["list": recognizers])
+        model.warmUp()
     }
 
     override func viewWillDisappear(_ animated: Bool) {
@@ -165,15 +172,14 @@ final class KeyboardModel {
     private var lastSpaceAt = Date.distantPast
     private var lastShiftAt = Date.distantPast
     private var word = ""
-    private let checker = UITextChecker()
     private let lastSeqKey = "lastSeq"
 
     init(controller: UIInputViewController) {
         self.controller = controller
-        KeyLog.deliver = { [weak self] batch in
+        KeyLog.deliver = { [weak self] events, batch in
             guard let self else { return false }
             for addresses in Server.macs {
-                if let mac = connected[addresses[0]], await mac.keyboardLog(batch) { return true }
+                if let mac = connected[addresses[0]], await mac.keyboardLog(events, batch: batch) { return true }
             }
             return false
         }
@@ -394,6 +400,9 @@ final class KeyboardModel {
         }
     }
 
+    /// The word before the cursor goes to the suggester, off the main thread: the system dictionary
+    /// is slow to load and slow on a short prefix, and a key must not wait on it. What comes back
+    /// is shown if the word is still the same.
     private func suggest() {
         let before = proxy?.documentContextBeforeInput ?? ""
         word = String(before.reversed().prefix { $0.isLetter || $0 == "'" || $0 == "’" }.reversed())
@@ -402,31 +411,16 @@ final class KeyboardModel {
             suggestions = []
             return
         }
-        let cyrillic = word.unicodeScalars.contains { (0x0400...0x04FF).contains($0.value) }
-        let language = cyrillic ? "ru_RU" : "en_US"
-        guard UITextChecker.availableLanguages.contains(language) else {
-            suggestions = []
-            return
+        let asked = word
+        Suggester.shared.suggest(for: asked) { [weak self] words, seconds in
+            guard let self, self.word == asked else { return }
+            if seconds > 0.05 { KeyLog.note("suggest-slow", ["ms": Int(seconds * 1000), "for": asked]) }
+            self.suggestions = words
         }
-        let range = NSRange(location: 0, length: (word as NSString).length)
-        var found: [String] = []
-        if checker.rangeOfMisspelledWord(in: word, range: range, startingAt: 0, wrap: false, language: language).location != NSNotFound {
-            found += checker.guesses(forWordRange: range, in: word, language: language) ?? []
-        }
-        if word.count > 1 {
-            found += checker.completions(forPartialWordRange: range, in: word, language: language) ?? []
-        }
-        let capital = word.first?.isUppercase == true
-        var seen: Set<String> = [word.lowercased()]
-        var picked: [String] = []
-        for candidate in found where !candidate.contains(" ") {
-            let shown = capital ? candidate.prefix(1).uppercased() + candidate.dropFirst() : candidate
-            guard seen.insert(shown.lowercased()).inserted else { continue }
-            picked.append(shown)
-            if picked.count == 3 { break }
-        }
-        suggestions = picked
     }
+
+    /// The dictionary loaded before the first key is touched.
+    func warmUp() { Suggester.shared.warmUp() }
 
     // MARK: Dictation
 
