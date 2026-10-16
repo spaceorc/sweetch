@@ -13,6 +13,7 @@ final class KeyboardStrip: UIView {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
+        backgroundColor = KeyboardSurface.touchable   // see there: clear would let touches through
         suggestions.axis = .horizontal
         suggestions.distribution = .fillEqually
         note.font = .preferredFont(forTextStyle: .footnote)

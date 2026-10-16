@@ -28,6 +28,8 @@ final class KeyboardSurface: UIView {
     static let side: CGFloat = 3
     static let top: CGFloat = 4
     static let height = top + 4 * keyHeight + 3 * rowGap + 6
+    /// A background touches land on, which no eye sees.
+    static let touchable = UIColor(white: 0.5, alpha: 0.002)
 
     /// What a held key offers, as iOS's Russian and English keyboards do.
     static let alternates: [String: [String]] = [
@@ -55,7 +57,9 @@ final class KeyboardSurface: UIView {
         self.model = model
         super.init(frame: .zero)
         isMultipleTouchEnabled = true
-        backgroundColor = .clear
+        // Not clear: iOS hands a keyboard no touch where it's fully transparent — a finger landing
+        // between keys was lost. Invisible, but there.
+        backgroundColor = KeyboardSurface.touchable
         registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (self: Self, _) in self.render() }
     }
 
