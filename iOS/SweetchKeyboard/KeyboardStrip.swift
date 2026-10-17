@@ -1,6 +1,6 @@
 import UIKit
 
-/// Above the keys: the profile in use — personal, work, agent, a tap picks another — then the
+/// Above the keys: the profile in use — personal, work, agent; a tap opens the menu to pick another — then the
 /// suggestions for the word being typed, as on iOS's own keyboard; otherwise what was last
 /// dictated (a tap types it again) or how the keyboard is doing.
 final class KeyboardStrip: UIView {
@@ -11,10 +11,11 @@ final class KeyboardStrip: UIView {
     private let suggestions = UIStackView()
     private let note = UILabel()
     private let insert = UIButton(type: .system)
-    private let profiles = UIStackView()
+    private let profileButton = UIButton(type: .system)
     private let microphone = UIButton(type: .system)
-    private var profileButtons: [UIButton] = []
     private static let symbols = ["person", "briefcase", "sparkles"]
+    private static let titles = ["Personal", "Work", "Agent"]
+    private var shownProfile: (Profiles.Name, Bool)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -26,36 +27,24 @@ final class KeyboardStrip: UIView {
         insert.setImage(UIImage(systemName: "text.insert"), for: .normal)
         insert.tintColor = .secondaryLabel
         insert.addAction(UIAction { [weak self] _ in self?.model?.typeLast() }, for: .touchUpInside)
-        profiles.axis = .horizontal
-        profiles.spacing = 2
-        for name in Profiles.Name.allCases {
-            let button = UIButton(type: .system)
-            button.setImage(UIImage(systemName: Self.symbols[name.rawValue],
-                                    withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .medium)), for: .normal)
-            button.layer.cornerRadius = 13
-            button.addAction(UIAction { [weak self] _ in
-                UIDevice.current.playInputClick()
-                self?.model?.chooseProfile(name)
-            }, for: .touchUpInside)
-            button.widthAnchor.constraint(equalToConstant: 30).isActive = true
-            button.heightAnchor.constraint(equalToConstant: 26).isActive = true
-            profiles.addArrangedSubview(button)
-            profileButtons.append(button)
-        }
+        profileButton.showsMenuAsPrimaryAction = true
+        profileButton.layer.cornerRadius = 13
+        profileButton.widthAnchor.constraint(equalToConstant: 46).isActive = true
+        profileButton.heightAnchor.constraint(equalToConstant: 26).isActive = true
         microphone.setImage(UIImage(systemName: "mic.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .medium)), for: .normal)
         microphone.tintColor = .label
         microphone.addAction(UIAction { [weak self] _ in
             UIDevice.current.playInputClick()
             self?.model?.openDictation()
         }, for: .touchUpInside)
-        for part in [profiles, suggestions, note, insert, microphone] as [UIView] {
+        for part in [profileButton, suggestions, note, insert, microphone] as [UIView] {
             part.translatesAutoresizingMaskIntoConstraints = false
             addSubview(part)
         }
         NSLayoutConstraint.activate([
-            profiles.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
-            profiles.centerYAnchor.constraint(equalTo: centerYAnchor, constant: 1),
-            suggestions.leadingAnchor.constraint(equalTo: profiles.trailingAnchor, constant: 4),
+            profileButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
+            profileButton.centerYAnchor.constraint(equalTo: centerYAnchor, constant: 1),
+            suggestions.leadingAnchor.constraint(equalTo: profileButton.trailingAnchor, constant: 4),
             microphone.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
             microphone.centerYAnchor.constraint(equalTo: centerYAnchor, constant: 1),
             microphone.widthAnchor.constraint(equalToConstant: 36),
@@ -63,7 +52,7 @@ final class KeyboardStrip: UIView {
             suggestions.trailingAnchor.constraint(equalTo: microphone.leadingAnchor, constant: -2),
             suggestions.topAnchor.constraint(equalTo: topAnchor, constant: 2),
             suggestions.bottomAnchor.constraint(equalTo: bottomAnchor),
-            note.leadingAnchor.constraint(equalTo: profiles.trailingAnchor, constant: 10),
+            note.leadingAnchor.constraint(equalTo: profileButton.trailingAnchor, constant: 10),
             note.trailingAnchor.constraint(lessThanOrEqualTo: insert.leadingAnchor, constant: -8),
             note.centerYAnchor.constraint(equalTo: centerYAnchor, constant: 1),
             insert.trailingAnchor.constraint(equalTo: microphone.leadingAnchor, constant: -4),
@@ -77,12 +66,7 @@ final class KeyboardStrip: UIView {
 
     func render() {
         guard let model else { return }
-        // The profile in use stands out: filled when the user picked it, faint when it's a guess.
-        for (index, button) in profileButtons.enumerated() {
-            let on = index == model.profile.rawValue
-            button.tintColor = on ? .label : .tertiaryLabel
-            button.backgroundColor = on ? UIColor.label.withAlphaComponent(model.profileManual ? 0.18 : 0.08) : .clear
-        }
+        showProfile(model.profile, picked: model.profileManual)
         // Just after a correction: first, the word as typed, to take it back.
         let undo = model.revertOffer
         let words = (undo.map { [$0] } ?? []) + model.suggestions.prefix(undo == nil ? 3 : 2)
@@ -103,6 +87,29 @@ final class KeyboardStrip: UIView {
                 if isUndo { model?.revertAutoFix() } else { model?.choose(suggestion: word) }
             })
         }
+    }
+
+    /// The profile in use, on its one button: filled when the user picked it, faint when it's a
+    /// guess; the menu has all three, the one in use ticked.
+    private func showProfile(_ profile: Profiles.Name, picked: Bool) {
+        if let shown = shownProfile, shown == (profile, picked) { return }
+        shownProfile = (profile, picked)
+        var look = UIButton.Configuration.plain()
+        look.image = UIImage(systemName: Self.symbols[profile.rawValue],
+                             withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .medium))
+        look.baseForegroundColor = .label
+        look.indicator = .popup
+        look.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 6, bottom: 0, trailing: 4)
+        profileButton.configuration = look
+        profileButton.backgroundColor = UIColor.label.withAlphaComponent(picked ? 0.18 : 0.08)
+        profileButton.accessibilityLabel = "Profile: \(Self.titles[profile.rawValue])"
+        profileButton.menu = UIMenu(children: Profiles.Name.allCases.map { name in
+            UIAction(title: Self.titles[name.rawValue], image: UIImage(systemName: Self.symbols[name.rawValue]),
+                     state: name == profile ? .on : .off) { [weak self] _ in
+                UIDevice.current.playInputClick()
+                self?.model?.chooseProfile(name)
+            }
+        })
     }
 }
 
