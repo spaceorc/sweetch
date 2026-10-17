@@ -23,7 +23,8 @@ extension Whisper {
         }
         let json = outputBase.appendingPathExtension("json")
         let record: [String: Any] = ["segments": heard.segments, "language": heard.language ?? NSNull(),
-                                     "words": heard.pieces, "seconds": heard.seconds, "gpu": heard.gpu]
+                                     "words": heard.pieces, "seconds": heard.seconds, "gpu": heard.gpu,
+                                     "engine": heard.engine.rawValue]
         try? JSONSerialization.data(withJSONObject: record, options: [.prettyPrinted]).write(to: json)
         let text = withoutRepeat(heard.segments).joined().trimmingCharacters(in: .whitespacesAndNewlines)
         let phantom = isPhantom(text)

@@ -48,6 +48,7 @@ struct SweetchPhoneApp: App {
 struct ContentView: View {
     @ObservedObject private var dictation = Dictation.shared
     @ObservedObject private var whisper = PhoneWhisper.shared
+    @ObservedObject private var bench = EngineBench.shared
     @AppStorage("phoneOnly") private var phoneOnly = false
     @AppStorage(Server.addressKey) private var address = Server.defaultAddresses
     @AppStorage(Server.tokenKey) private var token = ""
@@ -103,6 +104,12 @@ struct ContentView: View {
                     case .ready:
                         Toggle("Also hear on the phone", isOn: $whisper.enabled)
                         Toggle("Hear on the phone only (test)", isOn: $phoneOnly)
+                        Text(PhoneWhisper.hasEncoder
+                             ? whisper.aneLoadSeconds.map { String(format: "Neural Engine encoder loaded in %.1f s", $0) } ?? "Neural Engine encoder: loading…"
+                             : "Neural Engine encoder: not on the phone").font(.caption).foregroundStyle(.secondary)
+                        Button("Compare Engines") { bench.run(inBackground: false) }.disabled(bench.running)
+                        Button("Compare in the Background") { bench.run(inBackground: true) }.disabled(bench.running)
+                        ForEach(bench.lines, id: \.self) { Text($0).font(.caption) }
                     case .failed(let why):
                         Text(why).foregroundStyle(.red)
                         Button("Try Again") { whisper.fetchModel() }
