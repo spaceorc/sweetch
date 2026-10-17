@@ -210,6 +210,8 @@ final class KeyboardModel {
     private var proxy: UITextDocumentProxy? { controller?.textDocumentProxy }
 
     func appeared() {
+        visibleSince = Date()
+        deliverPending()
         startSession()
         wordTaps = []
         wordTapsHold = true
@@ -233,6 +235,7 @@ final class KeyboardModel {
     }
 
     func disappeared() {
+        visibleSince = nil
         rememberField(now: true)
         awaySince = Date()
         log("disappear")
@@ -1094,8 +1097,12 @@ final class KeyboardModel {
                 let (next, text) = try await server.next(after: seq, wait: caughtUp ? 25 : 0)
                 if Task.isCancelled { return }
                 if next > seq, let text, !text.isEmpty {
-                    if caughtUp || Self.dictationAwaited(heardAt: next) {
+                    if Self.dictationAwaited(heardAt: next) {
                         UserDefaults.standard.removeObject(forKey: Self.dictationOpenedKey)
+                        UserDefaults.standard.set(["text": text, "at": Date().timeIntervalSince1970], forKey: Self.pendingKey)
+                        log("heard-pending", ["text": text])
+                        deliverPending()
+                    } else if caughtUp {
                         insertHeard(text)
                     } else if last == nil {
                         last = text
@@ -1123,12 +1130,13 @@ final class KeyboardModel {
 
     /// With a space before it when the field's text runs right up to the cursor; the layout then
     /// follows the language of what was said.
-    private func insertHeard(_ text: String) {
+    /// `again`: the pending dictation, typed once more into a field that lost it.
+    private func insertHeard(_ text: String, again: Bool = false) {
         wordTaps = []
         wordTapsHold = true
         // The same words from a second Mac: one that seemed gone while hearing, and the next heard
         // them again.
-        if let lastHeard, lastHeard.text == text, Date().timeIntervalSince(lastHeard.at) < 60 { return }
+        if !again, let lastHeard, lastHeard.text == text, Date().timeIntervalSince(lastHeard.at) < 60 { return }
         lastHeard = (text, Date())
         last = text
         let before = proxy?.documentContextBeforeInput ?? ""
@@ -1160,6 +1168,36 @@ final class KeyboardModel {
         let opened = UserDefaults.standard.double(forKey: dictationOpenedKey)
         let heard = Double(seq) / 1000
         return opened > 0 && heard > opened && Date().timeIntervalSince1970 - opened < 300
+    }
+
+    /// What the dictation the microphone opened heard, until it's seen to stay in the field: back
+    /// from the app, the host may make its field again a moment later — what was typed into the old
+    /// one is gone, and iOS makes the keyboard again too.
+    private static let pendingKey = "dictationPending"
+    private var visibleSince: Date?
+
+    /// The pending dictation typed once the keyboard has been up a moment, and checked a moment
+    /// after; still pending if the field lost it — the next appearance types it again.
+    private func deliverPending() {
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(700))
+            guard let self, let since = self.visibleSince, Date().timeIntervalSince(since) >= 0.6,
+                  let pending = UserDefaults.standard.dictionary(forKey: Self.pendingKey),
+                  let text = pending["text"] as? String else { return }
+            if Date().timeIntervalSince1970 - (pending["at"] as? Double ?? 0) > 300 {
+                UserDefaults.standard.removeObject(forKey: Self.pendingKey)
+                return
+            }
+            let mark = String(text.suffix(24))
+            if !(self.proxy?.documentContextBeforeInput ?? "").contains(mark) {
+                self.insertHeard(text, again: true)
+            }
+            try? await Task.sleep(for: .milliseconds(1500))
+            guard self.visibleSince == since else { return }
+            let stayed = (self.proxy?.documentContextBeforeInput ?? "").contains(mark)
+            self.log("heard-check", ["stayed": stayed])
+            if stayed { UserDefaults.standard.removeObject(forKey: Self.pendingKey) }
+        }
     }
 
     func openDictation() {
