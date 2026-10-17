@@ -139,6 +139,11 @@ final class Dictation: ObservableObject {
         guard phase == .listening, let recording else { return }
         tap.end()   // closes the WAV: only then are its samples and sizes written
         microphoneOff()
+        // The experiment: heard on the phone too, alongside the Mac, while the app is open (iOS gives
+        // an app in the background no GPU).
+        if PhoneWhisper.shared.enabled, UIApplication.shared.applicationState == .active {
+            PhoneWhisper.shared.hear(recording) { _, _ in }
+        }
         phase = .recognizing
         live?.finish()
         defer { live = nil }

@@ -41,6 +41,9 @@ targets:
     dependencies:
       - target: SweetchWidget
       - target: SweetchKeyboard
+      # whisper.cpp, to hear on the phone itself (an experiment; `make whisper-framework`).
+      - framework: Vendor/whisper.xcframework
+        embed: true
   SweetchWidget:
     type: app-extension
     platform: iOS

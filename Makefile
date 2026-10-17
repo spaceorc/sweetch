@@ -27,7 +27,7 @@ ICON_TOOL  = Tools/make-icon.swift
 ICON_ICNS  = $(BUILD_DIR)/AppIcon.icns
 ICONSET    = $(BUILD_DIR)/AppIcon.iconset
 
-.PHONY: all build app run debug clean setup-signing tcc-reset icon stop start trace phone serve-app mini sync sync-install lexicon decoder-eval
+.PHONY: all build app run debug clean setup-signing tcc-reset icon stop start trace phone serve-app mini sync sync-install lexicon decoder-eval whisper-framework
 
 all: app
 
@@ -158,6 +158,7 @@ XCODE_DEV  = /Applications/Xcode.app/Contents/Developer
 
 phone:
 	@test -f $(LEXICON) || $(MAKE) --no-print-directory lexicon
+	@test -d iOS/Vendor/whisper.xcframework || $(MAKE) --no-print-directory whisper-framework
 	cd iOS && DEVELOPER_DIR=$(XCODE_DEV) xcodegen generate -q
 	cd iOS && DEVELOPER_DIR=$(XCODE_DEV) xcodebuild -quiet -project SweetchPhone.xcodeproj -scheme SweetchPhone \
 		-destination id=$(PHONE_ID) -derivedDataPath build -allowProvisioningUpdates \
@@ -234,4 +235,14 @@ decoder-eval:
 	@$$( [ -x $(DECODER_VENV) ] && echo $(DECODER_VENV) || echo python3 ) -I Tools/keyboard/export_words.py $(BUILD_DIR)/keyboard-words.json
 	@mkdir -p $(BUILD_DIR) && swiftc -O -o $(BUILD_DIR)/replay Tools/keyboard/replay/main.swift iOS/SweetchKeyboard/Decoder/*.swift
 	@$(BUILD_DIR)/replay $(LEXICON) $(BUILD_DIR)/keyboard-words.json $(ARGS)
+
+# whisper.cpp for the iPhone app (the same engine as the Mac's, Metal on the phone): the prebuilt
+# xcframework from its release, kept out of git.
+WHISPER_RELEASE = b5454
+WHISPER_CACHE = $(HOME)/Library/Caches/sweetch/whisper
+whisper-framework:
+	@mkdir -p $(WHISPER_CACHE) iOS/Vendor
+	@test -f $(WHISPER_CACHE)/whisper-$(WHISPER_RELEASE)-xcframework.zip || gh release download $(WHISPER_RELEASE) -R ggml-org/whisper.cpp -p 'whisper-$(WHISPER_RELEASE)-xcframework.zip' -D $(WHISPER_CACHE)
+	@rm -rf $(WHISPER_CACHE)/x && unzip -q -o $(WHISPER_CACHE)/whisper-$(WHISPER_RELEASE)-xcframework.zip -d $(WHISPER_CACHE)/x
+	@rm -rf iOS/Vendor/whisper.xcframework && cp -R $(WHISPER_CACHE)/x/build-apple/whisper.xcframework iOS/Vendor/
 

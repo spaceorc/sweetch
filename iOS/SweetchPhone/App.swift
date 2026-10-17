@@ -34,6 +34,7 @@ struct SweetchPhoneApp: App {
 /// drives it.
 struct ContentView: View {
     @ObservedObject private var dictation = Dictation.shared
+    @ObservedObject private var whisper = PhoneWhisper.shared
     @AppStorage(Server.addressKey) private var address = Server.defaultAddresses
     @AppStorage(Server.tokenKey) private var token = ""
     @State private var reachable: String??
@@ -69,6 +70,32 @@ struct ContentView: View {
                         if let seconds = dictation.lastSeconds { Text(String(format: "%.2f s after release", seconds)).font(.caption).foregroundStyle(.secondary) }
                     }
                     if let problem = dictation.problem { Text(problem).foregroundStyle(.red) }
+                    if whisper.enabled, let heard = whisper.last {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("On the phone").font(.caption).foregroundStyle(.secondary)
+                            Text(heard.text.isEmpty ? "—" : heard.text)
+                            Text(String(format: "%.2f s", heard.seconds)).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                Section {
+                    switch whisper.state {
+                    case .absent:
+                        Button("Download the Model (874 MB)") { whisper.fetchModel() }
+                    case .downloading(let done):
+                        ProgressView(value: done) { Text("Downloading the model…") }
+                    case .loading:
+                        HStack { ProgressView(); Text("Loading the model…") }
+                    case .ready:
+                        Toggle("Also hear on the phone", isOn: $whisper.enabled)
+                    case .failed(let why):
+                        Text(why).foregroundStyle(.red)
+                        Button("Try Again") { whisper.fetchModel() }
+                    }
+                } header: {
+                    Text("Whisper on the phone")
+                } footer: {
+                    Text("An experiment: a dictation made here, in the open app, is heard on the phone as well as on the Mac — the same model — to compare speed and text.")
                 }
             }
             .navigationTitle("sweetch")
