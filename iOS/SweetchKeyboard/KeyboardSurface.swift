@@ -259,8 +259,10 @@ final class KeyboardSurface: UIView {
                     model.moveCursor(by: steps)
                     press.carry -= CGFloat(steps) * 9
                 }
-            } else if press.key.character != nil, let key = key(at: point), key.character != nil, key != press.key {
-                // Sliding onto another key: that one is meant.
+            } else if press.key.character != nil, let key = key(at: point), key.character != nil, key != press.key,
+                      ProcessInfo.processInfo.systemUptime - press.began > 0.2 {
+                // Sliding onto another key: that one is meant. Not in a quick tap, which smears on
+                // the way up ("о" to "т" in 66 ms) — the key it came down on is the one meant.
                 press.slid = true
                 KeyLog.note("slide", ["touch": press.touch, "from": KeyLog.name(of: press.key.kind)]
                     .merging(KeyLog.key(key, at: point)) { a, _ in a }.merging(KeyLog.touch(touch, in: self)) { a, _ in a })
