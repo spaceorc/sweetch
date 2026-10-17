@@ -189,6 +189,16 @@ final class PhoneWhisper: ObservableObject {
         guard FileManager.default.fileExists(atPath: Self.modelFile.path) else { return nil }
         return queue.sync { () -> Listening? in
             var engine = wanted ?? (inFront && context != nil ? .gpu : Self.hasEncoder ? .ane : .cpu)
+            // Three copies of the model don't fit (iOS ends the app at about 3.4 GB): the GPU's stays,
+            // the Neural Engine's and the CPU's take turns.
+            if engine == .ane, let other = cpuContext {
+                whisper_free(other)
+                cpuContext = nil
+            }
+            if engine == .cpu, let other = aneContext {
+                whisper_free(other)
+                aneContext = nil
+            }
             if engine == .ane {
                 loadANE()
                 if aneContext == nil { engine = .cpu }
