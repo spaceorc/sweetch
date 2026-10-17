@@ -858,6 +858,9 @@ final class KeyboardModel {
     /// What the strip offers to take back: the word as it was typed.
     var revertOffer: String? { autoFixed?.typed }
 
+    /// For the app's keyboard preview: the strip just after a correction.
+    func previewCorrection(typed: String, fixed: String) { autoFixed = (typed: typed, fixed: fixed, boundary: " ") }
+
     /// How often the user took a correction of each word back, fading by half every two weeks:
     /// [weight, when last] — it raises how sure a correction of that word must be.
     private var takenBack: [String: [Double]] = UserDefaults.standard.dictionary(forKey: "takenBack") as? [String: [Double]] ?? [:]

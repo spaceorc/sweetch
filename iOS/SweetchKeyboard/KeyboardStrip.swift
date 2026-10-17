@@ -85,19 +85,20 @@ final class KeyboardStrip: UIView {
         }
         // Just after a correction: first, the word as typed, to take it back.
         let undo = model.revertOffer
-        let words = (undo.map { ["↶ " + $0] } ?? []) + model.suggestions.prefix(undo == nil ? 3 : 2)
+        let words = (undo.map { [$0] } ?? []) + model.suggestions.prefix(undo == nil ? 3 : 2)
         suggestions.isHidden = words.isEmpty
         note.isHidden = !words.isEmpty
         insert.isHidden = !words.isEmpty || model.last == nil
         note.text = model.last ?? model.status
         note.textColor = model.last == nil ? .secondaryLabel : .label
 
-        let shown = suggestions.arrangedSubviews.compactMap { ($0 as? SuggestionView)?.word }
-        guard shown != words else { return }
+        let shown = suggestions.arrangedSubviews.compactMap { ($0 as? SuggestionView).map { $0.undo ? "↶" + $0.word : $0.word } }
+        guard shown != words.enumerated().map({ $0.offset == 0 && undo != nil ? "↶" + $0.element : $0.element }) else { return }
         suggestions.arrangedSubviews.forEach { $0.removeFromSuperview() }
         for (index, word) in words.enumerated() {
             let isUndo = index == 0 && undo != nil
-            suggestions.addArrangedSubview(SuggestionView(word: word, divided: index > 0) { [weak model] in
+            suggestions.addArrangedSubview(SuggestionView(word: word, divided: index > 0 && !(index == 1 && undo != nil),
+                                                          undo: isUndo) { [weak model] in
                 UIDevice.current.playInputClick()
                 if isUndo { model?.revertAutoFix() } else { model?.choose(suggestion: word) }
             })
@@ -105,27 +106,57 @@ final class KeyboardStrip: UIView {
     }
 }
 
-/// One suggestion: the word, and a hairline between it and the one before.
+/// One suggestion: the word, and a hairline between it and the one before. `undo`: the word as
+/// typed, to take a correction back — a button that looks like one, not another word.
 private final class SuggestionView: UIView {
     let word: String
+    let undo: Bool
 
-    init(word: String, divided: Bool, chosen: @escaping () -> Void) {
+    init(word: String, divided: Bool, undo: Bool = false, chosen: @escaping () -> Void) {
         self.word = word
+        self.undo = undo
         super.init(frame: .zero)
-        let button = UIButton(type: .system)
-        button.setTitle(word, for: .normal)
-        button.setTitleColor(.label, for: .normal)
-        button.titleLabel?.font = .systemFont(ofSize: 17)
-        button.titleLabel?.lineBreakMode = .byTruncatingMiddle
+        let button: UIButton
+        if undo {
+            var look = UIButton.Configuration.gray()
+            look.cornerStyle = .capsule
+            look.image = UIImage(systemName: "arrow.uturn.backward",
+                                 withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .semibold))
+            look.imagePadding = 6
+            look.baseForegroundColor = .label
+            look.contentInsets = NSDirectionalEdgeInsets(top: 5, leading: 12, bottom: 5, trailing: 14)
+            look.attributedTitle = AttributedString("«\(word)»", attributes: AttributeContainer([.font: UIFont.systemFont(ofSize: 16, weight: .medium)]))
+            look.titleLineBreakMode = .byTruncatingMiddle
+            button = UIButton(configuration: look)
+            button.layer.borderColor = UIColor.separator.cgColor
+            button.layer.borderWidth = 1 / UIScreen.main.scale
+            button.layer.cornerRadius = 16
+            button.accessibilityLabel = "Undo correction, keep \(word)"
+        } else {
+            button = UIButton(type: .system)
+            button.setTitle(word, for: .normal)
+            button.setTitleColor(.label, for: .normal)
+            button.titleLabel?.font = .systemFont(ofSize: 17)
+            button.titleLabel?.lineBreakMode = .byTruncatingMiddle
+        }
         button.addAction(UIAction { _ in chosen() }, for: .touchUpInside)
         button.translatesAutoresizingMaskIntoConstraints = false
         addSubview(button)
-        NSLayoutConstraint.activate([
-            button.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
-            button.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
-            button.topAnchor.constraint(equalTo: topAnchor),
-            button.bottomAnchor.constraint(equalTo: bottomAnchor),
-        ])
+        if undo {
+            NSLayoutConstraint.activate([
+                button.centerXAnchor.constraint(equalTo: centerXAnchor),
+                button.centerYAnchor.constraint(equalTo: centerYAnchor),
+                button.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 4),
+                button.heightAnchor.constraint(equalToConstant: 32),
+            ])
+        } else {
+            NSLayoutConstraint.activate([
+                button.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
+                button.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+                button.topAnchor.constraint(equalTo: topAnchor),
+                button.bottomAnchor.constraint(equalTo: bottomAnchor),
+            ])
+        }
         if divided {
             let line = UIView()
             line.backgroundColor = .separator
