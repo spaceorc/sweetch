@@ -167,6 +167,7 @@ final class KeyboardSurface: UIView {
         var trackpadY: CGFloat = 0
         var carry: CGFloat = 0
         var carryY: CGFloat = 0
+        var lastMove: TimeInterval = 0
         /// Shift held while a letter was typed.
         var typedWith = false
         /// The page before a page key was touched, and the one it showed.
@@ -224,8 +225,13 @@ final class KeyboardSurface: UIView {
                     if alternates.chosen != nil { selection.selectionChanged() }
                 }
             } else if let start = press.trackpadX {
+                // Faster goes further, as on iOS: slow is a character per 9 pt, quick up to three.
+                let dt = max(touch.timestamp - press.lastMove, 0.004)
+                press.lastMove = touch.timestamp
+                let speed = hypot(point.x - start, point.y - press.trackpadY) / dt
+                let gain = min(Self.maxGain, max(1, speed / Self.gainSpeed))
                 // Up and down by lines, as the finger goes: a line's height of travel for each.
-                press.carryY += point.y - press.trackpadY
+                press.carryY += (point.y - press.trackpadY) * gain
                 press.trackpadY = point.y
                 // One line per move: the text around the cursor iOS reports catches up only after.
                 let lines = max(-1, min(1, Int(press.carryY / Self.lineTravel)))
@@ -234,7 +240,7 @@ final class KeyboardSurface: UIView {
                     model.moveCursor(lines: lines)
                     press.carryY -= CGFloat(lines) * Self.lineTravel
                 }
-                press.carry += point.x - start
+                press.carry += (point.x - start) * gain
                 press.trackpadX = point.x
                 let steps = Int(press.carry / 9)
                 if steps != 0 {
@@ -351,6 +357,7 @@ final class KeyboardSurface: UIView {
                     guard let self, let press, let touch = self.presses.first(where: { $0.value === press })?.key else { return }
                     press.trackpadX = touch.location(in: self).x
                     press.trackpadY = touch.location(in: self).y
+                    press.lastMove = ProcessInfo.processInfo.systemUptime
                     KeyLog.note("trackpad-on", ["touch": press.touch])
                     self.model.setTrackpad(true)
                     // The one place iOS's own keyboard taps back: the keys going blank is easy to miss.
@@ -403,6 +410,10 @@ final class KeyboardSurface: UIView {
 
     /// How far the finger travels, up or down, to move the cursor a line.
     static let lineTravel: CGFloat = 24
+    /// The trackpad's acceleration: the finger's speed (pt/s) above which the cursor goes further,
+    /// up to this many times.
+    static let gainSpeed: CGFloat = 150
+    static let maxGain: CGFloat = 3
 
     /// How near a tap must come down to another letter's key for the word to have a say.
     static let ambiguous: CGFloat = 9
