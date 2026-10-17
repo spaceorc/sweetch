@@ -39,6 +39,9 @@ final class Dictation: ObservableObject {
 
     private init() {}
 
+    /// A test: hear every dictation on the phone, as if no Mac answered.
+    static var phoneOnly: Bool { UserDefaults.standard.bool(forKey: "phoneOnly") }
+
     /// Starts when not listening, stops when listening. Nil when it started; what was heard when it
     /// stopped (empty when nothing was). `waitingForScreenshot`: a Shortcut is about to attach one.
     func toggle(waitingForScreenshot: Bool = true) async throws -> String? {
@@ -129,9 +132,26 @@ final class Dictation: ObservableObject {
                     try? await Task.sleep(for: .milliseconds(50))
                 }
             }
-            guard let mac = await server?.value else { return nil }
+            guard !Dictation.phoneOnly, let mac = await server?.value else {
+                // No Mac: the phone works the context out itself, for its own hearing.
+                await self?.startLocalContext()
+                return nil
+            }
+            Task { await Credentials.refresh(from: mac) }
             return try? await mac.context(screenshot: self?.screenshot, fieldBefore: nil)
         }
+    }
+
+    /// The phone's own hearing, when no Mac answers: its folder, and the prefix being worked out.
+    private var localDir: URL?
+    private var localContext: Task<(Prefix?, ContextSnapshot.Gathered), Never>?
+
+    private func startLocalContext() {
+        guard PhonePipeline.canHear, localContext == nil else { return }
+        let dir = PhonePipeline.newDirectory()
+        let shot = screenshot
+        localDir = dir
+        localContext = Task.detached { PhonePipeline.context(screenshot: shot, dir: dir) }
     }
 
     func stop() async {
@@ -163,7 +183,7 @@ final class Dictation: ObservableObject {
         defer { server = nil }
         let started = Date()
         do {
-            guard let mac = await server?.value else { throw Failure("the Mac is out of reach") }
+            guard !Self.phoneOnly, let mac = await server?.value else { throw Failure("the Mac is out of reach") }
             let audio = try Data(contentsOf: recording)
             let text: String
             do {
@@ -179,12 +199,28 @@ final class Dictation: ObservableObject {
             last = text
             copyInFront(text)
         } catch {
-            problem = error.localizedDescription
-            if let apple, !apple.isEmpty {   // the Mac is out of reach: the phone's own hearing will do
-                last = apple
-                copyInFront(apple)
+            // No Mac: the phone hears it the Mac's way, if whisper is here; else Apple's hearing will do.
+            if PhonePipeline.canHear {
+                if localContext == nil { startLocalContext() }
+                let settled = await PhonePipeline.hear(recording, dir: localDir ?? PhonePipeline.newDirectory(),
+                                                       apple: apple, context: localContext)
+                if let settled {
+                    lastSeconds = Date().timeIntervalSince(started)
+                    last = settled.text
+                    copyInFront(settled.text)
+                } else {
+                    last = ""
+                }
+            } else {
+                problem = error.localizedDescription
+                if let apple, !apple.isEmpty {
+                    last = apple
+                    copyInFront(apple)
+                }
             }
         }
+        localContext = nil
+        localDir = nil
         try? FileManager.default.removeItem(at: recording)
         self.recording = nil
         await endActivity(showing: .init(phase: problem == nil || last != nil ? .done : .failed,

@@ -158,6 +158,14 @@ struct Server {
         return (try? await send("/keyboard-log", body: body, timeout: 10)) != nil
     }
 
+    /// The model's credentials and the user's name, for the phone to hear by itself (see
+    /// PhonePipeline).
+    func llmConfig() async throws -> (env: String, userName: String) {
+        let reply = try await get("/llm-config", timeout: 5)
+        guard let env = reply["env"] as? String else { throw Failure("no credentials from the Mac") }
+        return (env, reply["user_name"] as? String ?? "")
+    }
+
     /// What the Mac heard in `recording`.
     func hear(_ recording: Data, contextID: String?, apple: String?) async throws -> String {
         var query = URLComponents()

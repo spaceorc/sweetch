@@ -75,9 +75,20 @@ enum LLMClient {
 
     /// The credentials' text where it isn't bundled — the iPhone's, from its Keychain. Set before
     /// the first call.
-    nonisolated(unsafe) static var environment: String?
+    nonisolated(unsafe) static var environment: String? {
+        didSet { cached = nil }
+    }
+    nonisolated(unsafe) private static var cached: Config??
 
-    static let config: Config? = {
+    /// Read once from the credentials, again whenever they're set anew.
+    static var config: Config? {
+        if let cached { return cached }
+        let fresh = load()
+        cached = .some(fresh)
+        return fresh
+    }
+
+    private static func load() -> Config? {
         guard let text = environment ?? Bundle.main.url(forResource: "sweetch", withExtension: "env")
             .flatMap({ try? String(contentsOf: $0, encoding: .utf8) }) else {
             log.error("LLM: sweetch.env not found in app bundle")
@@ -113,7 +124,13 @@ enum LLMClient {
         }
         log.info("LLM: providers — proxy=\(cfg.hasProxy, privacy: .public) vertex=\(cfg.hasVertex, privacy: .public) azure=\(cfg.hasAzure, privacy: .public)")
         return cfg
-    }()
+    }
+
+    /// The credentials' text as this app has it — for the iPhone to take once (see the dictation
+    /// server's `/llm-config`).
+    static var credentialsText: String? {
+        environment ?? Bundle.main.url(forResource: "sweetch", withExtension: "env").flatMap { try? String(contentsOf: $0, encoding: .utf8) }
+    }
 
     static var isConfigured: Bool { config != nil }
 

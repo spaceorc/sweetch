@@ -17,6 +17,8 @@ targets:
     sources:
       - SweetchPhone
       - Shared
+      # The dictation pipeline, the Mac's own code — the phone runs it when no Mac answers.
+      - path: ../Sources/sweetch/Pipeline
       # The keyboard's code too, for `--keyboard-preview`.
       - path: SweetchKeyboard
         excludes: [Info.plist]

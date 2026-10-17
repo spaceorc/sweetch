@@ -172,6 +172,11 @@ final class DictationServer {
                                        wait: min(Double(request.query["wait"] ?? "") ?? 25, 25))
             case ("POST", "/field"): (status, reply) = noteField(request)
             case ("POST", "/keyboard-log"): (status, reply) = keepKeyboardLog(request)
+            // The model's credentials and the user's name, for the iPhone to hear by itself when no
+            // Mac answers. Kept there in its Keychain; asked for with the server's token.
+            case ("GET", "/llm-config"):
+                (status, reply) = LLMClient.credentialsText.map { (200, ["env": $0, "user_name": NSFullUserName()]) }
+                    ?? (404, ["error": "no credentials here"])
             default: (status, reply) = (404, ["error": "no such endpoint"])
             }
         }

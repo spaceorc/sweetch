@@ -4,6 +4,9 @@ import SwiftUI
 struct SweetchPhoneApp: App {
     init() {
         LivePreview.prepare()
+        Credentials.load()
+        Task { if let mac = await Server.reachable() { await Credentials.refresh(from: mac) } }
+        _ = PhoneWhisper.shared   // knows from the start whether the app is in front
         // The folder shared with the keyboard, if the signing allows one: a file to show it works.
         if let shared = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.spaceorc.sweetch") {
             try? Data("\(Date())".utf8).write(to: shared.appendingPathComponent("from-app.txt"))
@@ -35,6 +38,7 @@ struct SweetchPhoneApp: App {
 struct ContentView: View {
     @ObservedObject private var dictation = Dictation.shared
     @ObservedObject private var whisper = PhoneWhisper.shared
+    @AppStorage("phoneOnly") private var phoneOnly = false
     @AppStorage(Server.addressKey) private var address = Server.defaultAddresses
     @AppStorage(Server.tokenKey) private var token = ""
     @State private var reachable: String??
@@ -88,6 +92,7 @@ struct ContentView: View {
                         HStack { ProgressView(); Text("Loading the model…") }
                     case .ready:
                         Toggle("Also hear on the phone", isOn: $whisper.enabled)
+                        Toggle("Hear on the phone only (test)", isOn: $phoneOnly)
                     case .failed(let why):
                         Text(why).foregroundStyle(.red)
                         Button("Try Again") { whisper.fetchModel() }
