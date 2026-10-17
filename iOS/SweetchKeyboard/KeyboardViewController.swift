@@ -640,9 +640,21 @@ final class KeyboardModel {
         wordTaps = []
         wordTapsHold = true
         guard !word.isEmpty else { return }
-        if hold, taps.count == word.filter(\.isLetter).count, taps.count >= 2 { shadowDecode(word, taps: taps) }
-        // A word written with a hyphen, typed without one: put right, and ⌫ next puts it back.
-        if !word.contains("-"), let fixed = Hyphens.fix(word) {
+        let pending = pendingCorrection
+        pendingCorrection = nil
+        let tapped = hold && taps.count == word.filter(\.isLetter).count && taps.count >= 2
+        if tapped { shadowDecode(word, taps: taps) }
+        if tapped, pending?.word != word { KeyLog.note("autocorrect-late", ["word": word]) }   // not worked out by the space
+        // The decoder's correction, worked out while the word was typed: put in, and the strip offers
+        // to take it back (so does ⌫ next).
+        if tapped, let pending, pending.word == word, let fixed = pending.fixed, fixed != word {
+            for _ in word { deleteBackward() }
+            insert(fixed)
+            log("autocorrect", ["typed": word, "fixed": fixed, "confidence": Double(pending.confidence)])
+            autoFixed = (typed: word, fixed: fixed, boundary: boundary)
+            word = fixed
+        } else if !word.contains("-"), let fixed = Hyphens.fix(word) {
+            // A word written with a hyphen, typed without one: put right, and ⌫ next puts it back.
             for _ in word { deleteBackward() }
             insert(fixed)
             log("autofix", ["typed": word, "fixed": fixed])
@@ -701,7 +713,7 @@ final class KeyboardModel {
     }
 
     /// The last word put right, while the next thing done may still be ⌫ taking it back.
-    private var autoFixed: (typed: String, fixed: String, boundary: String)?
+    private var autoFixed: (typed: String, fixed: String, boundary: String)? { didSet { changed() } }
 
     /// ⌫ right after a word was put right: the word as typed comes back, without the boundary.
     private func undoAutoFix() -> Bool {
@@ -711,8 +723,46 @@ final class KeyboardModel {
         guard before.hasSuffix(fix.fixed + fix.boundary) else { return false }
         for _ in 0..<(fix.fixed.count + fix.boundary.count) { deleteBackward() }
         insert(fix.typed)
-        log("autofix-undone", ["typed": fix.typed, "fixed": fix.fixed])
+        log("autofix-undone", ["typed": fix.typed, "fixed": fix.fixed, "by": "delete"])
+        keep(fix.typed)
         return true
+    }
+
+    /// The strip's button: the word put back as typed, the space or mark after it kept.
+    func revertAutoFix() {
+        guard let fix = autoFixed else { return }
+        autoFixed = nil
+        let before = proxy?.documentContextBeforeInput ?? ""
+        guard before.hasSuffix(fix.fixed + fix.boundary) else { return }
+        for _ in 0..<(fix.fixed.count + fix.boundary.count) { deleteBackward() }
+        insert(fix.typed + fix.boundary)
+        log("autofix-undone", ["typed": fix.typed, "fixed": fix.fixed, "by": "button"])
+        keep(fix.typed)
+        afterTyping()
+    }
+
+    /// What the strip offers to take back: the word as it was typed.
+    var revertOffer: String? { autoFixed?.typed }
+
+    /// Words the user took a correction back from: never corrected again.
+    private(set) var keepAsTyped: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "keepAsTyped") ?? [])
+
+    private func keep(_ word: String) {
+        keepAsTyped.insert(word.lowercased())
+        UserDefaults.standard.set(Array(keepAsTyped.prefix(500)), forKey: "keepAsTyped")
+    }
+
+    /// The correction for the word being typed, if a space came now.
+    private var pendingCorrection: (word: String, fixed: String?, confidence: Float)?
+
+    /// Whether iOS's own dictionary knows the word, in the language of its letters — a word it
+    /// knows isn't a typo, whatever the lexicon lacks («распознай»). Call on `decoderQueue`.
+    nonisolated(unsafe) private static let checker = UITextChecker()
+    private static func systemKnows(_ word: String) -> Bool {
+        let cyrillic = word.unicodeScalars.contains { (0x0400...0x04FF).contains($0.value) }
+        let range = NSRange(location: 0, length: (word as NSString).length)
+        return checker.rangeOfMisspelledWord(in: word, range: range, startingAt: 0, wrap: false,
+                                             language: cyrillic ? "ru_RU" : "en_US").location == NSNotFound
     }
 
     private func afterTyping() {
@@ -778,12 +828,19 @@ final class KeyboardModel {
         }
         let asked = word
         let taps = wordTaps
+        let keep = keepAsTyped
         if wordTapsHold, taps.count >= 2, taps.count == word.filter(\.isLetter).count, !Self.decoderFailed {
             let capital = word.first?.isUppercase == true
             Self.decoderQueue.async { [weak self] in
                 guard let decoder = Self.loadDecoder() else { return }
-                let result = decoder.decode(taps, complete: true,
-                                            context: Self.context(previous, recent: recent, lexicon: decoder.lexicon, profile: profileNow))
+                let context = Self.context(previous, recent: recent, lexicon: decoder.lexicon, profile: profileNow)
+                let result = decoder.decode(taps, complete: true, context: context)
+                // What a space would put right, worked out now so the space doesn't wait: the decoder's
+                // correction, unless the word as typed is one the system knows or the user kept.
+                let exact = decoder.decode(taps, context: context)
+                var fixed = exact.correction
+                if fixed != nil, keep.contains(asked.lowercased()) || Self.systemKnows(asked) { fixed = nil }
+                if let word = fixed, capital { fixed = word.prefix(1).uppercased() + word.dropFirst() }
                 let words = result.candidates.map { capital ? $0.word.prefix(1).uppercased() + $0.word.dropFirst() : $0.word }
                 var picked: [String] = []
                 for candidate in words where !picked.contains(where: { $0.lowercased() == candidate.lowercased() }) {
@@ -792,6 +849,7 @@ final class KeyboardModel {
                 }
                 DispatchQueue.main.async {
                     guard let self, self.word == asked else { return }
+                    self.pendingCorrection = (asked, fixed, exact.confidence)
                     self.suggestionsFrom = "decoder"
                     self.suggestions = picked.filter { $0.lowercased() != asked.lowercased() }.count > 0 ? picked : []
                 }

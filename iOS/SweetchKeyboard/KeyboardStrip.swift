@@ -72,7 +72,9 @@ final class KeyboardStrip: UIView {
             button.tintColor = on ? .label : .tertiaryLabel
             button.backgroundColor = on ? UIColor.label.withAlphaComponent(model.profileManual ? 0.18 : 0.08) : .clear
         }
-        let words = model.suggestions
+        // Just after a correction: first, the word as typed, to take it back.
+        let undo = model.revertOffer
+        let words = (undo.map { ["↶ " + $0] } ?? []) + model.suggestions.prefix(undo == nil ? 3 : 2)
         suggestions.isHidden = words.isEmpty
         note.isHidden = !words.isEmpty
         insert.isHidden = !words.isEmpty || model.last == nil
@@ -83,9 +85,10 @@ final class KeyboardStrip: UIView {
         guard shown != words else { return }
         suggestions.arrangedSubviews.forEach { $0.removeFromSuperview() }
         for (index, word) in words.enumerated() {
+            let isUndo = index == 0 && undo != nil
             suggestions.addArrangedSubview(SuggestionView(word: word, divided: index > 0) { [weak model] in
                 UIDevice.current.playInputClick()
-                model?.choose(suggestion: word)
+                if isUndo { model?.revertAutoFix() } else { model?.choose(suggestion: word) }
             })
         }
     }
