@@ -56,13 +56,16 @@ final class WordDecoder {
     let lexicon: Lexicon
     /// Words likelier after others; without it, only how common each word is counts.
     let bigrams: Bigrams?
+    /// How each profile shifts the words; without it, one way of writing for everything.
+    let profiles: Profiles?
     var costs = Costs()
     /// LatinIME's "modest" autocorrection threshold on its normalised score.
     var threshold: Float = 0.185
 
-    init(lexicon: Lexicon, bigrams: Bigrams? = nil) {
+    init(lexicon: Lexicon, bigrams: Bigrams? = nil, profiles: Profiles? = nil) {
         self.lexicon = lexicon
         self.bigrams = bigrams
+        self.profiles = profiles
     }
 
     /// The word before, for context: its lexicon node (0: a sentence starts), and the words typed
@@ -70,14 +73,24 @@ final class WordDecoder {
     struct Context {
         var previous: Int?
         var recent: Set<Int> = []
+        /// The way of writing in use, and the words typed in it on the phone (node → lift, 0–255).
+        var profile: Profiles.Name?
+        var boosts: [Int: Int] = [:]
     }
 
     /// How common a word is here, 0–255: its own frequency, lifted toward 255 by how much likelier
     /// it is after the word before (LatinIME's bigram scale: 16.5 steps between the two).
     func likelihood(_ node: Int, _ context: Context) -> Float {
-        let frequency = Float(lexicon.frequency(node))
+        var frequency = Float(lexicon.frequency(node))
+        if let profile = context.profile, let profiles {
+            frequency = min(255, max(1, frequency + 6 * Float(profiles.weight(of: node, in: profile))))
+        }
+        if let boost = context.boosts[node] { frequency = min(255, frequency + Float(boost)) }
         var lift = 0
         if let previous = context.previous, let bigrams { lift = bigrams.weight(of: node, after: previous) }
+        if let previous = context.previous, let profile = context.profile, let profiles {
+            lift = max(lift, profiles.pair(node, after: previous, in: profile))
+        }
         if context.recent.contains(node) { lift = max(lift, 4) }
         guard lift > 0 else { return frequency }
         return frequency + Float(lift + 1) * (255 - frequency) / 16.5
@@ -86,8 +99,10 @@ final class WordDecoder {
     /// The likeliest next words before a letter is typed: those seen after the word before.
     func predictions(_ context: Context, limit: Int = 3) -> [String] {
         guard let previous = context.previous, let bigrams else { return [] }
-        return bigrams.next(after: previous, limit: 24)
-            .map { ($0.word, likelihood($0.word, context)) }
+        var words = bigrams.next(after: previous, limit: 24).map(\.word)
+        if let profile = context.profile, let profiles { words += profiles.next(after: previous, in: profile, limit: 12) }
+        return Array(Set(words))
+            .map { ($0, likelihood($0, context)) }
             .sorted { $0.1 > $1.1 }
             .prefix(limit)
             .map { lexicon.word(at: $0.0) }

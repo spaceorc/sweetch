@@ -1,7 +1,8 @@
 import UIKit
 
-/// Above the keys: the suggestions for the word being typed, as on iOS's own keyboard; otherwise
-/// what was last dictated (a tap types it again) or how the keyboard is doing.
+/// Above the keys: the profile in use — personal, work, agent, a tap picks another — then the
+/// suggestions for the word being typed, as on iOS's own keyboard; otherwise what was last
+/// dictated (a tap types it again) or how the keyboard is doing.
 final class KeyboardStrip: UIView {
     static let height: CGFloat = 40
 
@@ -10,6 +11,9 @@ final class KeyboardStrip: UIView {
     private let suggestions = UIStackView()
     private let note = UILabel()
     private let insert = UIButton(type: .system)
+    private let profiles = UIStackView()
+    private var profileButtons: [UIButton] = []
+    private static let symbols = ["person", "briefcase", "sparkles"]
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -21,16 +25,34 @@ final class KeyboardStrip: UIView {
         insert.setImage(UIImage(systemName: "text.insert"), for: .normal)
         insert.tintColor = .secondaryLabel
         insert.addAction(UIAction { [weak self] _ in self?.model?.typeLast() }, for: .touchUpInside)
-        for part in [suggestions, note, insert] as [UIView] {
+        profiles.axis = .horizontal
+        profiles.spacing = 2
+        for name in Profiles.Name.allCases {
+            let button = UIButton(type: .system)
+            button.setImage(UIImage(systemName: Self.symbols[name.rawValue],
+                                    withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .medium)), for: .normal)
+            button.layer.cornerRadius = 13
+            button.addAction(UIAction { [weak self] _ in
+                UIDevice.current.playInputClick()
+                self?.model?.chooseProfile(name)
+            }, for: .touchUpInside)
+            button.widthAnchor.constraint(equalToConstant: 30).isActive = true
+            button.heightAnchor.constraint(equalToConstant: 26).isActive = true
+            profiles.addArrangedSubview(button)
+            profileButtons.append(button)
+        }
+        for part in [profiles, suggestions, note, insert] as [UIView] {
             part.translatesAutoresizingMaskIntoConstraints = false
             addSubview(part)
         }
         NSLayoutConstraint.activate([
-            suggestions.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
+            profiles.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
+            profiles.centerYAnchor.constraint(equalTo: centerYAnchor, constant: 1),
+            suggestions.leadingAnchor.constraint(equalTo: profiles.trailingAnchor, constant: 4),
             suggestions.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
             suggestions.topAnchor.constraint(equalTo: topAnchor, constant: 2),
             suggestions.bottomAnchor.constraint(equalTo: bottomAnchor),
-            note.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            note.leadingAnchor.constraint(equalTo: profiles.trailingAnchor, constant: 10),
             note.trailingAnchor.constraint(lessThanOrEqualTo: insert.leadingAnchor, constant: -8),
             note.centerYAnchor.constraint(equalTo: centerYAnchor, constant: 1),
             insert.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
@@ -44,6 +66,12 @@ final class KeyboardStrip: UIView {
 
     func render() {
         guard let model else { return }
+        // The profile in use stands out: filled when the user picked it, faint when it's a guess.
+        for (index, button) in profileButtons.enumerated() {
+            let on = index == model.profile.rawValue
+            button.tintColor = on ? .label : .tertiaryLabel
+            button.backgroundColor = on ? UIColor.label.withAlphaComponent(model.profileManual ? 0.18 : 0.08) : .clear
+        }
         let words = model.suggestions
         suggestions.isHidden = words.isEmpty
         note.isHidden = !words.isEmpty

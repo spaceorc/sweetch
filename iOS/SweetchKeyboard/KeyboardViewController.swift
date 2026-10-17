@@ -205,6 +205,7 @@ final class KeyboardModel {
     private var proxy: UITextDocumentProxy? { controller?.textDocumentProxy }
 
     func appeared() {
+        startSession()
         wordTaps = []
         wordTapsHold = true
         if let awaySince, Date().timeIntervalSince(awaySince) > 300 { field.forget() }
@@ -623,7 +624,8 @@ final class KeyboardModel {
         let spaced = next == nil || !(next!.isWhitespace || next!.isPunctuation)
         insert(spaced ? suggestion + " " : suggestion)
         log("choose", ["word": word, "suggestion": suggestion, "spaced": spaced, "from": suggestionsFrom])
-        KeyLog.note("word", ["word": suggestion, "boundary": "suggestion"])
+        KeyLog.note("word", ["word": suggestion, "boundary": "suggestion", "session": fieldSession, "profile": profile.key])
+        profileSees(suggestion)
         spaceIsOurs = spaced
         lastSpaceAt = Date()
         afterTyping()
@@ -647,7 +649,8 @@ final class KeyboardModel {
             autoFixed = (typed: word, fixed: fixed, boundary: boundary)
             word = fixed
         }
-        KeyLog.note("word", ["word": word, "boundary": boundary])
+        KeyLog.note("word", ["word": word, "boundary": boundary, "session": fieldSession, "profile": profile.key])
+        profileSees(word)
         recentWords.append(word)
         if recentWords.count > 100 { recentWords.removeFirst(recentWords.count - 100) }
     }
@@ -668,7 +671,8 @@ final class KeyboardModel {
         if decoder == nil, !decoderFailed {
             if let url = Bundle.main.url(forResource: "Lexicon", withExtension: "bin"), let lexicon = Lexicon(url: url) {
                 let bigrams = Bundle.main.url(forResource: "Bigrams", withExtension: "bin").flatMap(Bigrams.init)
-                decoder = WordDecoder(lexicon: lexicon, bigrams: bigrams)
+                let profiles = Bundle.main.url(forResource: "Profiles", withExtension: "bin").flatMap(Profiles.init)
+                decoder = WordDecoder(lexicon: lexicon, bigrams: bigrams, profiles: profiles)
             } else {
                 decoderFailed = true
                 DispatchQueue.main.async { KeyLog.note("decoder-missing") }
@@ -680,10 +684,11 @@ final class KeyboardModel {
     private func shadowDecode(_ word: String, taps: [WordDecoder.Tap]) {
         let previous = previousWord(before: proxy?.documentContextBeforeInput ?? "")
         let recent = recentWords
+        let profileNow = profile
         Self.decoderQueue.async {
             guard let decoder = Self.loadDecoder() else { return }
             let started = Date()
-            let result = decoder.decode(taps, context: Self.context(previous, recent: recent, lexicon: decoder.lexicon))
+            let result = decoder.decode(taps, context: Self.context(previous, recent: recent, lexicon: decoder.lexicon, profile: profileNow))
             let ms = Int(Date().timeIntervalSince(started) * 1000)
             DispatchQueue.main.async {
                 KeyLog.note("decoder", [
@@ -751,12 +756,13 @@ final class KeyboardModel {
         let insideWord = proxy?.documentContextAfterInput?.first?.isLetter == true
         let previous = previousWord(before: before)
         let recent = recentWords
+        let profileNow = profile
         // Before a letter of the next word: the words likeliest after the last one.
         if word.isEmpty, !insideWord, before.last?.isWhitespace == true, !Self.decoderFailed, !before.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let capital = previous.sentenceStart && proxy?.autocapitalizationType != UITextAutocapitalizationType.none
             Self.decoderQueue.async { [weak self] in
                 guard let decoder = Self.loadDecoder() else { return }
-                let words = decoder.predictions(Self.context(previous, recent: recent, lexicon: decoder.lexicon))
+                let words = decoder.predictions(Self.context(previous, recent: recent, lexicon: decoder.lexicon, profile: profileNow))
                     .map { capital ? $0.prefix(1).uppercased() + $0.dropFirst() : $0 }
                 DispatchQueue.main.async {
                     guard let self, self.word.isEmpty else { return }
@@ -777,7 +783,7 @@ final class KeyboardModel {
             Self.decoderQueue.async { [weak self] in
                 guard let decoder = Self.loadDecoder() else { return }
                 let result = decoder.decode(taps, complete: true,
-                                            context: Self.context(previous, recent: recent, lexicon: decoder.lexicon))
+                                            context: Self.context(previous, recent: recent, lexicon: decoder.lexicon, profile: profileNow))
                 let words = result.candidates.map { capital ? $0.word.prefix(1).uppercased() + $0.word.dropFirst() : $0.word }
                 var picked: [String] = []
                 for candidate in words where !picked.contains(where: { $0.lowercased() == candidate.lowercased() }) {
@@ -816,11 +822,67 @@ final class KeyboardModel {
 
     /// What the decoder is told of the text around the word: the word before, and the recent ones.
     private static func context(_ previous: (word: String?, sentenceStart: Bool), recent: [String],
-                                lexicon: Lexicon) -> WordDecoder.Context {
+                                lexicon: Lexicon, profile: Profiles.Name) -> WordDecoder.Context {
         var context = WordDecoder.Context()
         if previous.sentenceStart { context.previous = 0 } else if let word = previous.word { context.previous = lexicon.lookup(word) }
         context.recent = Set(recent.compactMap { lexicon.lookup($0) })
+        context.profile = profile
+        context.boosts = memory.boosts(for: profile)
         return context
+    }
+
+    // MARK: Profiles
+
+    /// The way of writing in use — personal, work, to an agent — and whether the user picked it
+    /// (then the words don't move it).
+    private(set) var profile: Profiles.Name = .agent { didSet { if profile != oldValue { changed() } } }
+    private(set) var profileManual = false { didSet { if profileManual != oldValue { changed() } } }
+    /// This field's session: what a profile is given to and moved with.
+    private var fieldSession = ""
+    /// Used only on `decoderQueue`.
+    nonisolated(unsafe) private static let memory = ProfileMemory()
+
+    private func startSession() {
+        fieldSession = String(UUID().uuidString.prefix(8))
+        profileManual = false
+        let process = hostProcess, id = fieldSession
+        Self.decoderQueue.async {
+            let name = Self.memory.start(process: process)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.fieldSession == id else { return }
+                self.profile = name
+                KeyLog.note("profile", ["session": id, "profile": name.key, "by": "start"])
+            }
+        }
+    }
+
+    /// A word finished: counted in the profile, and the profile the session's words point to taken
+    /// up — unless the user picked one.
+    private func profileSees(_ word: String) {
+        let current = profile, process = hostProcess, id = fieldSession
+        Self.decoderQueue.async {
+            guard let decoder = Self.loadDecoder(), let node = decoder.lexicon.lookup(word) else { return }
+            let next = Self.memory.add(node, in: current, profiles: decoder.profiles)
+            guard next != current else { return }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.fieldSession == id, !self.profileManual, self.profile == current else { return }
+                self.profile = next
+                Self.decoderQueue.async { Self.memory.move(from: current, to: next, process: process) }
+                KeyLog.note("profile", ["session": id, "profile": next.key, "by": "words",
+                                        "scores": Self.memory.scores.map { (($0 * 10).rounded()) / 10 }])
+            }
+        }
+    }
+
+    /// The user's pick: the session's words go to that profile, the process is remembered in it,
+    /// and the words no longer move it. Logged with what it was — what the guess got wrong.
+    func chooseProfile(_ name: Profiles.Name) {
+        let old = profile, process = hostProcess
+        profile = name
+        profileManual = true
+        KeyLog.note("profile", ["session": fieldSession, "profile": name.key, "by": "user", "was": old.key])
+        Self.decoderQueue.async { Self.memory.move(from: old, to: name, process: process) }
+        fieldChanged()   // suggestions in the new profile
     }
 
     /// Where the suggestions shown came from, for the log.

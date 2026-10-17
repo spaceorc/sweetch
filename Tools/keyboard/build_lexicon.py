@@ -214,6 +214,115 @@ def bigrams(ids):
     return weights
 
 
+PROFILES = ["personal", "work", "agent"]
+APP_PROFILE = {
+    "Telegram": "personal", "ru.keepcoder.Telegram": "personal", "ph.telegra.Telegraph": "personal",
+    "Slack": "work", "com.tinyspeck.slackmacgap": "work", "PyCharm": "work", "com.jetbrains.pycharm": "work",
+    "Google Chrome": "work", "com.google.Chrome": "work",
+    "Claude": "agent", "com.anthropic.claudefordesktop": "agent", "iTerm2": "agent", "com.googlecode.iterm2": "agent",
+}
+
+
+def profile_texts():
+    """The user's sentences by profile — personal (Telegram), work (Slack, the IDE, the browser),
+    agent (Claude, Claude Code) — from where each was written, and the keyboard's sessions by the
+    profile they ended with on the phone."""
+    texts = {name: [] for name in PROFILES}
+    for path in SUPPORT.glob("dictation/*/session.json"):
+        try:
+            session = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        profile = APP_PROFILE.get(session.get("app") or "")
+        if profile and session.get("text"):
+            texts[profile].append(session["text"])
+    for path in SUPPORT.glob("wispr-flow/history/*/entry.json"):
+        try:
+            entry = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        profile = APP_PROFILE.get(entry.get("app") or "")
+        text = entry.get("editedText") or entry.get("formattedText")
+        if profile and text:
+            texts[profile].append(text)
+    texts["agent"].extend(sent_messages())
+    # The phone's sessions: the words typed in each, under the profile the session ended with.
+    words, label = collections.defaultdict(list), {}
+    for path in sorted(SUPPORT.glob("keyboard/*.jsonl")):
+        for line in path.open(encoding="utf-8"):
+            if '"session"' not in line:
+                continue
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            session = event.get("session")
+            if event.get("e") == "word" and session:
+                words[session].append(event.get("word") or "")
+            elif event.get("e") == "profile" and session and event.get("profile") in PROFILES:
+                label[session] = event["profile"]
+    for session, profile in label.items():
+        texts[profile].append(" ".join(words.get(session, [])))
+    return texts
+
+
+def profiles(ids):
+    """For each profile: each of the user's words weighted −8…8 by how much likelier (or rarer) it
+    is there than across all their writing, and the profile's own word pairs 0–15."""
+    texts = profile_texts()
+    counts = {name: collections.Counter() for name in PROFILES}
+    pairs = {name: collections.Counter() for name in PROFILES}
+    for name in PROFILES:
+        for text in texts[name]:
+            for sentence in SENTENCE.split(text):
+                previous = 0
+                for token in TOKEN.findall(sentence):
+                    node = ids.get(token.replace("’", "'").lower())
+                    if node is not None:
+                        counts[name][node] += 1
+                        if previous is not None:
+                            pairs[name][(previous, node)] += 1
+                    previous = node
+    overall = collections.Counter()
+    for c in counts.values():
+        overall.update(c)
+    total = sum(overall.values()) or 1
+    vocabulary = len(overall) or 1
+    tables = {}
+    for name in PROFILES:
+        size = sum(counts[name].values()) or 1
+        weights = {}
+        for node, n in overall.items():
+            if n < 3:
+                continue
+            here = (counts[name][node] + 0.5) / (size + 0.5 * vocabulary)
+            everywhere = (n + 0.5) / (total + 0.5 * vocabulary)
+            weight = max(-8, min(8, round(2 * math.log2(here / everywhere))))
+            if weight:
+                weights[node] = weight
+        pair_weights = {pair: min(15, 4 + int(3 * math.log2(n))) for pair, n in pairs[name].items() if n >= 2}
+        tables[name] = (weights, pair_weights, len(texts[name]))
+    return tables
+
+
+def write_profiles(tables, path):
+    """"SWPF" u32 version, u32 profile count; each profile: u32 n, u32 word[], i8 weight[] (by
+    word); u32 m, u32 previous[], u32 word[], u8 weight[] (by previous, word)."""
+    data = bytearray(b"SWPF") + struct.pack("<II", 1, len(PROFILES))
+    for name in PROFILES:
+        weights, pairs, _ = tables[name]
+        items = sorted(weights.items())
+        data += struct.pack("<I", len(items)) + struct.pack(f"<{len(items)}I", *(w for w, _ in items))
+        data += struct.pack(f"<{len(items)}b", *(v for _, v in items))
+        items = sorted(pairs.items())
+        data += struct.pack("<I", len(items))
+        data += struct.pack(f"<{len(items)}I", *(p for (p, _), _ in items))
+        data += struct.pack(f"<{len(items)}I", *(w for (_, w), _ in items))
+        data += bytes(v for _, v in items)
+    path.write_bytes(bytes(data))
+    return len(data)
+
+
 def write_bigrams(weights, path):
     """"SWBG" u32 version, u32 count, then sorted by (previous, word): u32 previous[], u32 word[],
     u8 weight[]."""
@@ -280,6 +389,11 @@ def main():
     bigram_path = output.with_name("Bigrams.bin")
     size = write_bigrams(weights, bigram_path)
     print(f"{bigram_path}: {len(weights)} word pairs, {size / 1e6:.1f} MB")
+    tables = profiles(ids)
+    profile_path = output.with_name("Profiles.bin")
+    size = write_profiles(tables, profile_path)
+    print(f"{profile_path}: " + ", ".join(f"{name} {len(tables[name][0])} words ±, {len(tables[name][1])} pairs from {tables[name][2]} texts"
+                                          for name in PROFILES) + f" — {size / 1e6:.1f} MB")
     print(f"{output}: {len(entries)} words ({general} general, {boosted} of them yours, {added} only yours), "
           f"{len(order)} nodes, {len(data) / 1e6:.1f} MB")
 
