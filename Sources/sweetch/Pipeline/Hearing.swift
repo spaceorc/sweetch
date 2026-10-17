@@ -21,7 +21,8 @@ import Foundation
 /// version. Then a model settles what the user said, reading all of the context again, the prefix,
 /// and every version with how it was heard and which of its words whisper was unsure of. It is
 /// skipped when every listening heard the same words — unless they all wrote it as bare speech, with
-/// no capitals and no stops (see `written`).
+/// no capitals and no stops (see `written`) — and never on a dictation longer than a short phrase,
+/// which the model always reads for sense (see `short`).
 enum Hearing {
     enum Kind {
         case auto
@@ -175,7 +176,9 @@ enum Hearing {
         // are that version's, loosely. The whisper versions it backs:
         // Not asked at all on a long dictation (see `short`).
         let appleBacks = apple.flatMap { a in short(first.text) ? whisperVersions.filter { agrees(a, with: $0) } : nil }
-        if whisperVersions.count == 1, written(first.text), appleBacks.map({ !$0.isEmpty }) ?? true {
+        // A long dictation is always read by the model: whisper's listenings agreeing on it says they
+        // heard alike, not that it makes sense — and only the model checks that.
+        if whisperVersions.count == 1, short(first.text), written(first.text), appleBacks.map({ !$0.isEmpty }) ?? true {
             let why = listened.filter(\.kind.isWhisper).count == 2
                 ? "heard alike with and without the prefix; \(other) unlikely (\(String(format: "%.2f", doubt)))"
                 : "every listening heard the same"
