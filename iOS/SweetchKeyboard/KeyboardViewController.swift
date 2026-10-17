@@ -249,6 +249,7 @@ final class KeyboardModel {
     }
 
     func typeCharacter(_ key: String) {
+        autoFixed = nil
         let typed = display(key)
         if !(typed.first?.isLetter ?? true) { noteWordEnd(typed) }
         if spaceIsOurs, ".,!?:;".contains(typed), proxy?.documentContextBeforeInput?.hasSuffix(" ") == true {
@@ -281,6 +282,7 @@ final class KeyboardModel {
     /// space is already there: the user's first space only stands for it, and their second ends
     /// the sentence — not three spaces in a row.
     func space() {
+        autoFixed = nil
         noteWordEnd(" ")
         let before = proxy?.documentContextBeforeInput ?? ""
         if spaceIsOurs, before.hasSuffix(" ") {
@@ -307,6 +309,7 @@ final class KeyboardModel {
     }
 
     func newline() {
+        autoFixed = nil
         spaceIsOurs = false
         guard returnKey.enabled else {
             log("return-disabled")
@@ -320,6 +323,10 @@ final class KeyboardModel {
 
     func backspace() {
         spaceIsOurs = false
+        if undoAutoFix() {
+            afterTyping()
+            return
+        }
         deleteBackward()
         log("delete")
         afterTyping()
@@ -617,9 +624,32 @@ final class KeyboardModel {
     /// they go back to it. The log's labels come from these and from corrections.
     private func noteWordEnd(_ boundary: String) {
         let before = proxy?.documentContextBeforeInput ?? ""
-        let word = String(before.reversed().prefix { $0.isLetter || $0 == "'" || $0 == "’" || $0 == "-" }.reversed())
+        var word = String(before.reversed().prefix { $0.isLetter || $0 == "'" || $0 == "’" || $0 == "-" }.reversed())
         guard !word.isEmpty else { return }
+        // A word written with a hyphen, typed without one: put right, and ⌫ next puts it back.
+        if !word.contains("-"), let fixed = Hyphens.fix(word) {
+            for _ in word { deleteBackward() }
+            insert(fixed)
+            log("autofix", ["typed": word, "fixed": fixed])
+            autoFixed = (typed: word, fixed: fixed, boundary: boundary)
+            word = fixed
+        }
         KeyLog.note("word", ["word": word, "boundary": boundary])
+    }
+
+    /// The last word put right, while the next thing done may still be ⌫ taking it back.
+    private var autoFixed: (typed: String, fixed: String, boundary: String)?
+
+    /// ⌫ right after a word was put right: the word as typed comes back, without the boundary.
+    private func undoAutoFix() -> Bool {
+        guard let fix = autoFixed else { return false }
+        autoFixed = nil
+        let before = proxy?.documentContextBeforeInput ?? ""
+        guard before.hasSuffix(fix.fixed + fix.boundary) else { return false }
+        for _ in 0..<(fix.fixed.count + fix.boundary.count) { deleteBackward() }
+        insert(fix.typed)
+        log("autofix-undone", ["typed": fix.typed, "fixed": fix.fixed])
+        return true
     }
 
     private func afterTyping() {
