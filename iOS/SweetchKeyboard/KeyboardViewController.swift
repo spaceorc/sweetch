@@ -265,12 +265,28 @@ final class KeyboardModel {
     }
 
     /// A double space ends the sentence, as on iOS's own keyboard.
+    /// How soon a second space must follow the first to end the sentence: the user's slower
+    /// double taps (half a second and more) went unanswered at 0.4.
+    static let doubleSpace: TimeInterval = 1.0
+    /// What a sentence's last word may end with, for a double space to put a period after it.
+    static let sentenceEnders = CharacterSet.letters.union(.decimalDigits).union(CharacterSet(charactersIn: ")]}»\"'’”"))
+
+    /// A double space ends the sentence, as on iOS's own keyboard. After a picked suggestion the
+    /// space is already there: the user's first space only stands for it, and their second ends
+    /// the sentence — not three spaces in a row.
     func space() {
-        spaceIsOurs = false
         noteWordEnd(" ")
         let before = proxy?.documentContextBeforeInput ?? ""
-        if Date().timeIntervalSince(lastSpaceAt) < 0.4, before.hasSuffix(" "), let previous = before.dropLast().last,
-           previous.isLetter || previous.isNumber {
+        if spaceIsOurs, before.hasSuffix(" ") {
+            spaceIsOurs = false
+            lastSpaceAt = Date()
+            log("space", ["absorbed": true])
+            if !layout.isLetters { layout = letters }
+            return
+        }
+        spaceIsOurs = false
+        if Date().timeIntervalSince(lastSpaceAt) < Self.doubleSpace, before.hasSuffix(" "),
+           let previous = before.dropLast().last, previous.unicodeScalars.allSatisfy(Self.sentenceEnders.contains) {
             proxy?.deleteBackward()
             proxy?.insertText(". ")
             lastSpaceAt = .distantPast
@@ -380,12 +396,16 @@ final class KeyboardModel {
         return (title, prominent, enabled)
     }
 
+    /// The word replaced by the suggestion, and a space after it — unless the text goes on right
+    /// after it already (a word fixed in the middle of the text), where a space would be a second.
     func choose(suggestion: String) {
         for _ in word { proxy?.deleteBackward() }
-        proxy?.insertText(suggestion + " ")
-        log("choose", ["word": word, "suggestion": suggestion])
+        let next = proxy?.documentContextAfterInput?.first
+        let spaced = next == nil || !(next!.isWhitespace || next!.isPunctuation)
+        proxy?.insertText(spaced ? suggestion + " " : suggestion)
+        log("choose", ["word": word, "suggestion": suggestion, "spaced": spaced])
         KeyLog.note("word", ["word": suggestion, "boundary": "suggestion"])
-        spaceIsOurs = true
+        spaceIsOurs = spaced
         lastSpaceAt = Date()
         afterTyping()
     }
