@@ -243,7 +243,12 @@ final class KeyboardModel {
 
     /// The host moved the cursor or changed the text.
     func hostChanged() {
+        let previous = String(field.text)
         observeField()
+        // Emptied — a message sent — or another field: what it held, before it's gone.
+        if field.text.isEmpty || !String(field.text).hasPrefix(String(previous.prefix(20))) {
+            HostMemory.shared.saw(previous, process: hostProcess, profile: profile.key)
+        }
         rememberField(now: false)
         if !(proxy?.documentContextBeforeInput?.hasSuffix(" ") ?? false) { spaceIsOurs = false }
         log("host-change")
@@ -722,6 +727,7 @@ final class KeyboardModel {
         profileSees(word)
         recentWords.append(word)
         if recentWords.count > 100 { recentWords.removeFirst(recentWords.count - 100) }
+        rememberField(now: false)
     }
 
     /// The taps that typed the word being typed, in order — while they're all there is to it (no
@@ -938,8 +944,16 @@ final class KeyboardModel {
         }
     }
 
-    /// The words finished lately, likelier again (newest last).
-    private var recentWords: [String] = []
+    /// The words finished lately, likelier again (newest last). Kept across the keyboard's reloads
+    /// (iOS makes it again for many a field) and restarts.
+    private var recentWords: [String] {
+        get { Self.recent }
+        set {
+            Self.recent = newValue
+            UserDefaults.standard.set(newValue, forKey: "recentWords")
+        }
+    }
+    private static var recent = UserDefaults.standard.stringArray(forKey: "recentWords") ?? []
 
     /// The word before the one being typed, from the text before it — nil at a sentence's start.
     private func previousWord(before text: String) -> (word: String?, sentenceStart: Bool) {
