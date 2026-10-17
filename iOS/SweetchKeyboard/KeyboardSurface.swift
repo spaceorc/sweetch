@@ -164,7 +164,9 @@ final class KeyboardSurface: UIView {
         var callout: Callout?
         var alternates: Callout?
         var trackpadX: CGFloat?
+        var trackpadY: CGFloat = 0
         var carry: CGFloat = 0
+        var carryY: CGFloat = 0
         /// Shift held while a letter was typed.
         var typedWith = false
         /// The page before a page key was touched, and the one it showed.
@@ -222,6 +224,16 @@ final class KeyboardSurface: UIView {
                     if alternates.chosen != nil { selection.selectionChanged() }
                 }
             } else if let start = press.trackpadX {
+                // Up and down by lines, as the finger goes: a line's height of travel for each.
+                press.carryY += point.y - press.trackpadY
+                press.trackpadY = point.y
+                // One line per move: the text around the cursor iOS reports catches up only after.
+                let lines = max(-1, min(1, Int(press.carryY / Self.lineTravel)))
+                if lines != 0 {
+                    KeyLog.note("trackpad-lines", ["touch": press.touch, "lines": lines])
+                    model.moveCursor(lines: lines)
+                    press.carryY -= CGFloat(lines) * Self.lineTravel
+                }
                 press.carry += point.x - start
                 press.trackpadX = point.x
                 let steps = Int(press.carry / 9)
@@ -338,6 +350,7 @@ final class KeyboardSurface: UIView {
                 MainActor.assumeIsolated {
                     guard let self, let press, let touch = self.presses.first(where: { $0.value === press })?.key else { return }
                     press.trackpadX = touch.location(in: self).x
+                    press.trackpadY = touch.location(in: self).y
                     KeyLog.note("trackpad-on", ["touch": press.touch])
                     self.model.setTrackpad(true)
                     // The one place iOS's own keyboard taps back: the keys going blank is easy to miss.
@@ -387,6 +400,9 @@ final class KeyboardSurface: UIView {
         case .backspace: break
         }
     }
+
+    /// How far the finger travels, up or down, to move the cursor a line.
+    static let lineTravel: CGFloat = 24
 
     /// How near a tap must come down to another letter's key for the word to have a say.
     static let ambiguous: CGFloat = 9

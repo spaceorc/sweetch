@@ -376,6 +376,46 @@ final class KeyboardModel {
         proxy?.adjustTextPosition(byCharacterOffset: offset)
     }
 
+    /// How many characters a line of the field holds, taken as given: iOS doesn't tell a keyboard
+    /// where the field wraps its lines, only the text around the cursor.
+    static let lineLength = 40
+
+    /// Up (negative) or down a line at a time, to the same place in it where there is one. Lines
+    /// the user broke are found in the text; a long paragraph's wrapped lines are taken to be
+    /// `lineLength` characters.
+    func moveCursor(lines: Int) {
+        for _ in 0..<abs(lines) {
+            let before = proxy?.documentContextBeforeInput ?? ""
+            let after = proxy?.documentContextAfterInput ?? ""
+            let offset = lines < 0 ? Self.lineUp(before: before) : Self.lineDown(before: before, after: after)
+            guard offset != 0 else { break }
+            proxy?.adjustTextPosition(byCharacterOffset: offset)
+        }
+    }
+
+    static func lineUp(before: String) -> Int {
+        let paragraphs = before.components(separatedBy: "\n")
+        let current = paragraphs.last ?? ""
+        let column = current.count % lineLength
+        if current.count >= lineLength { return -lineLength }       // a wrapped line above, same paragraph
+        guard paragraphs.count > 1 else { return -current.count }   // the very first line: its start
+        let previous = paragraphs[paragraphs.count - 2]
+        let lastRow = previous.count % lineLength == 0 && !previous.isEmpty ? lineLength : previous.count % lineLength
+        // Back over this line's start and the line break, then to the same column of the line above.
+        return -(current.count + 1 + max(lastRow - column, 0))
+    }
+
+    static func lineDown(before: String, after: String) -> Int {
+        let current = before.components(separatedBy: "\n").last ?? ""
+        let column = current.count % lineLength
+        let rest = after.components(separatedBy: "\n")
+        let leftInParagraph = rest.first?.count ?? 0
+        if leftInParagraph > lineLength - column { return min(lineLength, leftInParagraph) }   // a wrapped line below
+        guard rest.count > 1 else { return leftInParagraph }        // the very last line: its end
+        let next = rest[1]
+        return leftInParagraph + 1 + min(column, next.count)
+    }
+
     /// What the return key says: the field's own word for it, highlighted as iOS does.
     var returnKey: (title: String?, prominent: Bool, enabled: Bool) {
         let ru = letters == .russian
