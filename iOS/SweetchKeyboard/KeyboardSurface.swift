@@ -432,13 +432,14 @@ final class KeyboardSurface: UIView {
     private var letterKeys: [WordDecoder.Key] = []
 
     /// A tap as the decoder takes it: where it came down, among which keys, and whether the user
-    /// looked (held, slid onto another key, or picked from the alternates) — then it's what they
-    /// meant. A finger moving a little on the way up is just fast typing (one tap in fifteen), and
-    /// took a word's autocorrection away.
+    /// looked (held, slid slowly onto another key, or picked from the alternates) — then it's what
+    /// they meant. A finger moving on the way up is just fast typing (one tap in fifteen moves over
+    /// 6 pt; a quick one smears across keys — "л" through "о" to "т" in 83 ms), and took a word's
+    /// autocorrection away; the decoder reads such a tap where it came down.
     private func decoderTap(_ press: Press, deliberate: Bool) -> WordDecoder.Tap {
         let held = ProcessInfo.processInfo.systemUptime - press.began
         return WordDecoder.Tap(point: press.start, keys: letterKeys,
-                               deliberate: deliberate || held > 0.35 || press.slid)
+                               deliberate: deliberate || held > 0.35 || (press.slid && held > 0.25))
     }
 
     /// How near a tap must come down to another letter's key for the word to have a say.

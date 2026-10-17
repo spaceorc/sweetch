@@ -350,8 +350,18 @@ final class KeyboardModel {
             return
         }
         deleteBackward()
+        tapsFreshAtWordStart()
         log("delete")
         afterTyping()
+    }
+
+    /// A word deleted back to where it began: the next one typed is all taps again, and goes to
+    /// the decoder — the word typed afresh after a wrong one included.
+    private func tapsFreshAtWordStart() {
+        let before = proxy?.documentContextBeforeInput ?? ""
+        guard before.last.map({ !$0.isLetter && $0 != "-" && $0 != "'" && $0 != "’" }) ?? true else { return }
+        wordTaps = []
+        wordTapsHold = true
     }
 
     /// The word before the cursor, with the spaces after it — what a long-held backspace deletes.
@@ -360,6 +370,7 @@ final class KeyboardModel {
         let spaces = before.reversed().prefix { $0.isWhitespace }.count
         let word = before.dropLast(spaces).reversed().prefix { !$0.isWhitespace }.count
         for _ in 0..<max(spaces + word, 1) { deleteBackward() }
+        tapsFreshAtWordStart()
         log("delete-word", ["chars": max(spaces + word, 1)])
         afterTyping()
     }
