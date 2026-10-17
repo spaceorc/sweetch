@@ -648,6 +648,8 @@ final class KeyboardModel {
             word = fixed
         }
         KeyLog.note("word", ["word": word, "boundary": boundary])
+        recentWords.append(word)
+        if recentWords.count > 100 { recentWords.removeFirst(recentWords.count - 100) }
     }
 
     /// The taps that typed the word being typed, in order — while they're all there is to it (no
@@ -665,7 +667,8 @@ final class KeyboardModel {
     private static func loadDecoder() -> WordDecoder? {
         if decoder == nil, !decoderFailed {
             if let url = Bundle.main.url(forResource: "Lexicon", withExtension: "bin"), let lexicon = Lexicon(url: url) {
-                decoder = WordDecoder(lexicon: lexicon)
+                let bigrams = Bundle.main.url(forResource: "Bigrams", withExtension: "bin").flatMap(Bigrams.init)
+                decoder = WordDecoder(lexicon: lexicon, bigrams: bigrams)
             } else {
                 decoderFailed = true
                 DispatchQueue.main.async { KeyLog.note("decoder-missing") }
@@ -675,10 +678,12 @@ final class KeyboardModel {
     }
 
     private func shadowDecode(_ word: String, taps: [WordDecoder.Tap]) {
+        let previous = previousWord(before: proxy?.documentContextBeforeInput ?? "")
+        let recent = recentWords
         Self.decoderQueue.async {
             guard let decoder = Self.loadDecoder() else { return }
             let started = Date()
-            let result = decoder.decode(taps)
+            let result = decoder.decode(taps, context: Self.context(previous, recent: recent, lexicon: decoder.lexicon))
             let ms = Int(Date().timeIntervalSince(started) * 1000)
             DispatchQueue.main.async {
                 KeyLog.note("decoder", [
@@ -744,6 +749,23 @@ final class KeyboardModel {
         let before = proxy?.documentContextBeforeInput ?? ""
         word = String(before.reversed().prefix { $0.isLetter || $0 == "'" || $0 == "’" }.reversed())
         let insideWord = proxy?.documentContextAfterInput?.first?.isLetter == true
+        let previous = previousWord(before: before)
+        let recent = recentWords
+        // Before a letter of the next word: the words likeliest after the last one.
+        if word.isEmpty, !insideWord, before.last?.isWhitespace == true, !Self.decoderFailed, !before.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let capital = previous.sentenceStart && proxy?.autocapitalizationType != UITextAutocapitalizationType.none
+            Self.decoderQueue.async { [weak self] in
+                guard let decoder = Self.loadDecoder() else { return }
+                let words = decoder.predictions(Self.context(previous, recent: recent, lexicon: decoder.lexicon))
+                    .map { capital ? $0.prefix(1).uppercased() + $0.dropFirst() : $0 }
+                DispatchQueue.main.async {
+                    guard let self, self.word.isEmpty else { return }
+                    self.suggestionsFrom = "prediction"
+                    self.suggestions = words
+                }
+            }
+            return
+        }
         guard !word.isEmpty, !insideWord else {
             suggestions = []
             return
@@ -754,7 +776,8 @@ final class KeyboardModel {
             let capital = word.first?.isUppercase == true
             Self.decoderQueue.async { [weak self] in
                 guard let decoder = Self.loadDecoder() else { return }
-                let result = decoder.decode(taps, complete: true)
+                let result = decoder.decode(taps, complete: true,
+                                            context: Self.context(previous, recent: recent, lexicon: decoder.lexicon))
                 let words = result.candidates.map { capital ? $0.word.prefix(1).uppercased() + $0.word.dropFirst() : $0.word }
                 var picked: [String] = []
                 for candidate in words where !picked.contains(where: { $0.lowercased() == candidate.lowercased() }) {
@@ -777,8 +800,49 @@ final class KeyboardModel {
         }
     }
 
+    /// The words finished lately, likelier again (newest last).
+    private var recentWords: [String] = []
+
+    /// The word before the one being typed, from the text before it — nil at a sentence's start.
+    private func previousWord(before text: String) -> (word: String?, sentenceStart: Bool) {
+        var rest = Substring(text)
+        while let last = rest.last, last.isLetter || last == "'" || last == "’" || last == "-" { rest = rest.dropLast() }
+        let gap = rest.reversed().prefix { !$0.isLetter && !$0.isNumber }
+        let before = rest.dropLast(gap.count)
+        if before.isEmpty || gap.contains(where: { ".!?…\n".contains($0) }) { return (nil, true) }
+        let word = String(before.reversed().prefix { $0.isLetter || $0 == "'" || $0 == "’" || $0 == "-" }.reversed())
+        return (word.isEmpty ? nil : word, false)
+    }
+
+    /// What the decoder is told of the text around the word: the word before, and the recent ones.
+    private static func context(_ previous: (word: String?, sentenceStart: Bool), recent: [String],
+                                lexicon: Lexicon) -> WordDecoder.Context {
+        var context = WordDecoder.Context()
+        if previous.sentenceStart { context.previous = 0 } else if let word = previous.word { context.previous = lexicon.lookup(word) }
+        context.recent = Set(recent.compactMap { lexicon.lookup($0) })
+        return context
+    }
+
     /// Where the suggestions shown came from, for the log.
     private var suggestionsFrom = ""
+
+    /// A tap that came down near another letter's key: whether the word would have picked that
+    /// one instead — the start of the word with each letter, as the system dictionary knows it. The
+    /// first letter of a word isn't judged: nothing comes before it. Logged only; it types as ever.
+    func shadow(typed: String, other: String, gap: CGFloat, touch: Int, held: Int, travel: CGFloat) {
+        let before = proxy?.documentContextBeforeInput ?? ""
+        let prefix = String(before.reversed().prefix { $0.isLetter }.reversed())
+        guard !prefix.isEmpty else { return }
+        let typedStart = prefix + display(typed), otherStart = prefix + display(other)
+        Suggester.shared.plausibility(of: [typedStart, otherStart]) { counts in
+            let (typedN, otherN) = (counts[0], counts[1])
+            let would = typedN == 0 && otherN > 0 ? other : typed
+            KeyLog.note("shadow", [
+                "touch": touch, "typed": typed, "other": other, "gap": KeyLog.round1(gap), "prefix": prefix,
+                "typed_n": typedN, "other_n": otherN, "would": would, "held_ms": held, "travel": KeyLog.round1(travel),
+            ])
+        }
+    }
 
     /// The dictionary loaded before the first key is touched.
     func warmUp() {

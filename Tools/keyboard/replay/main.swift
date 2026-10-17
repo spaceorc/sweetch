@@ -9,7 +9,10 @@ import Foundation
 
 struct Export: Decodable {
     struct Tap: Decodable { let char: String; let x: Double; let y: Double; let layout: String; let deliberate: Bool }
-    struct Word: Decodable { let kind: String; let taps: [Tap]; let truth: String; let typed_is_word: Bool? }
+    struct Word: Decodable {
+        let kind: String; let taps: [Tap]; let truth: String; let typed_is_word: Bool?
+        let previous: String?; let sentence_start: Bool?
+    }
     let layouts: [String: [[Value]]]
     let words: [Word]
     enum Value: Decodable {
@@ -32,8 +35,10 @@ let export = try JSONDecoder().decode(Export.self, from: Data(contentsOf: URL(fi
 let keys: [String: [WordDecoder.Key]] = export.layouts.mapValues { rows in
     rows.map { WordDecoder.Key(letter: Character($0[0].text), frame: CGRect(x: $0[1].number, y: $0[2].number, width: $0[3].number, height: $0[4].number)) }
 }
-let decoder = WordDecoder(lexicon: lexicon)
+let bigrams = args.contains("--no-context") ? nil : Bigrams(url: URL(fileURLWithPath: args[1]).deletingLastPathComponent().appendingPathComponent("Bigrams.bin"))
+let decoder = WordDecoder(lexicon: lexicon, bigrams: bigrams)
 if let i = args.firstIndex(of: "--threshold"), i + 1 < args.count, let t = Float(args[i + 1]) { decoder.threshold = t }
+if let i = args.firstIndex(of: "--language"), i + 1 < args.count, let l = Float(args[i + 1]) { decoder.costs.language = l }
 
 var cleanTotal = 0, falseCorrections = 0, cleanTop = 0, typosLeft = 0
 var fixedTotal = 0, fixedRight = 0, fixedWrong = 0, fixedTop3 = 0
@@ -42,7 +47,9 @@ var lines: [String] = []
 for word in export.words where word.taps.count >= 2 {
     let taps = word.taps.map { WordDecoder.Tap(point: CGPoint(x: $0.x, y: $0.y), keys: keys[$0.layout] ?? [], deliberate: $0.deliberate) }
     let started = Date()
-    let result = decoder.decode(taps)
+    var context = WordDecoder.Context()
+    if word.sentence_start == true { context.previous = 0 } else if let previous = word.previous { context.previous = lexicon.lookup(previous) }
+    let result = decoder.decode(taps, context: context)
     seconds += Date().timeIntervalSince(started)
     let truth = word.truth.lowercased()
     let typed = word.taps.map(\.char).joined()

@@ -54,11 +54,44 @@ final class WordDecoder {
     }
 
     let lexicon: Lexicon
+    /// Words likelier after others; without it, only how common each word is counts.
+    let bigrams: Bigrams?
     var costs = Costs()
     /// LatinIME's "modest" autocorrection threshold on its normalised score.
     var threshold: Float = 0.185
 
-    init(lexicon: Lexicon) { self.lexicon = lexicon }
+    init(lexicon: Lexicon, bigrams: Bigrams? = nil) {
+        self.lexicon = lexicon
+        self.bigrams = bigrams
+    }
+
+    /// The word before, for context: its lexicon node (0: a sentence starts), and the words typed
+    /// lately (their nodes), which are likelier again.
+    struct Context {
+        var previous: Int?
+        var recent: Set<Int> = []
+    }
+
+    /// How common a word is here, 0–255: its own frequency, lifted toward 255 by how much likelier
+    /// it is after the word before (LatinIME's bigram scale: 16.5 steps between the two).
+    func likelihood(_ node: Int, _ context: Context) -> Float {
+        let frequency = Float(lexicon.frequency(node))
+        var lift = 0
+        if let previous = context.previous, let bigrams { lift = bigrams.weight(of: node, after: previous) }
+        if context.recent.contains(node) { lift = max(lift, 4) }
+        guard lift > 0 else { return frequency }
+        return frequency + Float(lift + 1) * (255 - frequency) / 16.5
+    }
+
+    /// The likeliest next words before a letter is typed: those seen after the word before.
+    func predictions(_ context: Context, limit: Int = 3) -> [String] {
+        guard let previous = context.previous, let bigrams else { return [] }
+        return bigrams.next(after: previous, limit: 24)
+            .map { ($0.word, likelihood($0.word, context)) }
+            .sorted { $0.1 > $1.1 }
+            .prefix(limit)
+            .map { lexicon.word(at: $0.0) }
+    }
 
     private struct Hypothesis {
         var node: Int
@@ -124,7 +157,7 @@ final class WordDecoder {
     }
 
     /// `complete`: also words the taps so far begin — for suggestions while the word is typed.
-    func decode(_ taps: [Tap], complete: Bool = false) -> Result {
+    func decode(_ taps: [Tap], complete: Bool = false, context: Context = Context()) -> Result {
         let spreads = taps.map(spread)
         let literal = String(spreads.map(\.landed))
         let literalNode = lexicon.lookup(literal)
@@ -186,7 +219,7 @@ final class WordDecoder {
         func consider(_ node: Int, _ cost: Float, _ edits: Int, _ path: [UInt8]) {
             let frequency = Int(lexicon.frequency(node))
             guard frequency > 0 else { return }
-            let total = cost + costs.language * Float(255 - frequency) / 255
+            let total = cost + costs.language * (255 - likelihood(node, context)) / 255
             if total < best[node]?.cost ?? .infinity {
                 best[node] = Candidate(word: lexicon.word(path, node: node), cost: total, edits: edits, frequency: frequency)
             }

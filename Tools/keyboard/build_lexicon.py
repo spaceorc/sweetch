@@ -74,10 +74,9 @@ def read_list(lang):
     return words[:KEEP[lang]]
 
 
-def personal_words():
-    """The user's words: how often they used them, as they wrote them most often, and how many of
-    those uses were typed (a typed word may be a typo; dictated ones are spelled right)."""
-    texts, typed = [], []
+def personal_texts():
+    """What the user dictated and what Wispr Flow wrote for them — their own sentences."""
+    texts = []
     for path in SUPPORT.glob("dictation/*/session.json"):
         try:
             texts.append(json.loads(path.read_text()).get("text") or "")
@@ -89,6 +88,13 @@ def personal_words():
             texts.append(entry.get("editedText") or entry.get("formattedText") or "")
         except (OSError, ValueError):
             pass
+    return texts
+
+
+def personal_words():
+    """The user's words: how often they used them, as they wrote them most often, and how many of
+    those uses were typed (a typed word may be a typo; dictated ones are spelled right)."""
+    texts, typed = personal_texts(), []
     for path in SUPPORT.glob("keyboard/*.jsonl"):
         for line in path.open(encoding="utf-8"):
             if '"e":"word"' in line:
@@ -121,13 +127,20 @@ def casing(written):
 
 
 def build(entries):
-    """A trie over the keys, nodes in breadth-first order so each node's children are contiguous."""
+    """A trie over the keys, nodes in breadth-first order so each node's children are contiguous.
+    Each word's node index is its id (the bigrams refer to words by it; the root, 0, stands for a
+    sentence's start)."""
     root = {"children": {}, "frequency": 0, "flags": 0}
     for key, (frequency, flags) in entries.items():
         node = root
         for letter in key:
             node = node["children"].setdefault(letter, {"children": {}, "frequency": 0, "flags": 0})
         node["frequency"], node["flags"] = frequency, flags
+    for key in entries:
+        node = root
+        for letter in key:
+            node = node["children"][letter]
+        node["key"] = key
     order, labels = [root], [0]
     first, count = [], []
     i = 0
@@ -141,6 +154,52 @@ def build(entries):
             labels.append(ALPHABET.index(letter))
         i += 1
     return order, labels, first, count
+
+
+SENTENCE = re.compile(r"[.!?…\n]+")
+
+
+def bigrams(ids):
+    """(previous word id, word id) → weight 0–15: how much likelier the word is after that one.
+    The root's id, 0, is a sentence's start. From the user's own sentences (the more often a pair,
+    the heavier) and the general lists' top three next words for each word."""
+    weights = {}
+    pairs = collections.Counter()
+    for text in personal_texts():
+        for sentence in SENTENCE.split(text):
+            previous = 0
+            for token in TOKEN.findall(sentence):
+                key = token.replace("’", "'").lower()
+                node = ids.get(key)
+                if node is not None and previous is not None:
+                    pairs[(previous, node)] += 1
+                previous = node
+    for pair, n in pairs.items():
+        weights[pair] = min(15, 5 + int(3 * math.log2(n)))
+    for lang in ("ru", "en"):
+        word = None
+        for line in source(lang).open(encoding="utf-8"):
+            if line.startswith(" word="):
+                word = ids.get(line[6:].rsplit(",f=", 1)[0].replace("’", "'").lower())
+            elif line.startswith("  bigram=") and word is not None:
+                name, rank = line[9:].rstrip("\n").rsplit(",f=", 1)
+                node = ids.get(name.replace("’", "'").lower())
+                if node is not None:
+                    pair = (word, node)
+                    weights[pair] = max(weights.get(pair, 0), {1: 8, 2: 6, 3: 4}.get(int(rank), 4))
+    return weights
+
+
+def write_bigrams(weights, path):
+    """"SWBG" u32 version, u32 count, then sorted by (previous, word): u32 previous[], u32 word[],
+    u8 weight[]."""
+    items = sorted(weights.items())
+    data = bytearray(b"SWBG") + struct.pack("<II", 1, len(items))
+    data += struct.pack(f"<{len(items)}I", *(p for (p, _), _ in items))
+    data += struct.pack(f"<{len(items)}I", *(w for (_, w), _ in items))
+    data += bytes(weight for _, weight in items)
+    path.write_bytes(bytes(data))
+    return len(data)
 
 
 def main():
@@ -177,6 +236,7 @@ def main():
             added += 1
 
     order, labels, first, count = build(entries)
+    ids = {node["key"]: i for i, node in enumerate(order) if "key" in node}
     data = bytearray(b"SWLX") + struct.pack("<I", 1)
     data += struct.pack("<I", len(ALPHABET)) + b"".join(struct.pack("<I", ord(c)) for c in ALPHABET)
     data += struct.pack("<I", len(order))
@@ -189,6 +249,10 @@ def main():
         data += struct.pack("<H", len(k)) + k + struct.pack("<H", len(w)) + w
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_bytes(bytes(data))
+    weights = bigrams(ids)
+    bigram_path = output.with_name("Bigrams.bin")
+    size = write_bigrams(weights, bigram_path)
+    print(f"{bigram_path}: {len(weights)} word pairs, {size / 1e6:.1f} MB")
     print(f"{output}: {len(entries)} words ({general} general, {boosted} of them yours, {added} only yours), "
           f"{len(order)} nodes, {len(data) / 1e6:.1f} MB")
 

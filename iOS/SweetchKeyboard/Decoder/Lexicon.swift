@@ -98,6 +98,25 @@ final class Lexicon {
         return frequency(node) > 0 ? node : nil
     }
 
+    /// The word a node ends: its letters found by walking up from it — nodes are breadth-first,
+    /// so a node's parent is the one whose children span it.
+    func word(at node: Int) -> String {
+        var path: [UInt8] = []
+        var current = node
+        while current != 0 {
+            path.append(label(current))
+            // The parent: the last node whose first child is at or before this one.
+            var low = 0, high = current
+            while low < high {
+                let mid = (low + high + 1) / 2
+                if firstChild(mid) <= current, childCount(mid) > 0 || firstChild(mid) <= current { low = mid } else { high = mid - 1 }
+            }
+            while low > 0, !(firstChild(low) <= current && current < firstChild(low) + childCount(low)) { low -= 1 }
+            current = low
+        }
+        return word(path.reversed(), node: node)
+    }
+
     /// A word spelled by its letters, written as the lexicon writes it.
     func word(_ path: [UInt8], node: Int) -> String {
         let lower = String(path.map { alphabet[Int($0)] })

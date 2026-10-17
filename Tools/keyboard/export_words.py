@@ -53,21 +53,36 @@ def examples(events):
             i -= 1
         return i
 
+    def previous_word(start):
+        """The word before the one at `start`, and whether a sentence starts there."""
+        text = "".join(t["char"] if isinstance(t, dict) else t for t in buffer[:start])
+        i = len(text)
+        while i > 0 and not (text[i - 1].isalpha() or text[i - 1].isdigit()):
+            i -= 1
+        gap = text[i:]
+        if i == 0 or any(c in ".!?…\n" for c in gap):
+            return None, True
+        j = i
+        while j > 0 and (text[j - 1].isalpha() or text[j - 1] in "'’-"):
+            j -= 1
+        return text[j:i], False
+
     def finish():
         start = word_start()
         letters = buffer[start:]
         if not letters:
             return
+        previous, sentence_start = previous_word(start)
         truth = "".join(t["char"] for t in letters)
         taps = attempts.pop(start, None)
         if taps is None:
-            finished[start] = {"kind": "clean", "taps": letters, "truth": truth}
+            finished[start] = {"kind": "clean", "taps": letters, "truth": truth, "previous": previous, "sentence_start": sentence_start}
         else:
             literal = "".join(t["char"] for t in taps)
             if literal.lower() == truth.lower():
-                finished[start] = {"kind": "clean", "taps": letters, "truth": truth}
+                finished[start] = {"kind": "clean", "taps": letters, "truth": truth, "previous": previous, "sentence_start": sentence_start}
             elif damerau(literal.lower(), truth.lower()) <= 2:
-                finished[start] = {"kind": "fixed", "taps": taps, "truth": truth}
+                finished[start] = {"kind": "fixed", "taps": taps, "truth": truth, "previous": previous, "sentence_start": sentence_start}
 
     def flush():
         finish()
@@ -145,7 +160,8 @@ def examples(events):
                     buffer.pop()
             taps = attempts.pop(start, None)
             if taps and damerau("".join(t["char"] for t in taps).lower(), e["suggestion"].lower()) <= 2:
-                finished[start] = {"kind": "fixed", "taps": taps, "truth": e["suggestion"]}
+                previous, sentence_start = previous_word(start)
+                finished[start] = {"kind": "fixed", "taps": taps, "truth": e["suggestion"], "previous": previous, "sentence_start": sentence_start}
             buffer.extend(e.get("suggestion", "") + " ")
         elif kind in ("heard", "autofix"):
             finish()

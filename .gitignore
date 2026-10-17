@@ -10,3 +10,4 @@ iOS/*.xcodeproj
 iOS/build/
 iOS/build-sim/
 iOS/SweetchKeyboard/Lexicon.bin
+iOS/SweetchKeyboard/Bigrams.bin
