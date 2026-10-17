@@ -19,6 +19,11 @@ final class KeyboardViewController: UIInputViewController {
         super.viewDidLoad()
         EventSpy.install()
         KeyLog.note("load")
+        let shared = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.spaceorc.sweetch")
+        KeyLog.note("app-group", [
+            "available": shared != nil,
+            "app_wrote": shared.flatMap { try? String(contentsOf: $0.appendingPathComponent("from-app.txt"), encoding: .utf8) } ?? "",
+        ])
         strip.model = model
         for part in [strip, surface] as [UIView] {
             part.translatesAutoresizingMaskIntoConstraints = false

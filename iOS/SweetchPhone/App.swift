@@ -4,6 +4,10 @@ import SwiftUI
 struct SweetchPhoneApp: App {
     init() {
         LivePreview.prepare()
+        // The folder shared with the keyboard, if the signing allows one: a file to show it works.
+        if let shared = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.spaceorc.sweetch") {
+            try? Data("\(Date())".utf8).write(to: shared.appendingPathComponent("from-app.txt"))
+        }
         // What earlier builds traced here (see the keyboard's KeyLog for what's kept now).
         try? FileManager.default.removeItem(at: URL.documentsDirectory.appendingPathComponent("trace.log"))
         // `--check-servers`: which Mac answers, twice, timed — for trying the choice in the simulator.
