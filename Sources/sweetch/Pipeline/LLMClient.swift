@@ -73,9 +73,13 @@ enum LLMClient {
         var hasAzure: Bool { azureResource != nil && azureKey != nil }
     }
 
+    /// The credentials' text where it isn't bundled — the iPhone's, from its Keychain. Set before
+    /// the first call.
+    nonisolated(unsafe) static var environment: String?
+
     static let config: Config? = {
-        guard let url = Bundle.main.url(forResource: "sweetch", withExtension: "env"),
-              let text = try? String(contentsOf: url, encoding: .utf8) else {
+        guard let text = environment ?? Bundle.main.url(forResource: "sweetch", withExtension: "env")
+            .flatMap({ try? String(contentsOf: $0, encoding: .utf8) }) else {
             log.error("LLM: sweetch.env not found in app bundle")
             return nil
         }

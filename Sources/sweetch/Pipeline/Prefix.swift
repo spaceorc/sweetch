@@ -52,6 +52,10 @@ struct Prefix {
     The app is unknown: the context is a screenshot of the user's phone. Also name the app it shows,     by its usual name, or null when unsure. The screenshot comes as its text, so go by the app's own wording: Telegram — "last seen", "online", "Message" in the input, "Outgoing Call"; Slack — "Add a reply", "Message #channel", "Thread", "Also send to"; WhatsApp — "Type a message" (rarely "online"), "tap here for contact info"; Messages (iMessage) — "iMessage", "Text Message", "Delivered", "Read"; also Claude, Safari, Notes, Mail:     {"terms": ["...", "..."], "app": "..."}
     """
 
+    /// The speaker's name, for the model and to keep them out of the terms: the Mac's user's full
+    /// name; the iPhone sets it from the Mac's.
+    nonisolated(unsafe) static var userName = NSFullUserName()
+
     /// What the Mac's dictation server calls an app it can't see.
     static let unknownApp = "iPhone"
 
@@ -89,7 +93,7 @@ struct Prefix {
         Task {
             defer { done.signal() }
             do {
-                let system = system.replacingOccurrences(of: "USER_NAME", with: NSFullUserName()) + (namingTheApp ? nameTheApp : "")
+                let system = system.replacingOccurrences(of: "USER_NAME", with: Prefix.userName) + (namingTheApp ? nameTheApp : "")
                 let raw = try await LLMClient.complete(system: system, messages: [["role": "user", "content": context]],
                                                        maxTokens: 200)
                 let reply = LLMJSON.object(raw)
@@ -108,7 +112,7 @@ struct Prefix {
     /// Whether a term is the speaker: their first name as a word in it, in Latin or Cyrillic letters
     /// and any case ending. Someone who only shares the surname isn't.
     private static func isSpeaker(_ term: String) -> Bool {
-        guard let first = NSFullUserName().split(separator: " ").first.map(String.init), first.count >= 2 else { return false }
+        guard let first = Prefix.userName.split(separator: " ").first.map(String.init), first.count >= 2 else { return false }
         return [first, cyrillic(first)].contains { name in
             let stem = NSRegularExpression.escapedPattern(for: String(name.prefix(max(3, name.count - 1))))
             return term.range(of: "\\b\(stem)\\w*\\b", options: [.regularExpression, .caseInsensitive]) != nil

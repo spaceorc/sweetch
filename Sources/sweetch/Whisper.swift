@@ -6,34 +6,11 @@ import Foundation
 ///
 /// The server is sweetch's child, on a loopback port. One left behind by a sweetch that was killed
 /// is still the same server and is simply used.
-enum Whisper {
+extension Whisper {
     static let model = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".cache/whisper-cpp/ggml-large-v3-turbo-q8_0.bin")
     private static let port = 8178
     private static let base = URL(string: "http://127.0.0.1:\(port)")!
-
-    struct Word {
-        let text: String
-        let probability: Double
-    }
-
-    struct Heard {
-        let text: String
-        /// The language it was heard in: the one detected, or the one it was told.
-        let language: String?
-        /// Detection's probability for each language, when it detected.
-        let languageProbabilities: [String: Double]
-        let words: [Word]
-        let json: URL
-    }
-
-    /// Short silences make whisper "hear" the closing lines of the subtitled videos it was trained
-    /// on. When that's all a recording produced, nothing was said.
-    private static let phantomPhrases: Set<String> = [
-        "продолжение следует", "субтитры сделал dimatorzok", "субтитры создавал dimatorzok",
-        "редактор субтитров асемкин корректор аегорова", "спасибо за просмотр",
-        "thank you", "thanks for watching", "you",
-    ]
 
     /// The missing pieces, in words, or nil when everything is in place.
     static func missing() -> String? {
@@ -159,42 +136,6 @@ enum Whisper {
         }.resume()
         done.wait()
         return try result.get()
-    }
-
-    /// The server's "words" are word pieces: a piece that starts with a space opens a word, the rest
-    /// continue it. A word is as certain as its least certain piece. Punctuation is part of the text,
-    /// not of the word, so it is trimmed from what is reported and does not count towards the
-    /// probability.
-    private static func words(fromPieces pieces: [[String: Any]]) -> [Word] {
-        var grouped: [[(String, Double)]] = []
-        for token in pieces {
-            guard let piece = token["word"] as? String, !piece.isEmpty, !piece.hasPrefix("[_") else { continue }
-            if piece.hasPrefix(" ") || grouped.isEmpty { grouped.append([]) }
-            grouped[grouped.count - 1].append((piece, token["probability"] as? Double ?? 1))
-        }
-        return grouped.compactMap { word in
-            let text = word.map(\.0).joined()
-                .trimmingCharacters(in: .whitespaces)
-                .trimmingCharacters(in: CharacterSet(charactersIn: ".,!?;:\"'()«»…"))
-            let scored = word.filter { $0.0.contains { $0.isLetter || $0.isNumber } }.map(\.1)
-            guard !text.isEmpty, let least = scored.min() else { return nil }
-            return Word(text: text, probability: least)
-        }
-    }
-
-    /// Whisper sometimes hears a phrase, then hears it all over again. Segments that repeat the ones
-    /// before them, in full, go.
-    private static func withoutRepeat(_ segments: [String]) -> [String] {
-        let n = segments.count
-        guard n >= 2, n % 2 == 0 else { return segments }
-        let half = n / 2
-        let norm = { (s: [String]) in s.joined().lowercased().filter { $0.isLetter || $0.isNumber } }
-        return norm(Array(segments[..<half])) == norm(Array(segments[half...])) ? Array(segments[..<half]) : segments
-    }
-
-    private static func isPhantom(_ text: String) -> Bool {
-        let bare = text.lowercased().filter { $0.isLetter || $0.isNumber || $0 == " " }.trimmingCharacters(in: .whitespaces)
-        return bare.isEmpty || phantomPhrases.contains(bare)
     }
 
     /// A Homebrew tool by name. Apps launched by launchd don't get the shell's PATH.
