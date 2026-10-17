@@ -159,7 +159,7 @@ final class KeyboardModel {
     private(set) var suggestions: [String] = [] {
         didSet {
             guard suggestions != oldValue else { return }
-            if !suggestions.isEmpty { KeyLog.note("suggestions", ["for": word, "words": suggestions]) }
+            if !suggestions.isEmpty { KeyLog.note("suggestions", ["for": word, "words": suggestions, "from": suggestionsFrom]) }
             changed()
         }
     }
@@ -622,7 +622,7 @@ final class KeyboardModel {
         let next = proxy?.documentContextAfterInput?.first
         let spaced = next == nil || !(next!.isWhitespace || next!.isPunctuation)
         insert(spaced ? suggestion + " " : suggestion)
-        log("choose", ["word": word, "suggestion": suggestion, "spaced": spaced])
+        log("choose", ["word": word, "suggestion": suggestion, "spaced": spaced, "from": suggestionsFrom])
         KeyLog.note("word", ["word": suggestion, "boundary": "suggestion"])
         spaceIsOurs = spaced
         lastSpaceAt = Date()
@@ -661,17 +661,22 @@ final class KeyboardModel {
 
     /// The decoder, in the shadow: what it would type for the word just finished is logged; the
     /// word stays as typed.
+    /// The decoder, with its lexicon mapped in on first use. Call on `decoderQueue`.
+    private static func loadDecoder() -> WordDecoder? {
+        if decoder == nil, !decoderFailed {
+            if let url = Bundle.main.url(forResource: "Lexicon", withExtension: "bin"), let lexicon = Lexicon(url: url) {
+                decoder = WordDecoder(lexicon: lexicon)
+            } else {
+                decoderFailed = true
+                DispatchQueue.main.async { KeyLog.note("decoder-missing") }
+            }
+        }
+        return decoder
+    }
+
     private func shadowDecode(_ word: String, taps: [WordDecoder.Tap]) {
         Self.decoderQueue.async {
-            if Self.decoder == nil, !Self.decoderFailed {
-                if let url = Bundle.main.url(forResource: "Lexicon", withExtension: "bin"), let lexicon = Lexicon(url: url) {
-                    Self.decoder = WordDecoder(lexicon: lexicon)
-                } else {
-                    Self.decoderFailed = true
-                    DispatchQueue.main.async { KeyLog.note("decoder-missing") }
-                }
-            }
-            guard let decoder = Self.decoder else { return }
+            guard let decoder = Self.loadDecoder() else { return }
             let started = Date()
             let result = decoder.decode(taps)
             let ms = Int(Date().timeIntervalSince(started) * 1000)
@@ -732,9 +737,9 @@ final class KeyboardModel {
         }
     }
 
-    /// The word before the cursor goes to the suggester, off the main thread: the system dictionary
-    /// is slow to load and slow on a short prefix, and a key must not wait on it. What comes back
-    /// is shown if the word is still the same.
+    /// Suggestions for the word being typed: the decoder's, from where the taps came down, when
+    /// every letter of the word was a tap; the system dictionary's otherwise (and while the decoder
+    /// isn't there). Worked out off the main thread; shown if the word is still the same.
     private func suggest() {
         let before = proxy?.documentContextBeforeInput ?? ""
         word = String(before.reversed().prefix { $0.isLetter || $0 == "'" || $0 == "’" }.reversed())
@@ -744,33 +749,42 @@ final class KeyboardModel {
             return
         }
         let asked = word
+        let taps = wordTaps
+        if wordTapsHold, taps.count >= 2, taps.count == word.filter(\.isLetter).count, !Self.decoderFailed {
+            let capital = word.first?.isUppercase == true
+            Self.decoderQueue.async { [weak self] in
+                guard let decoder = Self.loadDecoder() else { return }
+                let result = decoder.decode(taps, complete: true)
+                let words = result.candidates.map { capital ? $0.word.prefix(1).uppercased() + $0.word.dropFirst() : $0.word }
+                var picked: [String] = []
+                for candidate in words where !picked.contains(where: { $0.lowercased() == candidate.lowercased() }) {
+                    picked.append(candidate)
+                    if picked.count == 3 { break }
+                }
+                DispatchQueue.main.async {
+                    guard let self, self.word == asked else { return }
+                    self.suggestionsFrom = "decoder"
+                    self.suggestions = picked.filter { $0.lowercased() != asked.lowercased() }.count > 0 ? picked : []
+                }
+            }
+            return
+        }
         Suggester.shared.suggest(for: asked) { [weak self] words, seconds in
             guard let self, self.word == asked else { return }
             if seconds > 0.05 { KeyLog.note("suggest-slow", ["ms": Int(seconds * 1000), "for": asked]) }
+            self.suggestionsFrom = "dictionary"
             self.suggestions = words
         }
     }
 
-    /// A tap that came down near another letter's key: whether the word would have picked that
-    /// one instead — the start of the word with each letter, as the system dictionary knows it. The
-    /// first letter of a word isn't judged: nothing comes before it. Logged only; it types as ever.
-    func shadow(typed: String, other: String, gap: CGFloat, touch: Int, held: Int, travel: CGFloat) {
-        let before = proxy?.documentContextBeforeInput ?? ""
-        let prefix = String(before.reversed().prefix { $0.isLetter }.reversed())
-        guard !prefix.isEmpty else { return }
-        let typedStart = prefix + display(typed), otherStart = prefix + display(other)
-        Suggester.shared.plausibility(of: [typedStart, otherStart]) { counts in
-            let (typedN, otherN) = (counts[0], counts[1])
-            let would = typedN == 0 && otherN > 0 ? other : typed
-            KeyLog.note("shadow", [
-                "touch": touch, "typed": typed, "other": other, "gap": KeyLog.round1(gap), "prefix": prefix,
-                "typed_n": typedN, "other_n": otherN, "would": would, "held_ms": held, "travel": KeyLog.round1(travel),
-            ])
-        }
-    }
+    /// Where the suggestions shown came from, for the log.
+    private var suggestionsFrom = ""
 
     /// The dictionary loaded before the first key is touched.
-    func warmUp() { Suggester.shared.warmUp() }
+    func warmUp() {
+        Suggester.shared.warmUp()
+        Self.decoderQueue.async { _ = Self.loadDecoder() }   // the lexicon mapped before the first word
+    }
 
     // MARK: Dictation
 

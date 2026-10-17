@@ -123,7 +123,8 @@ final class WordDecoder {
         return 1.2
     }
 
-    func decode(_ taps: [Tap]) -> Result {
+    /// `complete`: also words the taps so far begin — for suggestions while the word is typed.
+    func decode(_ taps: [Tap], complete: Bool = false) -> Result {
         let spreads = taps.map(spread)
         let literal = String(spreads.map(\.landed))
         let literalNode = lexicon.lookup(literal)
@@ -195,6 +196,21 @@ final class WordDecoder {
             if hypothesis.edits < costs.maxEdits {
                 for child in lexicon.children(hypothesis.node) {
                     consider(child, hypothesis.cost + costs.omission, hypothesis.edits + 1, hypothesis.path + [lexicon.label(child)])
+                }
+            }
+        }
+        // Words the taps begin: the nearest ends below the best places reached, a little dearer per
+        // letter not yet typed (cheaper than LatinIME's: typing a word's start is no error).
+        if complete {
+            for hypothesis in beams[taps.count].sorted(by: { $0.cost < $1.cost }).prefix(12) {
+                var queue: [(node: Int, path: [UInt8], depth: Int)] = [(hypothesis.node, hypothesis.path, 0)]
+                var head = 0
+                while head < queue.count, head < 400 {
+                    let (node, path, depth) = queue[head]
+                    head += 1
+                    if depth > 0 { consider(node, hypothesis.cost + 0.2 + 0.01 * Float(depth - 1), hypothesis.edits, path) }
+                    guard depth < 8 else { continue }
+                    for child in lexicon.children(node) { queue.append((child, path + [lexicon.label(child)], depth + 1)) }
                 }
             }
         }
