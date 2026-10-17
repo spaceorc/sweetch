@@ -52,7 +52,11 @@ struct Server {
     static func name(of mac: String) -> String {
         let hosts = macs.first { $0.first == mac }?.compactMap { URL(string: $0)?.host } ?? []
         let host = hosts.first { $0.hasSuffix(".local") } ?? hosts.first ?? mac
-        return host.replacingOccurrences(of: ".local", with: "").replacingOccurrences(of: "ivans-", with: "")
+        let short = host.replacingOccurrences(of: ".local", with: "").replacingOccurrences(of: "ivans-", with: "")
+        // As people say them: "macbook-pro" is a MacBook, "mac-mini" a Mac mini.
+        if short.contains("macbook") { return "MacBook" }
+        if short.contains("mini") { return "Mac mini" }
+        return short
     }
 
     /// The preferred Mac that answers, passing over those that didn't lately; nil when none does.

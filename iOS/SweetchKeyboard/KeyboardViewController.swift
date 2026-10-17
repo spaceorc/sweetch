@@ -746,7 +746,8 @@ final class KeyboardModel {
 
     private func showStatus() {
         let names = Server.macs.map(\.[0]).filter { connected[$0] != nil }.map(Server.name)
-        status = names.isEmpty ? "no Mac in reach" : "ready · " + names.joined(separator: ", ") + " — hold the Action Button to dictate"
+        // Short enough to fit: which Macs the keyboard hears from.
+        status = names.isEmpty ? "○ no Mac in reach" : "● " + names.joined(separator: " · ")
     }
 
     /// With a space before it when the field's text runs right up to the cursor; the layout then
