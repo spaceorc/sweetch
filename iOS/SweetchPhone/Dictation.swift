@@ -142,7 +142,15 @@ final class Dictation: ObservableObject {
         // The experiment: heard on the phone too, alongside the Mac, while the app is open (iOS gives
         // an app in the background no GPU).
         if PhoneWhisper.shared.enabled, UIApplication.shared.applicationState == .active {
-            PhoneWhisper.shared.hear(recording) { _, _ in }
+            let audioSeconds = Double((try? AVAudioFile(forReading: recording))?.length ?? 0) / 16_000
+            PhoneWhisper.shared.hear(recording) { text, seconds in
+                // To the Mac's log beside the Mac's own hearing of the same recording.
+                Task {
+                    let event: [String: Any] = ["e": "phone-whisper", "t": Date().timeIntervalSince1970, "run": "app",
+                                                "text": text, "seconds": seconds, "audio_seconds": audioSeconds]
+                    _ = await Server.reachable()?.keyboardLog([event], batch: UUID().uuidString)
+                }
+            }
         }
         phase = .recognizing
         live?.finish()
