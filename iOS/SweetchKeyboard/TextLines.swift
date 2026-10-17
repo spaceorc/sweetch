@@ -11,12 +11,27 @@ import UIKit
 struct TextLines {
     let text: [Character]
     let lines: [Range<Int>]
-    private let font: UIFont
+    /// Where each character ends, from the text's start: a run's width is a subtraction — the text
+    /// is measured a letter at a time, once, not a substring per question (which, fitting the
+    /// field's width, ran the keyboard out of memory).
+    private let ends: [CGFloat]
 
     init(_ text: String, width: CGFloat, font: UIFont) {
         self.text = Array(text)
-        self.font = font
-        lines = Self.wrap(self.text, width: width, font: font)
+        var ends = [CGFloat](repeating: 0, count: self.text.count + 1)
+        for (i, character) in self.text.enumerated() { ends[i + 1] = ends[i] + Self.advance(character, font: font) }
+        self.ends = ends
+        lines = Self.wrap(self.text, width: width, ends: ends)
+    }
+
+    private static let advances = NSCache<NSString, NSNumber>()
+
+    private static func advance(_ character: Character, font: UIFont) -> CGFloat {
+        let key = "\(font.pointSize)|\(character)" as NSString
+        if let known = advances.object(forKey: key) { return CGFloat(known.doubleValue) }
+        let width = autoreleasepool { (String(character) as NSString).size(withAttributes: [.font: font]).width }
+        advances.setObject(NSNumber(value: Double(width)), forKey: key)
+        return width
     }
 
     /// Where the cursor at `index` goes `count` lines down (negative: up), keeping its distance
@@ -47,19 +62,19 @@ struct TextLines {
         return lines.lastIndex { $0.lowerBound <= index } ?? 0
     }
 
+    /// The whole text's width, in a line.
+    var totalWidth: CGFloat { ends.last ?? 0 }
+
     private func width(_ range: Range<Int>) -> CGFloat {
-        guard !range.isEmpty else { return 0 }
-        return (String(text[range]) as NSString).size(withAttributes: [.font: font]).width
+        range.isEmpty ? 0 : ends[range.upperBound] - ends[range.lowerBound]
     }
 
     /// Greedy wrapping by words, as UIKit does: a word that doesn't fit starts the next line, the
     /// spaces after a word hang at the end of its line, a word wider than the line is broken.
-    private static func wrap(_ text: [Character], width: CGFloat, font: UIFont) -> [Range<Int>] {
+    private static func wrap(_ text: [Character], width: CGFloat, ends: [CGFloat]) -> [Range<Int>] {
         var lines: [Range<Int>] = []
         var start = 0, i = 0
-        func measure(_ r: Range<Int>) -> CGFloat {
-            (String(text[r]) as NSString).size(withAttributes: [.font: font]).width
-        }
+        func measure(_ r: Range<Int>) -> CGFloat { r.isEmpty ? 0 : ends[r.upperBound] - ends[r.lowerBound] }
         while i <= text.count {
             if i == text.count || text[i] == "\n" {
                 lines.append(contentsOf: wrapParagraph(start..<i, text: text, width: width, measure: measure))
@@ -128,18 +143,15 @@ final class FieldWidth: @unchecked Sendable {
     private var moves: [String: [Move]] = [:]   // by process ("pid:<n>") and "all"
     private var fitted: [String: CGFloat] = [:]
 
+    private let fittedKey = "fieldWidthFitted"
+
+    /// What was learned, as it was left: fitting again at every start of the keyboard made it run
+    /// out of memory before it could type.
     private init() {
-        queue.async { [self] in
-            let stored = UserDefaults.standard.data(forKey: key)
-                .flatMap { try? JSONDecoder().decode([String: [Move]].self, from: $0) } ?? [:]
-            let font = UIFont.preferredFont(forTextStyle: .body)
-            var fits: [String: CGFloat] = [:]
-            for (bucket, list) in stored where list.count >= Self.enough { fits[bucket] = fit(list, font: font, around: 400) }
-            lock.withLock {
-                moves = stored
-                fitted = fits
-            }
-        }
+        moves = UserDefaults.standard.data(forKey: key)
+            .flatMap { try? JSONDecoder().decode([String: [Move]].self, from: $0) } ?? [:]
+        fitted = (UserDefaults.standard.dictionary(forKey: fittedKey) as? [String: Double])?
+            .mapValues { CGFloat($0) } ?? [:]
     }
 
     /// The width to wrap at in this app: its own once it has enough moves, else all apps', else
@@ -163,11 +175,14 @@ final class FieldWidth: @unchecked Sendable {
         for bucket in buckets where all[bucket]!.count >= Self.enough {
             fits[bucket] = fit(all[bucket]!, font: font, around: guess)
         }
-        lock.withLock {
+        let kept: [String: CGFloat] = lock.withLock {
             moves = all
             fitted.merge(fits) { $1 }
+            fitted = fitted.filter { all[$0.key] != nil }
+            return fitted
         }
         if let data = try? JSONEncoder().encode(all) { UserDefaults.standard.set(data, forKey: key) }
+        UserDefaults.standard.set(kept.mapValues { Double($0) }, forKey: fittedKey)
         return width(for: process)
     }
 
@@ -178,12 +193,12 @@ final class FieldWidth: @unchecked Sendable {
         var best = guess, bestHits = -1, bestMiss = Int.max
         for width in stride(from: CGFloat(200), through: 480, by: 4) {
             var hits = 0, miss = 0
-            for move in moves {
+            for move in moves { autoreleasepool {
                 let moveFont = move.fontSize.map { font.withSize($0) } ?? font
                 let off = abs(TextLines(move.text, width: width, font: moveFont).move(move.start, lines: move.lines) - move.settled)
                 if off <= 1 { hits += 1 }
                 miss += off
-            }
+            } }
             if hits > bestHits || (hits == bestHits && (miss < bestMiss || (miss == bestMiss && abs(width - guess) < abs(best - guess)))) {
                 best = width
                 bestHits = hits

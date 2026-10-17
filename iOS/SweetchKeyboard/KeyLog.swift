@@ -17,7 +17,8 @@ enum KeyLog {
     /// (its answer lost on the way) drops the copy.
     private static var unsent: (id: String, events: [[String: Any]])?
     private static var flushing: Task<Void, Never>?
-    private static let limit = 20_000
+    /// Events kept while no Mac takes them: a keyboard has little memory to spare.
+    private static let limit = 8_000
 
     static func note(_ event: String, _ fields: [String: Any] = [:]) {
         var entry = fields

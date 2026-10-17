@@ -516,7 +516,7 @@ final class KeyboardModel {
         let now = session!
         let chars = now.layout.text
         // A line of this field in characters, about: the width over the text's mean letter.
-        let mean = max((String(chars) as NSString).size(withAttributes: [.font: now.font]).width / CGFloat(max(chars.count, 1)), 4)
+        let mean = max(now.layout.totalWidth / CGFloat(max(chars.count, 1)), 4)
         let lineChars = max(Int((now.width / mean).rounded()), 8)
         var target = now.layout.move(now.index, lines: lines)
         var step = target - now.index
