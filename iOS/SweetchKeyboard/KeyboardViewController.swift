@@ -205,6 +205,8 @@ final class KeyboardModel {
     private var proxy: UITextDocumentProxy? { controller?.textDocumentProxy }
 
     func appeared() {
+        wordTaps = []
+        wordTapsHold = true
         if let awaySince, Date().timeIntervalSince(awaySince) > 300 { field.forget() }
         awaySince = nil
         observeField()
@@ -248,9 +250,12 @@ final class KeyboardModel {
         layout.isLetters && shift != .off ? key.uppercased() : key
     }
 
-    func typeCharacter(_ key: String) {
+    func typeCharacter(_ key: String, tap: WordDecoder.Tap? = nil) {
         autoFixed = nil
         let typed = display(key)
+        if typed.first?.isLetter == true {
+            if let tap { wordTaps.append(tap) } else { wordTapsHold = false }
+        }
         if !(typed.first?.isLetter ?? true) { noteWordEnd(typed) }
         if spaceIsOurs, ".,!?:;".contains(typed), proxy?.documentContextBeforeInput?.hasSuffix(" ") == true {
             spaceIsOurs = false
@@ -322,6 +327,7 @@ final class KeyboardModel {
     }
 
     func backspace() {
+        if wordTaps.isEmpty { wordTapsHold = false } else { wordTaps.removeLast() }
         spaceIsOurs = false
         if undoAutoFix() {
             afterTyping()
@@ -431,6 +437,7 @@ final class KeyboardModel {
     private var session: CursorSession?
 
     func setTrackpad(_ on: Bool) {
+        if on { wordTapsHold = false }   // the cursor's going elsewhere in the text
         trackpad = on
         if on {
             observeField()
@@ -609,6 +616,8 @@ final class KeyboardModel {
     /// The word replaced by the suggestion, and a space after it — unless the text goes on right
     /// after it already (a word fixed in the middle of the text), where a space would be a second.
     func choose(suggestion: String) {
+        wordTaps = []
+        wordTapsHold = true
         for _ in word { deleteBackward() }
         let next = proxy?.documentContextAfterInput?.first
         let spaced = next == nil || !(next!.isWhitespace || next!.isPunctuation)
@@ -625,7 +634,11 @@ final class KeyboardModel {
     private func noteWordEnd(_ boundary: String) {
         let before = proxy?.documentContextBeforeInput ?? ""
         var word = String(before.reversed().prefix { $0.isLetter || $0 == "'" || $0 == "’" || $0 == "-" }.reversed())
+        let taps = wordTaps, hold = wordTapsHold
+        wordTaps = []
+        wordTapsHold = true
         guard !word.isEmpty else { return }
+        if hold, taps.count == word.filter(\.isLetter).count, taps.count >= 2 { shadowDecode(word, taps: taps) }
         // A word written with a hyphen, typed without one: put right, and ⌫ next puts it back.
         if !word.contains("-"), let fixed = Hyphens.fix(word) {
             for _ in word { deleteBackward() }
@@ -635,6 +648,41 @@ final class KeyboardModel {
             word = fixed
         }
         KeyLog.note("word", ["word": word, "boundary": boundary])
+    }
+
+    /// The taps that typed the word being typed, in order — while they're all there is to it (no
+    /// letter typed some other way, no cursor moved off the end).
+    private var wordTaps: [WordDecoder.Tap] = []
+    private var wordTapsHold = true
+
+    private static let decoderQueue = DispatchQueue(label: "sweetch.decoder", qos: .utility)
+    nonisolated(unsafe) private static var decoder: WordDecoder?
+    nonisolated(unsafe) private static var decoderFailed = false
+
+    /// The decoder, in the shadow: what it would type for the word just finished is logged; the
+    /// word stays as typed.
+    private func shadowDecode(_ word: String, taps: [WordDecoder.Tap]) {
+        Self.decoderQueue.async {
+            if Self.decoder == nil, !Self.decoderFailed {
+                if let url = Bundle.main.url(forResource: "Lexicon", withExtension: "bin"), let lexicon = Lexicon(url: url) {
+                    Self.decoder = WordDecoder(lexicon: lexicon)
+                } else {
+                    Self.decoderFailed = true
+                    DispatchQueue.main.async { KeyLog.note("decoder-missing") }
+                }
+            }
+            guard let decoder = Self.decoder else { return }
+            let started = Date()
+            let result = decoder.decode(taps)
+            let ms = Int(Date().timeIntervalSince(started) * 1000)
+            DispatchQueue.main.async {
+                KeyLog.note("decoder", [
+                    "word": word, "literal": result.literal, "literal_is_word": result.literalIsWord,
+                    "correction": result.correction ?? "", "confidence": Double(result.confidence),
+                    "top": result.candidates.prefix(3).map(\.word), "taps": taps.count, "ms": ms,
+                ])
+            }
+        }
     }
 
     /// The last word put right, while the next thing done may still be ⌫ taking it back.
@@ -783,6 +831,8 @@ final class KeyboardModel {
     /// With a space before it when the field's text runs right up to the cursor; the layout then
     /// follows the language of what was said.
     private func insertHeard(_ text: String) {
+        wordTaps = []
+        wordTapsHold = true
         // The same words from a second Mac: one that seemed gone while hearing, and the next heard
         // them again.
         if let lastHeard, lastHeard.text == text, Date().timeIntervalSince(lastHeard.at) < 60 { return }

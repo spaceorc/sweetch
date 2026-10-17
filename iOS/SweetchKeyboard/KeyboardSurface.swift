@@ -78,6 +78,9 @@ final class KeyboardSurface: UIView {
             keys = Self.layOut(model.layout, width: width, globe: showsGlobe)
             keyViews.forEach { $0.removeFromSuperview() }
             keyViews = keys.map { KeyView(spec: $0) }
+            letterKeys = keys.compactMap { key in
+                key.character.flatMap { $0.first?.isLetter == true ? WordDecoder.Key(letter: Character($0.lowercased()), frame: key.frame) : nil }
+            }
             keyViews.forEach(addSubview)
             built = (model.layout, width, showsGlobe)
             // Where every key is: a touch can be measured against any of them later, not only the
@@ -172,6 +175,8 @@ final class KeyboardSurface: UIView {
         var speed: CGFloat = 0
         /// Shift held while a letter was typed.
         var typedWith = false
+        /// The finger slid it onto another key.
+        var slid = false
         /// The page before a page key was touched, and the one it showed.
         var pages: (from: KeyboardModel.Layout, to: KeyboardModel.Layout)?
         /// For the log: where and when the finger came down, and how far it wandered.
@@ -256,6 +261,7 @@ final class KeyboardSurface: UIView {
                 }
             } else if press.key.character != nil, let key = key(at: point), key.character != nil, key != press.key {
                 // Sliding onto another key: that one is meant.
+                press.slid = true
                 KeyLog.note("slide", ["touch": press.touch, "from": KeyLog.name(of: press.key.kind)]
                     .merging(KeyLog.key(key, at: point)) { a, _ in a }.merging(KeyLog.touch(touch, in: self)) { a, _ in a })
                 press.timer?.invalidate()
@@ -384,11 +390,12 @@ final class KeyboardSurface: UIView {
             if let alternates = press.alternates {
                 alternates.removeFromSuperview()
                 if let chosen = alternates.chosen {
-                    model.typeCharacter(chosen == 0 ? character : press.key.alternates[chosen - 1])
+                    model.typeCharacter(chosen == 0 ? character : press.key.alternates[chosen - 1],
+                                        tap: decoderTap(press, deliberate: true))
                 }
             } else {
                 shadow(press, typed: character)
-                model.typeCharacter(character)
+                model.typeCharacter(character, tap: decoderTap(press, deliberate: false))
             }
             for held in presses.values where held.key.kind == .shift { held.typedWith = true }
         case .shift:
@@ -420,6 +427,17 @@ final class KeyboardSurface: UIView {
     /// further, reaching `maxGain` times at three times that speed. 3× from 150 pt/s felt jumpy.
     static let gainSpeed: CGFloat = 250
     static let maxGain: CGFloat = 1.8
+
+    /// The letter keys as the decoder sees them, for the layout drawn.
+    private var letterKeys: [WordDecoder.Key] = []
+
+    /// A tap as the decoder takes it: where it came down, among which keys, and whether the user
+    /// looked (held, slid, or picked from the alternates) — then it's what they meant.
+    private func decoderTap(_ press: Press, deliberate: Bool) -> WordDecoder.Tap {
+        let held = ProcessInfo.processInfo.systemUptime - press.began
+        return WordDecoder.Tap(point: press.start, keys: letterKeys,
+                               deliberate: deliberate || held > 0.35 || press.travel > 6 || press.slid)
+    }
 
     /// How near a tap must come down to another letter's key for the word to have a say.
     static let ambiguous: CGFloat = 9

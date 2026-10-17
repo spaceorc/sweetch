@@ -333,6 +333,19 @@ def cursor_report(events):
         print(f"  learned width now {widths[-1]} pt (guess {moves[-1].get('guess_width')}, font {moves[-1].get('font_size')} pt)")
 
 
+def decoder_report(events):
+    """The decoder in the shadow, on the phone: the words it would have changed, and the time it took."""
+    runs = [e for e in events if e["e"] == "decoder"]
+    if not runs:
+        return
+    changes = [e for e in runs if e.get("correction")]
+    slow = sorted(e.get("ms", 0) for e in runs)
+    print(f"\ndecoder on the phone (shadow): {len(runs)} words, would change {len(changes)}; "
+          f"time median {slow[len(slow) // 2]} ms, worst {slow[-1]} ms")
+    for e in changes[-30:]:
+        print(f"  {e['word']} → {e['correction']}  ({e['confidence']:.2f}; top {', '.join(e.get('top', []))})")
+
+
 def report(events):
     taps, lost = label(events)
     letters = [t for t in taps if t.key.isalpha() and t.layout]
@@ -399,6 +412,7 @@ def report(events):
 
     shadow_report(events)
     cursor_report(events)
+    decoder_report(events)
 
     transitions = collections.Counter((t.prev.key, t.key) for t in misses if t.prev)
     if transitions:

@@ -157,6 +157,7 @@ PHONE_ID  ?= 00008150-000034D81E47401C
 XCODE_DEV  = /Applications/Xcode.app/Contents/Developer
 
 phone:
+	@test -f $(LEXICON) || $(MAKE) --no-print-directory lexicon
 	cd iOS && DEVELOPER_DIR=$(XCODE_DEV) xcodegen generate -q
 	cd iOS && DEVELOPER_DIR=$(XCODE_DEV) xcodebuild -quiet -project SweetchPhone.xcodeproj -scheme SweetchPhone \
 		-destination id=$(PHONE_ID) -derivedDataPath build -allowProvisioningUpdates \
