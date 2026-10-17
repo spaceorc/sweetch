@@ -271,7 +271,9 @@ final class WordDecoder {
             let score = 1 - top.cost / (costs.language + 0.1 * Float(taps.count))
             let distance = Float(Self.damerauLevenshtein(literal.lowercased(), top.word.lowercased()))
             confidence = score * (1 - distance / Float(max(top.word.count, 1)))
-            let mayCorrect = literalNode == nil && literal.count > 1 && !taps.contains(where: \.deliberate)
+            // A short Latin word is an abbreviation more often than a typo ("ux", "pr", "ci").
+            let abbreviation = literal.count <= 3 && literal.unicodeScalars.allSatisfy { $0.isASCII }
+            let mayCorrect = literalNode == nil && literal.count > 1 && !abbreviation && !taps.contains(where: \.deliberate)
             if mayCorrect, confidence >= threshold { correction = top.word }
         }
         return Result(literal: literal, literalIsWord: literalNode != nil, candidates: Array(candidates),

@@ -788,7 +788,7 @@ final class KeyboardModel {
     }
 
     /// A word ended before its correction was worked out — fast typing, a short word: worked out
-    /// now, and put in if nothing was typed after the space or mark meanwhile.
+    /// now, and put in — also when the next word has been begun meanwhile, which stays as typed.
     private func correctLate(_ word: String, taps: [WordDecoder.Tap], boundary: String, before: String) {
         let previous = previousWord(before: String(before.dropLast(word.count)))
         let recent = recentWords, profileNow = profile, keep = keepAsTyped
@@ -797,10 +797,13 @@ final class KeyboardModel {
             let context = Self.context(previous, recent: recent, lexicon: decoder.lexicon, profile: profileNow)
             let (fixed, confidence) = Self.correction(of: word, taps: taps, decoder: decoder, context: context, keep: keep)
             DispatchQueue.main.async {
-                guard let self, let fixed, fixed != word,
-                      (self.proxy?.documentContextBeforeInput ?? "").hasSuffix(word + boundary) else { return }
-                for _ in 0..<(word.count + boundary.count) { self.deleteBackward() }
-                self.insert(fixed + boundary)
+                guard let self, let fixed, fixed != word else { return }
+                // What was typed after: letters of the next word at most.
+                let now = self.proxy?.documentContextBeforeInput ?? ""
+                let next = String(now.reversed().prefix { $0.isLetter }.reversed())
+                guard now.dropLast(next.count).hasSuffix(word + boundary) else { return }
+                for _ in 0..<(word.count + boundary.count + next.count) { self.deleteBackward() }
+                self.insert(fixed + boundary + next)
                 self.log("autocorrect", ["typed": word, "fixed": fixed, "confidence": Double(confidence), "late": true])
                 self.autoFixed = (typed: word, fixed: fixed, boundary: boundary)
             }
