@@ -5,6 +5,7 @@ struct SweetchPhoneApp: App {
     init() {
         LivePreview.prepare()
         Credentials.load()
+        PhoneServer.shared.start()   // the keyboard hears from here what the phone heard itself
         Task { if let mac = await Server.reachable() { await Credentials.refresh(from: mac) } }
         _ = PhoneWhisper.shared   // knows from the start whether the app is in front
         // The folder shared with the keyboard, if the signing allows one: a file to show it works.
@@ -28,7 +29,16 @@ struct SweetchPhoneApp: App {
 
     var body: some Scene {
         WindowGroup {
-            if ProcessInfo.processInfo.arguments.contains("--keyboard-preview") { KeyboardPreview() } else { ContentView() }
+            if ProcessInfo.processInfo.arguments.contains("--keyboard-preview") {
+                KeyboardPreview()
+            } else {
+                ContentView()
+                    // sweetch://dictate — the keyboard's microphone: the big screen, listening at once.
+                    .onOpenURL { url in
+                        guard url.host == "dictate" else { return }
+                        DictationScreen.open()
+                    }
+            }
         }
     }
 }
@@ -105,5 +115,6 @@ struct ContentView: View {
             }
             .navigationTitle("sweetch")
         }
+        .fullScreenCover(isPresented: $dictation.screen) { DictationScreen() }
     }
 }

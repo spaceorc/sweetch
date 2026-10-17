@@ -23,6 +23,8 @@ final class Dictation: ObservableObject {
     @Published private(set) var last: String?
     @Published private(set) var lastSeconds: Double?
     @Published private(set) var problem: String?
+    /// The big dictation screen is up: opened from the keyboard's microphone.
+    @Published var screen = false
 
     private var engine: AVAudioEngine?
     private let tap = Tap()
@@ -38,6 +40,9 @@ final class Dictation: ObservableObject {
     private nonisolated static let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false)!
 
     private init() {}
+
+    /// How loud the microphone is now, 0…1: for the screen's meter.
+    nonisolated var level: Float { tap.level }
 
     /// A test: hear every dictation on the phone, as if no Mac answered.
     static var phoneOnly: Bool { UserDefaults.standard.bool(forKey: "phoneOnly") }
@@ -221,6 +226,7 @@ final class Dictation: ObservableObject {
         }
         localContext = nil
         localDir = nil
+        if let last { PhoneServer.shared.publish(last) }
         try? FileManager.default.removeItem(at: recording)
         self.recording = nil
         await endActivity(showing: .init(phase: problem == nil || last != nil ? .done : .failed,
@@ -265,7 +271,10 @@ final class Dictation: ObservableObject {
         private let lock = NSLock()
         private var file: AVAudioFile?
         private var live: LivePreview?
+        private var loudness: Float = 0
         var converter: AVAudioConverter?
+
+        var level: Float { lock.withLock { file == nil ? 0 : loudness } }
 
         func begin(file: AVAudioFile, live: LivePreview) {
             lock.withLock {
@@ -287,6 +296,12 @@ final class Dictation: ObservableObject {
             { [self] buffer, _ in
                 lock.withLock {
                     guard let file else { return }
+                    if let samples = buffer.floatChannelData?[0], buffer.frameLength > 0 {
+                        var sum: Float = 0
+                        for i in 0..<Int(buffer.frameLength) { sum += samples[i] * samples[i] }
+                        let decibels = 10 * log10(max(sum / Float(buffer.frameLength), 1e-9))
+                        loudness = min(1, max(0, (decibels + 55) / 45))
+                    }
                     live?.append(buffer)
                     guard let converter, let converted = Dictation.convert(buffer, with: converter) else { return }
                     try? file.write(from: converted)

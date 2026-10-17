@@ -48,10 +48,14 @@ struct Server {
         }.filter { !$0.isEmpty }
     }
 
+    /// The app on this phone (PhoneServer): what it heard itself, for the keyboard.
+    static let thisPhone = "http://127.0.0.1:8181"
+
     /// A Mac's name for showing: its host on the local network.
     static func name(of mac: String) -> String {
         let hosts = macs.first { $0.first == mac }?.compactMap { URL(string: $0)?.host } ?? []
         let host = hosts.first { $0.hasSuffix(".local") } ?? hosts.first ?? mac
+        if mac == thisPhone { return "iPhone" }
         let short = host.replacingOccurrences(of: ".local", with: "").replacingOccurrences(of: "ivans-", with: "")
         // As people say them: "macbook-pro" is a MacBook, "mac-mini" a Mac mini.
         if short.contains("macbook") { return "MacBook" }

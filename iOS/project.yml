@@ -40,6 +40,9 @@ targets:
         UIBackgroundModes: [audio]
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
+        CFBundleURLTypes:
+          - CFBundleURLName: com.spaceorc.sweetch.phone
+            CFBundleURLSchemes: [sweetch]
     dependencies:
       - target: SweetchWidget
       - target: SweetchKeyboard

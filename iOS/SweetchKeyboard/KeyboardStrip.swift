@@ -12,6 +12,7 @@ final class KeyboardStrip: UIView {
     private let note = UILabel()
     private let insert = UIButton(type: .system)
     private let profiles = UIStackView()
+    private let microphone = UIButton(type: .system)
     private var profileButtons: [UIButton] = []
     private static let symbols = ["person", "briefcase", "sparkles"]
 
@@ -41,7 +42,13 @@ final class KeyboardStrip: UIView {
             profiles.addArrangedSubview(button)
             profileButtons.append(button)
         }
-        for part in [profiles, suggestions, note, insert] as [UIView] {
+        microphone.setImage(UIImage(systemName: "mic.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .medium)), for: .normal)
+        microphone.tintColor = .label
+        microphone.addAction(UIAction { [weak self] _ in
+            UIDevice.current.playInputClick()
+            self?.model?.openDictation()
+        }, for: .touchUpInside)
+        for part in [profiles, suggestions, note, insert, microphone] as [UIView] {
             part.translatesAutoresizingMaskIntoConstraints = false
             addSubview(part)
         }
@@ -49,13 +56,17 @@ final class KeyboardStrip: UIView {
             profiles.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
             profiles.centerYAnchor.constraint(equalTo: centerYAnchor, constant: 1),
             suggestions.leadingAnchor.constraint(equalTo: profiles.trailingAnchor, constant: 4),
-            suggestions.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+            microphone.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+            microphone.centerYAnchor.constraint(equalTo: centerYAnchor, constant: 1),
+            microphone.widthAnchor.constraint(equalToConstant: 36),
+            microphone.heightAnchor.constraint(equalToConstant: 32),
+            suggestions.trailingAnchor.constraint(equalTo: microphone.leadingAnchor, constant: -2),
             suggestions.topAnchor.constraint(equalTo: topAnchor, constant: 2),
             suggestions.bottomAnchor.constraint(equalTo: bottomAnchor),
             note.leadingAnchor.constraint(equalTo: profiles.trailingAnchor, constant: 10),
             note.trailingAnchor.constraint(lessThanOrEqualTo: insert.leadingAnchor, constant: -8),
             note.centerYAnchor.constraint(equalTo: centerYAnchor, constant: 1),
-            insert.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            insert.trailingAnchor.constraint(equalTo: microphone.leadingAnchor, constant: -4),
             insert.centerYAnchor.constraint(equalTo: note.centerYAnchor),
             insert.widthAnchor.constraint(equalToConstant: 36),
             insert.heightAnchor.constraint(equalToConstant: 36),

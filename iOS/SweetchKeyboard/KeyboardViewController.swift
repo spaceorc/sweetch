@@ -1002,6 +1002,8 @@ final class KeyboardModel {
             for (index, addresses) in Server.macs.enumerated() {
                 group.addTask { await self.listen(to: addresses, first: index == 0) }
             }
+            // And the app on this phone, which hears by itself when no Mac answers.
+            group.addTask { await self.listen(to: [Server.thisPhone], first: false) }
         }
     }
 
@@ -1069,6 +1071,32 @@ final class KeyboardModel {
             layout = letters
         }
         afterTyping()
+    }
+
+    /// The app's dictation screen, opened from the strip's microphone: the app in front hears on the
+    /// GPU, and what it hears comes back here (from a Mac, or from the app itself). A keyboard has
+    /// no UIApplication to open URLs with; the responder chain reaches the host's application, or
+    /// its scene, which takes its own options object.
+    func openDictation() {
+        KeyLog.note("open-dictation")
+        guard let url = URL(string: "sweetch://dictate") else { return }
+        let selector = NSSelectorFromString("openURL:options:completionHandler:")
+        typealias Open = @convention(c) (AnyObject, Selector, URL, AnyObject?, AnyObject?) -> Void
+        var responder: UIResponder? = controller
+        var scene: UIResponder?
+        while let current = responder {
+            if NSStringFromClass(Swift.type(of: current)).contains("Application"), current.responds(to: selector) {
+                unsafeBitCast(current.method(for: selector), to: Open.self)(current, selector, url, NSDictionary(), nil)
+                return
+            }
+            if scene == nil, current is UIScene, current.responds(to: selector) { scene = current }
+            responder = current.next
+        }
+        if let scene, let options = (NSClassFromString("UISceneOpenExternalURLOptions") as? NSObject.Type)?.init() {
+            unsafeBitCast(scene.method(for: selector), to: Open.self)(scene, selector, url, options, nil)
+            return
+        }
+        status = "open sweetch to dictate"
     }
 
     func typeLast() {
