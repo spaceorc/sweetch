@@ -333,6 +333,8 @@ final class KeyboardSurface: UIView {
                     press.trackpadX = touch.location(in: self).x
                     KeyLog.note("trackpad-on", ["touch": press.touch])
                     self.model.setTrackpad(true)
+                    // The one place iOS's own keyboard taps back: the keys going blank is easy to miss.
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                 }
             }
         default:
