@@ -27,7 +27,7 @@ ICON_TOOL  = Tools/make-icon.swift
 ICON_ICNS  = $(BUILD_DIR)/AppIcon.icns
 ICONSET    = $(BUILD_DIR)/AppIcon.iconset
 
-.PHONY: all build app run debug clean setup-signing tcc-reset icon stop start trace phone serve-app mini sync sync-install
+.PHONY: all build app run debug clean setup-signing tcc-reset icon stop start trace phone serve-app mini sync sync-install lexicon decoder-eval
 
 all: app
 
@@ -216,4 +216,21 @@ sync-install:
 	@launchctl bootout gui/$$(id -u)/com.spaceorc.sweetch.sync 2>/dev/null || true
 	@launchctl bootstrap gui/$$(id -u) $(HOME)/Library/LaunchAgents/com.spaceorc.sweetch.sync.plist
 	@echo "syncing with the Mac mini every five minutes; log: ~/Library/Logs/sweetch-sync.log"
+
+# The iPhone keyboard's lexicon (Tools/keyboard/build_lexicon.py): general Russian and English word
+# lists plus the user's own words, into the file the keyboard memory-maps.
+LEXICON = iOS/SweetchKeyboard/Lexicon.bin
+
+lexicon:
+	python3 -I Tools/keyboard/build_lexicon.py $(LEXICON)
+
+# The keyboard's decoder run on the words the user typed on it (the keyboard log): how many words
+# it would break, how many typos it would fix. pymorphy3 (in ~/Library/Caches/sweetch/venv, if
+# there) tells real words from typos left in.
+DECODER_VENV = $(HOME)/Library/Caches/sweetch/venv/bin/python
+decoder-eval:
+	@test -f $(LEXICON) || $(MAKE) --no-print-directory lexicon
+	@$$( [ -x $(DECODER_VENV) ] && echo $(DECODER_VENV) || echo python3 ) -I Tools/keyboard/export_words.py $(BUILD_DIR)/keyboard-words.json
+	@mkdir -p $(BUILD_DIR) && swiftc -O -o $(BUILD_DIR)/replay Tools/keyboard/replay/main.swift iOS/SweetchKeyboard/Decoder/*.swift
+	@$(BUILD_DIR)/replay $(LEXICON) $(BUILD_DIR)/keyboard-words.json $(ARGS)
 
