@@ -174,7 +174,10 @@ final class KeyboardModel {
     private var fieldNote: Task<Void, Never>?
     /// The Macs the keyboard is waiting on, by Mac, as each answered.
     private var connected: [String: Server] = [:]
-    private var lastHeard: (text: String, at: Date)?
+    private var lastHeard: (text: String, at: Date, id: String?)?
+    /// Dictations typed into this field, until the field is done with (sent, left): then each is
+    /// found in the field again and logged as it ended up — what the user changed in it.
+    private var inField: [(id: String?, text: String, at: Date)] = []
     private var lastSpaceAt = Date.distantPast
     /// The space after the word was the keyboard's (a suggestion picked), not the user's: a
     /// punctuation mark typed next goes before it, as on iOS.
@@ -237,6 +240,9 @@ final class KeyboardModel {
     func disappeared() {
         visibleSince = nil
         rememberField(now: true)
+        // Gone a while with dictations in the field: as they stand. (Gone to the app's dictation
+        // screen and back is not done with them.)
+        if inField.contains(where: { Date().timeIntervalSince($0.at) > 600 }) { settleDictations(in: String(field.text), why: "away") }
         awaySince = Date()
         log("disappear")
         listening?.cancel()
@@ -248,10 +254,13 @@ final class KeyboardModel {
     func hostChanged() {
         let previous = String(field.text)
         observeField()
+        let now = String(field.text)
         // Emptied — a message sent — or another field: what it held, before it's gone.
-        if field.text.isEmpty || !String(field.text).hasPrefix(String(previous.prefix(20))) {
+        if now.isEmpty || !now.hasPrefix(String(previous.prefix(20))) {
             HostMemory.shared.saw(previous, process: hostProcess, profile: profile.key)
+            settleDictations(in: previous, why: now.isEmpty ? "emptied" : "other-field")
         }
+        noteExternal(from: previous, to: now)
         rememberField(now: false)
         if !(proxy?.documentContextBeforeInput?.hasSuffix(" ") ?? false) { spaceIsOurs = false }
         log("host-change")
@@ -353,6 +362,22 @@ final class KeyboardModel {
         tapsFreshAtWordStart()
         log("delete")
         afterTyping()
+    }
+
+    /// The field changed by someone other than the keyboard — another dictation streaming words in,
+    /// a paste, the app itself (sending clears it): what came and what went, for the log. The
+    /// keyboard's own changes are in what's known already, so they show no difference here.
+    private func noteExternal(from previous: String, to now: String) {
+        guard previous != now else { return }
+        let a = Array(previous), b = Array(now)
+        var start = 0
+        while start < a.count, start < b.count, a[start] == b[start] { start += 1 }
+        var end = 0
+        while end < a.count - start, end < b.count - start, a[a.count - 1 - end] == b[b.count - 1 - end] { end += 1 }
+        let removed = String(a[start..<(a.count - end)]), added = String(b[start..<(b.count - end)])
+        let kind = now.isEmpty ? "cleared" : removed.isEmpty ? "added" : added.isEmpty ? "removed" : "replaced"
+        KeyLog.note("external", ["kind": kind, "added": String(added.prefix(2000)), "removed": String(removed.prefix(2000)),
+                                 "at": start, "field_len": b.count, "session": fieldSession])
     }
 
     /// A word deleted back to where it began: the next one typed is all taps again, and goes to
@@ -1142,16 +1167,18 @@ final class KeyboardModel {
             }
             connected[mac] = server
             do {
-                let (next, text) = try await server.next(after: seq, wait: caughtUp ? 25 : 0)
+                let (next, text, id) = try await server.next(after: seq, wait: caughtUp ? 25 : 0)
                 if Task.isCancelled { return }
                 if next > seq, let text, !text.isEmpty {
+                    let from = Server.name(of: mac)
                     if Self.dictationAwaited(heardAt: next) {
                         UserDefaults.standard.removeObject(forKey: Self.dictationOpenedKey)
-                        UserDefaults.standard.set(["text": text, "at": Date().timeIntervalSince1970], forKey: Self.pendingKey)
-                        log("heard-pending", ["text": text])
+                        UserDefaults.standard.set(["text": text, "at": Date().timeIntervalSince1970, "id": id ?? "", "from": from],
+                                                  forKey: Self.pendingKey)
+                        log("heard-pending", ["text": text, "dictation": id ?? "", "from": from])
                         deliverPending()
                     } else if caughtUp {
-                        insertHeard(text)
+                        insertHeard(text, id: id, from: from, how: "live")
                     } else if last == nil {
                         last = text
                     }
@@ -1179,19 +1206,23 @@ final class KeyboardModel {
     /// With a space before it when the field's text runs right up to the cursor; the layout then
     /// follows the language of what was said.
     /// `again`: the pending dictation, typed once more into a field that lost it.
-    private func insertHeard(_ text: String, again: Bool = false) {
+    /// `id`: the dictation's folder where it was heard (`from`); `how`: as it came while the keyboard
+    /// was up ("live"), after the app's dictation screen ("after-app"), or the strip's button typing
+    /// the last one again ("typed-again").
+    private func insertHeard(_ text: String, again: Bool = false, id: String?, from: String, how: String) {
         wordTaps = []
         wordTapsHold = true
         // The same words from a second Mac: one that seemed gone while hearing, and the next heard
         // them again.
-        if !again, let lastHeard, lastHeard.text == text, Date().timeIntervalSince(lastHeard.at) < 60 { return }
-        lastHeard = (text, Date())
+        if !again, how != "typed-again", let lastHeard, lastHeard.text == text, Date().timeIntervalSince(lastHeard.at) < 60 { return }
+        lastHeard = (text, Date(), id)
         last = text
         let before = proxy?.documentContextBeforeInput ?? ""
         let spaced = before.isEmpty || before.last?.isWhitespace == true ? text : " " + text
         insert(spaced)
         HostMemory.shared.dictated(text, process: hostProcess, profile: profile.key)
-        log("heard", ["text": text])
+        log("heard", ["text": text, "dictation": id ?? "", "from": from, "how": how])
+        inField.append((id, text, Date()))
         let latin = text.unicodeScalars.filter { ("a"..."z").contains($0) || ("A"..."Z").contains($0) }.count
         let cyrillic = text.unicodeScalars.filter { (0x0400...0x04FF).contains($0.value) }.count
         if latin + cyrillic > 0 {
@@ -1201,10 +1232,6 @@ final class KeyboardModel {
         afterTyping()
     }
 
-    /// The app's dictation screen, opened from the strip's microphone: the app in front hears on the
-    /// GPU, and what it hears comes back here (from a Mac, or from the app itself). A keyboard has
-    /// no UIApplication to open URLs with; the responder chain reaches the host's application, or
-    /// its scene, which takes its own options object.
     /// When the microphone last opened the app's dictation. The keyboard is gone meanwhile — the
     /// app is in front — so what's heard waits for it to come back, and the first poll then, which
     /// otherwise only catches up, types it.
@@ -1238,7 +1265,8 @@ final class KeyboardModel {
             }
             let mark = String(text.suffix(24))
             if !(self.proxy?.documentContextBeforeInput ?? "").contains(mark) {
-                self.insertHeard(text, again: true)
+                self.insertHeard(text, again: true, id: (pending["id"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+                                 from: pending["from"] as? String ?? "?", how: "after-app")
             }
             try? await Task.sleep(for: .milliseconds(1500))
             guard self.visibleSince == since else { return }
@@ -1248,6 +1276,10 @@ final class KeyboardModel {
         }
     }
 
+    /// The app's dictation screen, opened from the strip's microphone: the app in front hears on the
+    /// GPU, and what it hears comes back here (from a Mac, or from the app itself). A keyboard has
+    /// no UIApplication to open URLs with; the responder chain reaches the host's application, or
+    /// its scene, which takes its own options object.
     func openDictation() {
         UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.dictationOpenedKey)
         observeField()
@@ -1280,7 +1312,57 @@ final class KeyboardModel {
 
     func typeLast() {
         guard let last else { return }
+        let id = lastHeard?.id
         lastHeard = nil
-        insertHeard(last)
+        insertHeard(last, id: id, from: "keyboard", how: "typed-again")
+    }
+
+    /// The field done with — emptied (a message sent), another field, the keyboard gone a while:
+    /// each dictation typed into it, as the field holds it now (`dictation-final`). Its words are
+    /// lined up with the field's (the longest common run), and the stretch between the first and
+    /// the last matched word is what the dictation became.
+    private func settleDictations(in text: String, why: String) {
+        guard !inField.isEmpty else { return }
+        let fieldWords = text.split(whereSeparator: \.isWhitespace).map(String.init)
+        for dictation in inField {
+            let heardWords = dictation.text.split(whereSeparator: \.isWhitespace).map(String.init)
+            let span = Self.matchedSpan(heardWords, in: fieldWords)
+            let final = span.map { fieldWords[$0].joined(separator: " ") } ?? ""
+            KeyLog.note("dictation-final", [
+                "dictation": dictation.id ?? "", "heard": dictation.text, "final": final,
+                "changed": final != dictation.text, "found": span != nil, "why": why,
+                "seconds": Int(Date().timeIntervalSince(dictation.at)), "session": fieldSession,
+            ])
+        }
+        inField = []
+    }
+
+    /// Where `heard` stands in `field`: the range of field words from the first to the last word
+    /// matched by their longest common subsequence — nil when under a third of it is there.
+    private static func matchedSpan(_ heard: [String], in field: [String]) -> ClosedRange<Int>? {
+        guard !heard.isEmpty, !field.isEmpty else { return nil }
+        let key = { (w: String) in w.lowercased().filter { $0.isLetter || $0.isNumber } }
+        let h = heard.map(key), f = field.map(key)
+        var table = Array(repeating: Array(repeating: 0, count: f.count + 1), count: h.count + 1)
+        for i in stride(from: h.count - 1, through: 0, by: -1) {
+            for j in stride(from: f.count - 1, through: 0, by: -1) {
+                table[i][j] = h[i] == f[j] && !h[i].isEmpty ? table[i + 1][j + 1] + 1 : max(table[i + 1][j], table[i][j + 1])
+            }
+        }
+        var i = 0, j = 0
+        var matched: [Int] = []
+        while i < h.count, j < f.count {
+            if h[i] == f[j], !h[i].isEmpty {
+                matched.append(j)
+                i += 1
+                j += 1
+            } else if table[i + 1][j] >= table[i][j + 1] {
+                i += 1
+            } else {
+                j += 1
+            }
+        }
+        guard let first = matched.first, let last = matched.last, matched.count * 3 >= h.count else { return nil }
+        return first...last
     }
 }

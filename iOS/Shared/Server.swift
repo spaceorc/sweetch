@@ -147,9 +147,10 @@ struct Server {
     }
 
     /// The next text the Mac hears after `seq`, waiting up to `wait` seconds (at most 25) for it.
-    func next(after seq: Int, wait: Int) async throws -> (seq: Int, text: String?) {
+    /// `id`: the dictation's folder where it was heard.
+    func next(after seq: Int, wait: Int) async throws -> (seq: Int, text: String?, id: String?) {
         let reply = try await get("/next?after=\(seq)&wait=\(wait)", timeout: TimeInterval(wait) + 5)
-        return (reply["seq"] as? Int ?? seq, reply["text"] as? String)
+        return (reply["seq"] as? Int ?? seq, reply["text"] as? String, (reply["id"] as? String).flatMap { $0.isEmpty ? nil : $0 })
     }
 
     /// What the field holds before the cursor, for the next dictation's prefix.

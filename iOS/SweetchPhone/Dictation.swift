@@ -227,10 +227,12 @@ final class Dictation: ObservableObject {
                 }
             }
         }
+        // Heard here, not by a Mac (whose own server tells the keyboard): to the keyboard from here.
+        let heardHere = localDir.map { FileManager.default.fileExists(atPath: $0.appendingPathComponent("session.json").path) } ?? false
+        if let last, heardHere { PhoneServer.shared.publish(last, id: localDir?.lastPathComponent) }
         localContext = nil
         localDir = nil
         keyboard = nil
-        if let last { PhoneServer.shared.publish(last) }
         try? FileManager.default.removeItem(at: recording)
         self.recording = nil
         await endActivity(showing: .init(phase: problem == nil || last != nil ? .done : .failed,

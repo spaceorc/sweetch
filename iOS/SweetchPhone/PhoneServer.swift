@@ -13,7 +13,7 @@ final class PhoneServer: @unchecked Sendable {
     private let queue = DispatchQueue(label: "sweetch.phone-server", attributes: .concurrent)
     private var listener: NWListener?
     private let heard = NSCondition()
-    private var latest: (seq: Int, text: String)?
+    private var latest: (seq: Int, text: String, id: String?)?
     private var delivered = false
 
     func start() {
@@ -27,10 +27,11 @@ final class PhoneServer: @unchecked Sendable {
     }
 
     /// A dictation's text, for the keyboard waiting on `/next`.
-    func publish(_ text: String) {
+    /// `id`: the dictation's folder in Documents/dictation, for the keyboard's log.
+    func publish(_ text: String, id: String?) {
         guard !text.isEmpty else { return }
         heard.lock()
-        latest = (Int(Date().timeIntervalSince1970 * 1000), text)
+        latest = (Int(Date().timeIntervalSince1970 * 1000), text, id)
         delivered = false
         heard.broadcast()
         heard.unlock()
@@ -83,6 +84,6 @@ final class PhoneServer: @unchecked Sendable {
         while (latest?.seq ?? 0) <= after, heard.wait(until: deadline) {}
         guard let latest, latest.seq > after else { return ["seq": after] }
         delivered = true
-        return ["seq": latest.seq, "text": latest.text]
+        return ["seq": latest.seq, "text": latest.text, "id": latest.id ?? ""]
     }
 }

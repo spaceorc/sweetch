@@ -60,7 +60,9 @@ final class DictationServer {
     /// The last text heard, numbered by when (ms) so the keyboard types each once — across restarts
     /// too. Guarded by `heard`, which wakes the keyboard's waiting request.
     private let heard = NSCondition()
-    private var latest: (seq: Int, text: String)?
+    /// The last text heard for the iPhone, with its dictation's folder name — the id the keyboard
+    /// logs it under.
+    private var latest: (seq: Int, text: String, id: String)?
 
     private static let maxBody = 50 << 20
 
@@ -278,7 +280,7 @@ final class DictationServer {
             record["settlement"] = settled.settlement ?? NSNull()
             record["text"] = settled.text
             if !settled.text.isEmpty {
-                heard.withLock { latest = (Int(Date().timeIntervalSince1970 * 1000), settled.text) }
+                heard.withLock { latest = (Int(Date().timeIntervalSince1970 * 1000), settled.text, entry.dir.lastPathComponent) }
                 heard.broadcast()
             }
             log.info("dictation server: heard '\(settled.text, privacy: .public)'")
@@ -298,7 +300,7 @@ final class DictationServer {
         defer { heard.unlock() }
         while (latest?.seq ?? 0) <= after, heard.wait(until: deadline) {}
         guard let latest, latest.seq > after else { return (200, ["seq": after]) }
-        return (200, ["seq": latest.seq, "text": latest.text])
+        return (200, ["seq": latest.seq, "text": latest.text, "id": latest.id])
     }
 
     private func noteField(_ request: Request) -> (Int, [String: Any]) {
