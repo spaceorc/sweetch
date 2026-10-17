@@ -227,16 +227,17 @@ final class KeyboardSurface: UIView {
                     if alternates.chosen != nil { selection.selectionChanged() }
                 }
             } else if let start = press.trackpadX {
-                // Faster goes a little further, as on iOS: slow is a character per 9 pt; the gain
-                // grows gently with the finger's smoothed speed, up to maxGain.
+                // Sideways, faster goes a little further, as on iOS: slow is a character per 9 pt;
+                // the gain grows gently with the finger's smoothed sideways speed, up to maxGain.
                 let dt = max(touch.timestamp - press.lastMove, 0.004)
                 press.lastMove = touch.timestamp
-                let instant = hypot(point.x - start, point.y - press.trackpadY) / dt
+                let instant = abs(point.x - start) / dt
                 press.speed = press.speed * 0.8 + instant * 0.2
                 let rise = min(max((press.speed - Self.gainSpeed) / (2 * Self.gainSpeed), 0), 1)
                 let gain = 1 + (Self.maxGain - 1) * rise
-                // Up and down by lines, as the finger goes: a line's height of travel for each.
-                press.carryY += (point.y - press.trackpadY) * gain
+                // Up and down by lines, as the finger goes: a line's height of travel for each —
+                // never accelerated, a line skipped is far.
+                press.carryY += point.y - press.trackpadY
                 press.trackpadY = point.y
                 // One line per move: the text around the cursor iOS reports catches up only after.
                 let lines = max(-1, min(1, Int(press.carryY / Self.lineTravel)))
