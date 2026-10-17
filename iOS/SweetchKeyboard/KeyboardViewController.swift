@@ -376,9 +376,13 @@ final class KeyboardModel {
     private struct CursorSession {
         let text: String
         var index: Int
+        let layout: TextLines    // the text wrapped as the field is taken to wrap it
+        let width: CGFloat
+        let guess: CGFloat
+        let font: UIFont
         var start: Int?          // where the first move up or down began
         var lines = 0
-        var ruleLanded: Int?     // where the 40-character rule left the cursor after its last line
+        var landed: Int?         // where the model put the cursor after its last line
     }
     private var session: CursorSession?
 
@@ -387,7 +391,12 @@ final class KeyboardModel {
         if on {
             let before = proxy?.documentContextBeforeInput ?? ""
             let after = proxy?.documentContextAfterInput ?? ""
-            session = CursorSession(text: before + after, index: before.count)
+            let font = UIFont.preferredFont(forTextStyle: .body, compatibleWith: controller?.traitCollection)
+            let guess = (controller?.view.window?.bounds.width ?? 440) - 40
+            let width = FieldWidth.shared.width(for: hostProcess) ?? guess
+            session = CursorSession(text: before + after, index: before.count,
+                                    layout: TextLines(before + after, width: width, font: font),
+                                    width: width, guess: guess, font: font)
         } else if let finished = session {
             session = nil
             noteCursorMove(finished)
@@ -413,22 +422,21 @@ final class KeyboardModel {
     /// the width learned so far — which this move then teaches. Nothing here moves the cursor.
     private func noteCursorMove(_ finished: CursorSession) {
         guard let start = finished.start, finished.lines != 0 else { return }
-        let font = UIFont.preferredFont(forTextStyle: .body, compatibleWith: controller?.traitCollection)
-        let guess = (controller?.view.window?.bounds.width ?? 440) - 40
         let process = hostProcess
         // Wrapping text and fitting the width take a while: off the main thread.
         FieldWidth.shared.queue.async {
-            let learned = FieldWidth.shared.width(for: process, font: font, fallback: guess)
-            let atGuess = TextLines(finished.text, width: guess, font: font).move(start, lines: finished.lines)
-            let atLearned = TextLines(finished.text, width: learned, font: font).move(start, lines: finished.lines)
-            let move = FieldWidth.Move(text: finished.text, start: start, lines: finished.lines, settled: finished.index)
-            let next = FieldWidth.shared.learn(move, process: process, font: font, fallback: guess)
+            let rule = Self.ruleLanding(finished.text, from: start, lines: finished.lines)
+            let atGuess = TextLines(finished.text, width: finished.guess, font: finished.font).move(start, lines: finished.lines)
+            let move = FieldWidth.Move(text: finished.text, start: start, lines: finished.lines, settled: finished.index,
+                                       fontSize: finished.font.pointSize)
+            let next = FieldWidth.shared.learn(move, process: process, font: finished.font, guess: finished.guess)
             DispatchQueue.main.async {
                 KeyLog.note("cursor-move", [
                     "text": finished.text, "start": start, "lines": finished.lines, "settled": finished.index,
-                    "rule": finished.ruleLanded ?? -1, "model_guess": atGuess, "guess_width": KeyLog.round1(guess),
-                    "model_learned": atLearned, "learned_width": KeyLog.round1(learned), "next_width": KeyLog.round1(next),
-                    "font_size": KeyLog.round1(font.pointSize), "process": Int(process ?? 0),
+                    "model_used": finished.landed ?? -1, "width_used": KeyLog.round1(finished.width),
+                    "rule": rule, "model_guess": atGuess, "guess_width": KeyLog.round1(finished.guess),
+                    "next_width": next.map { KeyLog.round1($0) } ?? -1,
+                    "font_size": KeyLog.round1(finished.font.pointSize), "process": Int(process ?? 0),
                 ])
             }
         }
@@ -441,22 +449,35 @@ final class KeyboardModel {
     /// Up (negative) or down a line at a time, to the same place in it where there is one. Lines
     /// the user broke are found in the text; a long paragraph's wrapped lines are taken to be
     /// `lineLength` characters.
+    /// Up (negative) or down a line, to the same distance from the line's start: the text around
+    /// the cursor wrapped as the field is taken to wrap it (see TextLines). Without a session —
+    /// never on the trackpad — the 40-character rule.
     func moveCursor(lines: Int) {
-        if session != nil, session!.start == nil { session!.start = session!.index }
-        for _ in 0..<abs(lines) {
+        guard let current = session else {
             let before = proxy?.documentContextBeforeInput ?? ""
             let after = proxy?.documentContextAfterInput ?? ""
             let offset = lines < 0 ? Self.lineUp(before: before) : Self.lineDown(before: before, after: after)
-            guard offset != 0 else { break }
-            proxy?.adjustTextPosition(byCharacterOffset: offset)
-            if let current = session {
-                session!.index = min(max(current.index + offset, 0), current.text.count)
-            }
+            if offset != 0 { proxy?.adjustTextPosition(byCharacterOffset: offset) }
+            return
         }
-        if session != nil {
-            session!.lines += lines
-            session!.ruleLanded = session!.index
+        if current.start == nil { session!.start = current.index }
+        let target = current.layout.move(current.index, lines: lines)
+        if target != current.index { proxy?.adjustTextPosition(byCharacterOffset: target - current.index) }
+        session!.index = target
+        session!.lines += lines
+        session!.landed = target
+    }
+
+    /// The 40-character rule's landing for a move, worked out on the text without moving: what the
+    /// keyboard did before the line model, kept for comparing.
+    static func ruleLanding(_ text: String, from start: Int, lines: Int) -> Int {
+        let chars = Array(text)
+        var index = start
+        for _ in 0..<abs(lines) {
+            let before = String(chars[..<index]), after = String(chars[index...])
+            index = min(max(index + (lines < 0 ? lineUp(before: before) : lineDown(before: before, after: after)), 0), chars.count)
         }
+        return index
     }
 
     static func lineUp(before: String) -> Int {

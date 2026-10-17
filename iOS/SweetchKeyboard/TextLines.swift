@@ -107,59 +107,86 @@ struct TextLines {
 
 /// The field's width as learned from the user's moves: a move's start, how many lines it went,
 /// and where the user settled after nudging sideways — the width that would have put the cursor
-/// there is the field's. Kept per app process and across apps, on disk. Used only on `queue`.
+/// there is the field's. Kept per app process and across apps, on disk; worked out on `queue`,
+/// read anywhere.
 final class FieldWidth: @unchecked Sendable {
     struct Move: Codable {
         let text: String
         let start: Int
         let lines: Int
         let settled: Int
+        var fontSize: CGFloat? = nil
     }
 
     static let shared = FieldWidth()
-    /// Everything here runs on it: fitting wraps the text dozens of times.
+    /// Fitting wraps the text dozens of times: off the main thread.
     let queue = DispatchQueue(label: "sweetch.field-width", qos: .utility)
+    /// A width is trusted once this many moves agree on it.
+    static let enough = 3
     private let key = "fieldWidthMoves"
-    private var moves: [String: [Move]]   // by process ("pid:<n>") and "all"
+    private let lock = NSLock()
+    private var moves: [String: [Move]] = [:]   // by process ("pid:<n>") and "all"
+    private var fitted: [String: CGFloat] = [:]
 
     private init() {
-        moves = (UserDefaults.standard.data(forKey: key))
-            .flatMap { try? JSONDecoder().decode([String: [Move]].self, from: $0) } ?? [:]
-    }
-
-    /// The width to wrap at for this app: its own moves' when it has a few, else all apps'.
-    func width(for process: Int32?, font: UIFont, fallback: CGFloat) -> CGFloat {
-        if let process, let own = moves["pid:\(process)"], own.count >= 2 {
-            return fit(own, font: font, around: fallback)
+        queue.async { [self] in
+            let stored = UserDefaults.standard.data(forKey: key)
+                .flatMap { try? JSONDecoder().decode([String: [Move]].self, from: $0) } ?? [:]
+            let font = UIFont.preferredFont(forTextStyle: .body)
+            var fits: [String: CGFloat] = [:]
+            for (bucket, list) in stored where list.count >= Self.enough { fits[bucket] = fit(list, font: font, around: 400) }
+            lock.withLock {
+                moves = stored
+                fitted = fits
+            }
         }
-        if let all = moves["all"], all.count >= 2 { return fit(all, font: font, around: fallback) }
-        return fallback
     }
 
-    func learn(_ move: Move, process: Int32?, font: UIFont, fallback: CGFloat) -> CGFloat {
-        for bucket in ["all"] + (process.map { ["pid:\($0)"] } ?? []) {
-            moves[bucket, default: []].append(move)
-            if moves[bucket]!.count > 40 { moves[bucket]!.removeFirst(moves[bucket]!.count - 40) }
+    /// The width to wrap at in this app: its own once it has enough moves, else all apps', else
+    /// nil (the caller guesses).
+    func width(for process: Int32?) -> CGFloat? {
+        lock.withLock { process.flatMap { fitted["pid:\($0)"] } ?? fitted["all"] }
+    }
+
+    /// Call on `queue`. Returns the width it now makes of this app.
+    func learn(_ move: Move, process: Int32?, font: UIFont, guess: CGFloat) -> CGFloat? {
+        var all = lock.withLock { moves }
+        let buckets = ["all"] + (process.map { ["pid:\($0)"] } ?? [])
+        for bucket in buckets {
+            all[bucket, default: []].append(move)
+            if all[bucket]!.count > 40 { all[bucket]!.removeFirst(all[bucket]!.count - 40) }
         }
         // Processes come and go: keep the newest few.
-        let pids = moves.keys.filter { $0.hasPrefix("pid:") }
-        if pids.count > 12 { pids.prefix(pids.count - 12).forEach { moves[$0] = nil } }
-        if let data = try? JSONEncoder().encode(moves) { UserDefaults.standard.set(data, forKey: key) }
-        return width(for: process, font: font, fallback: fallback)
+        let pids = all.keys.filter { $0.hasPrefix("pid:") }.sorted()
+        if pids.count > 12 { pids.prefix(pids.count - 12).forEach { all[$0] = nil } }
+        var fits: [String: CGFloat] = [:]
+        for bucket in buckets where all[bucket]!.count >= Self.enough {
+            fits[bucket] = fit(all[bucket]!, font: font, around: guess)
+        }
+        lock.withLock {
+            moves = all
+            fitted.merge(fits) { $1 }
+        }
+        if let data = try? JSONEncoder().encode(all) { UserDefaults.standard.set(data, forKey: key) }
+        return width(for: process)
     }
 
-    /// The width, from 200 to 480 pt, whose wrapping lands each move nearest where the user settled;
-    /// of equals, the nearest to the guess.
+    /// The width, from 200 to 480 pt, that lands the most moves within a character of where the
+    /// user settled — a move the user ended somewhere else on purpose then counts as one miss, not
+    /// as its distance; of equals, the one nearer overall, then the one nearer the guess.
     private func fit(_ moves: [Move], font: UIFont, around guess: CGFloat) -> CGFloat {
-        var best = guess, bestMiss = Int.max
+        var best = guess, bestHits = -1, bestMiss = Int.max
         for width in stride(from: CGFloat(200), through: 480, by: 4) {
-            var miss = 0
+            var hits = 0, miss = 0
             for move in moves {
-                let lines = TextLines(move.text, width: width, font: font)
-                miss += abs(lines.move(move.start, lines: move.lines) - move.settled)
+                let moveFont = move.fontSize.map { font.withSize($0) } ?? font
+                let off = abs(TextLines(move.text, width: width, font: moveFont).move(move.start, lines: move.lines) - move.settled)
+                if off <= 1 { hits += 1 }
+                miss += off
             }
-            if miss < bestMiss || (miss == bestMiss && abs(width - guess) < abs(best - guess)) {
+            if hits > bestHits || (hits == bestHits && (miss < bestMiss || (miss == bestMiss && abs(width - guess) < abs(best - guess)))) {
                 best = width
+                bestHits = hits
                 bestMiss = miss
             }
         }

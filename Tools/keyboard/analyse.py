@@ -322,12 +322,13 @@ def cursor_report(events):
     if not moves:
         return
     print(f"\ncursor moves up/down: {len(moves)} — characters off from where you settled (mean, exact hits):")
-    for key, name in (("rule", "40-character rule (in use)"), ("model_guess", "line model, guessed width"),
-                      ("model_learned", "line model, learned width")):
+    for key, name in (("rule", "40-character rule"), ("model_guess", "line model, guessed width"),
+                      ("model_learned", "line model, learned width (shadow, before it moved the cursor)"),
+                      ("model_used", "line model as used, learned width")):
         misses = [abs(e[key] - e["settled"]) for e in moves if e.get(key, -1) >= 0]
         if misses:
             print(f"  {name:<28} {statistics.mean(misses):5.1f}   {sum(m == 0 for m in misses)}/{len(misses)}")
-    widths = [e.get("next_width") for e in moves if e.get("next_width")]
+    widths = [e.get("next_width") for e in moves if e.get("next_width", -1) > 0]
     if widths:
         print(f"  learned width now {widths[-1]} pt (guess {moves[-1].get('guess_width')}, font {moves[-1].get('font_size')} pt)")
 
