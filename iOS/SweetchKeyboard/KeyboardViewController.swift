@@ -97,6 +97,7 @@ final class KeyboardViewController: UIInputViewController {
 
     override func selectionDidChange(_ textInput: UITextInput?) {
         super.selectionDidChange(textInput)
+        model.observeField()
         KeyLog.note("selection-change", model.fieldState)
     }
 }
@@ -204,6 +205,9 @@ final class KeyboardModel {
     private var proxy: UITextDocumentProxy? { controller?.textDocumentProxy }
 
     func appeared() {
+        if let awaySince, Date().timeIntervalSince(awaySince) > 300 { field.forget() }
+        awaySince = nil
+        observeField()
         let proxy = proxy
         log("appear", [
             "keyboard_type": proxy?.keyboardType?.rawValue ?? -1,
@@ -221,6 +225,7 @@ final class KeyboardModel {
     }
 
     func disappeared() {
+        awaySince = Date()
         log("disappear")
         listening?.cancel()
         listening = nil
@@ -229,6 +234,7 @@ final class KeyboardModel {
 
     /// The host moved the cursor or changed the text.
     func hostChanged() {
+        observeField()
         if !(proxy?.documentContextBeforeInput?.hasSuffix(" ") ?? false) { spaceIsOurs = false }
         log("host-change")
         autoCapitalise()
@@ -247,15 +253,15 @@ final class KeyboardModel {
         if !(typed.first?.isLetter ?? true) { noteWordEnd(typed) }
         if spaceIsOurs, ".,!?:;".contains(typed), proxy?.documentContextBeforeInput?.hasSuffix(" ") == true {
             spaceIsOurs = false
-            proxy?.deleteBackward()
-            proxy?.insertText(typed + " ")
+            deleteBackward()
+            insert(typed + " ")
             log("type", ["char": typed, "before_our_space": true])
             if !layout.isLetters { layout = letters }
             afterTyping()
             return
         }
         spaceIsOurs = false
-        proxy?.insertText(typed)
+        insert(typed)
         log("type", ["char": typed])
         if shift == .once { shift = .off }
         if !layout.isLetters, key == "'" {
@@ -287,12 +293,12 @@ final class KeyboardModel {
         spaceIsOurs = false
         if Date().timeIntervalSince(lastSpaceAt) < Self.doubleSpace, before.hasSuffix(" "),
            let previous = before.dropLast().last, previous.unicodeScalars.allSatisfy(Self.sentenceEnders.contains) {
-            proxy?.deleteBackward()
-            proxy?.insertText(". ")
+            deleteBackward()
+            insert(". ")
             lastSpaceAt = .distantPast
             log("space", ["period": true])
         } else {
-            proxy?.insertText(" ")
+            insert(" ")
             lastSpaceAt = Date()
             log("space")
         }
@@ -307,14 +313,14 @@ final class KeyboardModel {
             return
         }
         noteWordEnd("\n")
-        proxy?.insertText("\n")
+        insert("\n")
         log("return")
         afterTyping()
     }
 
     func backspace() {
         spaceIsOurs = false
-        proxy?.deleteBackward()
+        deleteBackward()
         log("delete")
         afterTyping()
     }
@@ -324,7 +330,7 @@ final class KeyboardModel {
         let before = proxy?.documentContextBeforeInput ?? ""
         let spaces = before.reversed().prefix { $0.isWhitespace }.count
         let word = before.dropLast(spaces).reversed().prefix { !$0.isWhitespace }.count
-        for _ in 0..<max(spaces + word, 1) { proxy?.deleteBackward() }
+        for _ in 0..<max(spaces + word, 1) { deleteBackward() }
         log("delete-word", ["chars": max(spaces + word, 1)])
         afterTyping()
     }
@@ -374,28 +380,59 @@ final class KeyboardModel {
     /// cursor as it began, where the cursor is in it (followed move by move, as iOS's report of
     /// the text lags behind), and the vertical moves made.
     private struct CursorSession {
-        let text: String
+        var text: String
         var index: Int
-        let layout: TextLines    // the text wrapped as the field is taken to wrap it
+        var layout: TextLines    // the text wrapped as the field is taken to wrap it
         let width: CGFloat
         let guess: CGFloat
         let font: UIFont
         var start: Int?          // where the first move up or down began
         var lines = 0
         var landed: Int?         // where the model put the cursor after its last line
+        var clamped = 0          // steps the model wanted too short or too long
+        var blind = 0            // steps past the known text, by a line's characters
+        var lost = false         // the cursor went past the known text: find it again
     }
+    /// The field's text as pieced together so far.
+    private let field = FieldText()
+
+    /// Every change the keyboard makes goes through these, so what's known of the field follows
+    /// it — iOS's view of the field may show only the sentence the cursor is in.
+    private func insert(_ text: String) {
+        proxy?.insertText(text)
+        field.insert(text)
+    }
+
+    private func deleteBackward() {
+        proxy?.deleteBackward()
+        field.deleteBackward()
+    }
+
+    private func shiftCursor(by offset: Int) {
+        proxy?.adjustTextPosition(byCharacterOffset: offset)
+        field.moveCursor(by: offset)
+    }
+
+    /// What iOS shows of the field now, joined into what's known of it.
+    func observeField() {
+        field.observe(before: proxy?.documentContextBeforeInput ?? "", after: proxy?.documentContextAfterInput ?? "",
+                      empty: proxy?.hasText == false)
+    }
+    /// When the keyboard last went away: what was learned of the field before a long absence may
+    /// no longer be so — the text edited elsewhere, or another field altogether.
+    private var awaySince: Date?
     private var session: CursorSession?
 
     func setTrackpad(_ on: Bool) {
         trackpad = on
         if on {
-            let before = proxy?.documentContextBeforeInput ?? ""
-            let after = proxy?.documentContextAfterInput ?? ""
+            observeField()
+            let text = String(field.text)
             let font = UIFont.preferredFont(forTextStyle: .body, compatibleWith: controller?.traitCollection)
             let guess = (controller?.view.window?.bounds.width ?? 440) - 40
             let width = FieldWidth.shared.width(for: hostProcess) ?? guess
-            session = CursorSession(text: before + after, index: before.count,
-                                    layout: TextLines(before + after, width: width, font: font),
+            session = CursorSession(text: text, index: field.cursor,
+                                    layout: TextLines(text, width: width, font: font),
                                     width: width, guess: guess, font: font)
         } else if let finished = session {
             session = nil
@@ -404,7 +441,7 @@ final class KeyboardModel {
     }
 
     func moveCursor(by offset: Int) {
-        proxy?.adjustTextPosition(byCharacterOffset: offset)
+        shiftCursor(by: offset)
         if let current = session { session!.index = min(max(current.index + offset, 0), current.text.count) }
     }
 
@@ -434,6 +471,7 @@ final class KeyboardModel {
                 KeyLog.note("cursor-move", [
                     "text": finished.text, "start": start, "lines": finished.lines, "settled": finished.index,
                     "model_used": finished.landed ?? -1, "width_used": KeyLog.round1(finished.width),
+                    "clamped": finished.clamped, "blind": finished.blind, "text_len": finished.text.count,
                     "rule": rule, "model_guess": atGuess, "guess_width": KeyLog.round1(finished.guess),
                     "next_width": next.map { KeyLog.round1($0) } ?? -1,
                     "font_size": KeyLog.round1(finished.font.pointSize), "process": Int(process ?? 0),
@@ -457,15 +495,53 @@ final class KeyboardModel {
             let before = proxy?.documentContextBeforeInput ?? ""
             let after = proxy?.documentContextAfterInput ?? ""
             let offset = lines < 0 ? Self.lineUp(before: before) : Self.lineDown(before: before, after: after)
-            if offset != 0 { proxy?.adjustTextPosition(byCharacterOffset: offset) }
+            if offset != 0 { shiftCursor(by: offset) }
             return
         }
         if current.start == nil { session!.start = current.index }
-        let target = current.layout.move(current.index, lines: lines)
-        if target != current.index { proxy?.adjustTextPosition(byCharacterOffset: target - current.index) }
+        // What iOS shows now may reach further than what was known: join it in, and wrap again.
+        let shift = field.observe(before: proxy?.documentContextBeforeInput ?? "", after: proxy?.documentContextAfterInput ?? "",
+                                  empty: proxy?.hasText == false)
+        if String(field.text) != current.text {
+            session!.text = String(field.text)
+            session!.layout = TextLines(session!.text, width: current.width, font: current.font)
+            if current.lost || shift == nil {
+                session!.index = field.cursor   // iOS's word for where the cursor is
+                session!.lost = false
+            } else if let shift {
+                session!.index = min(max(current.index + shift, 0), field.text.count)
+            }
+            if current.start != nil, let shift, shift > 0 { session!.start = current.start! + shift }
+        }
+        let now = session!
+        let chars = now.layout.text
+        // A line of this field in characters, about: the width over the text's mean letter.
+        let mean = max((String(chars) as NSString).size(withAttributes: [.font: now.font]).width / CGFloat(max(chars.count, 1)), 4)
+        let lineChars = max(Int((now.width / mean).rounded()), 8)
+        var target = now.layout.move(now.index, lines: lines)
+        var step = target - now.index
+        let span = min(target, now.index)..<max(target, now.index)
+        let crossesBreak = chars[span].contains("\n")
+        if step == 0 {
+            // At the edge of what's known: a line's characters, and find the cursor again after.
+            step = lines < 0 ? -lineChars : lineChars
+            session!.blind += 1
+            session!.lost = true
+        } else if !crossesBreak {
+            // Within a paragraph a line is a line: no less than half one, no more than one and a half.
+            let bounded = min(max(abs(step), lineChars / 2), lineChars * 3 / 2) * (step < 0 ? -1 : 1)
+            if bounded != step {
+                session!.clamped += 1
+                step = bounded
+            }
+        }
+        target = now.index + step
+        shiftCursor(by: step)
         session!.index = target
+        if target < 0 || target > chars.count { session!.lost = true }
+        session!.index = min(max(target, 0), chars.count)
         session!.lines += lines
-        session!.landed = target
+        session!.landed = session!.index
     }
 
     /// The 40-character rule's landing for a move, worked out on the text without moving: what the
@@ -526,10 +602,10 @@ final class KeyboardModel {
     /// The word replaced by the suggestion, and a space after it — unless the text goes on right
     /// after it already (a word fixed in the middle of the text), where a space would be a second.
     func choose(suggestion: String) {
-        for _ in word { proxy?.deleteBackward() }
+        for _ in word { deleteBackward() }
         let next = proxy?.documentContextAfterInput?.first
         let spaced = next == nil || !(next!.isWhitespace || next!.isPunctuation)
-        proxy?.insertText(spaced ? suggestion + " " : suggestion)
+        insert(spaced ? suggestion + " " : suggestion)
         log("choose", ["word": word, "suggestion": suggestion, "spaced": spaced])
         KeyLog.note("word", ["word": suggestion, "boundary": "suggestion"])
         spaceIsOurs = spaced
@@ -683,7 +759,7 @@ final class KeyboardModel {
         last = text
         let before = proxy?.documentContextBeforeInput ?? ""
         let spaced = before.isEmpty || before.last?.isWhitespace == true ? text : " " + text
-        proxy?.insertText(spaced)
+        insert(spaced)
         log("heard", ["text": text])
         let latin = text.unicodeScalars.filter { ("a"..."z").contains($0) || ("A"..."Z").contains($0) }.count
         let cyrillic = text.unicodeScalars.filter { (0x0400...0x04FF).contains($0.value) }.count

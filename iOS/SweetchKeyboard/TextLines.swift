@@ -193,3 +193,89 @@ final class FieldWidth: @unchecked Sendable {
         return best
     }
 }
+
+/// What the field holds, pieced together from what iOS shows the keyboard: only the text around
+/// the cursor — often just the sentence it's in — at each keystroke and each move of the cursor.
+/// Overlapping pieces are joined, so the paragraph the cursor is in becomes known whole, and with
+/// it where its lines wrap.
+final class FieldText {
+    private(set) var text: [Character] = []
+    /// Where the latest piece put the cursor.
+    private(set) var cursor = 0
+    private static let anchor = 16
+
+    func forget() {
+        text = []
+        cursor = 0
+    }
+
+    /// The keyboard's own edits, applied as it makes them.
+    func insert(_ string: String) {
+        let at = min(max(cursor, 0), text.count)
+        text.insert(contentsOf: Array(string), at: at)
+        cursor = at + string.count
+    }
+
+    func deleteBackward() {
+        guard cursor > 0, cursor <= text.count else { return }
+        text.remove(at: cursor - 1)
+        cursor -= 1
+    }
+
+    func moveCursor(by offset: Int) {
+        cursor = min(max(cursor + offset, 0), text.count)
+    }
+
+    /// Joins the text around the cursor in. Where the keyboard expects it — its own edits followed —
+    /// it only confirms; elsewhere a long enough piece is found by its ends and replaces what was
+    /// there; a piece that fits nowhere, or an empty field, starts the knowledge over. Returns how
+    /// many characters were added in front of what was known (an index into the old text moves by
+    /// that), or nil when it started over.
+    @discardableResult
+    func observe(before: String, after: String, empty: Bool) -> Int? {
+        let b = Array(before), piece = b + Array(after)
+        if piece.isEmpty {
+            if empty { forget() }
+            return empty ? nil : 0
+        }
+        // Where it's expected: around the cursor as the keyboard left it.
+        let from = cursor - b.count, to = cursor + piece.count - b.count
+        if from >= 0, to <= text.count, Array(text[from..<to]) == piece { return 0 }
+        // Elsewhere: a piece too short to tell where it goes says nothing reliable.
+        if piece.count >= 12, let at = Self.find(piece, in: text) {
+            cursor = at + b.count
+            return 0
+        }
+        let k = min(Self.anchor, piece.count)
+        let head = Array(piece.prefix(k)), tail = Array(piece.suffix(k))
+        let p = piece.count >= Self.anchor ? Self.find(head, in: text) : nil
+        let q = piece.count >= Self.anchor ? Self.find(tail, in: text, from: p ?? 0) : nil
+        switch (p, q) {
+        case let (p?, q?):
+            text = Array(text[..<p]) + piece + Array(text[(q + k)...])
+            cursor = p + b.count
+            return 0
+        case let (p?, nil):
+            text = Array(text[..<p]) + piece
+            cursor = p + b.count
+            return 0
+        case let (nil, q?):
+            let added = piece.count - (q + k)
+            text = piece + Array(text[(q + k)...])
+            cursor = b.count
+            return added
+        default:
+            text = piece
+            cursor = b.count
+            return nil
+        }
+    }
+
+    private static func find(_ needle: [Character], in haystack: [Character], from start: Int = 0) -> Int? {
+        guard !needle.isEmpty, haystack.count >= needle.count, start <= haystack.count - needle.count else { return nil }
+        for i in start...(haystack.count - needle.count) where haystack[i] == needle[0] {
+            if Array(haystack[i..<i + needle.count]) == needle { return i }
+        }
+        return nil
+    }
+}
