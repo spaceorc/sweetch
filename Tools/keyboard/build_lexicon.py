@@ -88,7 +88,31 @@ def personal_texts():
             texts.append(entry.get("editedText") or entry.get("formattedText") or "")
         except (OSError, ValueError):
             pass
+    texts.extend(sent_messages())
     return texts
+
+
+def sent_messages():
+    """What the user sent Claude Code — written to an agent and put right before sending: their
+    own words, imperatives and all («сделай», not the «сделаю» dictation hears)."""
+    messages = []
+    for path in (Path.home() / ".claude/projects").glob("*/*.jsonl"):
+        for line in path.open(encoding="utf-8", errors="ignore"):
+            if '"type":"user"' not in line:
+                continue
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if event.get("type") != "user" or event.get("isMeta"):
+                continue
+            content = event.get("message", {}).get("content")
+            if isinstance(content, list):
+                content = " ".join(x.get("text", "") for x in content if isinstance(x, dict) and x.get("type") == "text")
+            # Not the harness's own messages (commands, tool output, reminders).
+            if isinstance(content, str) and content.strip() and not content.lstrip().startswith("<"):
+                messages.append(content)
+    return messages
 
 
 def personal_words():
@@ -217,20 +241,23 @@ def main():
 
     counts, spellings, typed_counts = personal_words()
     added = boosted = 0
+    # The user's own frequency ranks their words: the most used near the top of the scale, the
+    # others below by how often — over the general lists' order, which knows nothing of them.
+    most = max(counts.values(), default=1)
     for key, n in counts.items():
         # Dictated once is enough — dictation spells right; typed, only from twice.
         said = n - typed_counts[key]
         if (said < 1 and n < 2) or not WORD.match(key) or len(key) < 2:
             continue
         written = spellings[key].most_common(1)[0][0]
-        lift = int(12 * math.log2(n))
+        own = 190 + int(65 * math.log(n) / math.log(max(most, 2)))
         if key in entries:
             frequency, flags = entries[key]
-            entries[key] = (min(255, max(frequency, 170 + lift)), flags | 8)
+            entries[key] = (min(255, max(frequency, own)), flags | 8)
             boosted += 1
         else:
             flags, odd = casing(written)
-            entries[key] = (min(230, 140 + lift), flags | 8)
+            entries[key] = (min(240, own), flags | 8)
             if odd:
                 written_as[key] = odd
             added += 1
