@@ -255,6 +255,66 @@ def label(events):
     return taps, lost
 
 
+def known_words():
+    """Every word the user has dictated or had Wispr write — their own dictionary, to tell a typo
+    left in from a word meant."""
+    support = LOG_DIR.parent
+    words = set()
+    texts = []
+    for path in support.glob("dictation/*/session.json"):
+        try:
+            texts.append(json.loads(path.read_text()).get("text") or "")
+        except (OSError, ValueError):
+            pass
+    for path in support.glob("wispr-flow/history/*/entry.json"):
+        try:
+            entry = json.loads(path.read_text())
+            texts.append(entry.get("editedText") or entry.get("formattedText") or "")
+        except (OSError, ValueError):
+            pass
+    for text in texts:
+        words.update(w.lower().replace("ё", "е") for w in __import__("re").findall(r"[а-яёa-z]+", text.lower()))
+    return words
+
+
+def shadow_report(events):
+    """The shadow decoder's changes, each judged by how its word ended up: the next words finished
+    after it that begin as it did. Ended with the letter it would have picked: it'd have saved a
+    typo. Ended with the letter typed, the word otherwise as finished: it'd have broken it — or the
+    typo was left in, which the dictionary can tell (an unknown word left is a typo kept)."""
+    shadows = [(i, e) for i, e in enumerate(events) if e["e"] == "shadow"]
+    if not shadows:
+        return
+    changed = [(i, e) for i, e in shadows if e["would"] != e["typed"]]
+    verdicts = collections.Counter()
+    lines = []
+    dictionary = known_words()
+    for i, e in changed:
+        prefix = e["prefix"].lower()
+        ended = None
+        for later in events[i:i + 400]:
+            if later["t"] - e["t"] > 30:
+                break
+            if later["e"] in ("word", "choose"):
+                word = (later.get("word") if later["e"] == "word" else later.get("suggestion", "")).lower()
+                if word.startswith(prefix):
+                    ended = word
+        if ended is None:
+            verdict = "unknown"
+        elif ended.startswith(prefix + e["would"].lower()):
+            verdict = "saves"
+        elif ended.replace("ё", "е") not in dictionary:
+            verdict = "saves (typo left in)"
+        else:
+            verdict = "BREAKS"
+        verdicts[verdict] += 1
+        lines.append(f"  {verdict:<20} {e['prefix']}[{e['typed']}→{e['would']}] → ended as «{ended}»  "
+                     f"gap {e['gap']} dictionary {e['typed_n']} vs {e['other_n']}")
+    print(f"\nshadow decoder: judged {len(shadows)} taps within 9 pt of another letter (not a word's first), "
+          f"would change {len(changed)}: " + ", ".join(f"{k} {v}" for k, v in verdicts.items()))
+    print("\n".join(lines))
+
+
 def report(events):
     taps, lost = label(events)
     letters = [t for t in taps if t.key.isalpha() and t.layout]
@@ -319,20 +379,7 @@ def report(events):
     if all_dx:
         print(f"  overall ({statistics.mean(all_dx):+.1f},{statistics.mean(all_dy):+.1f}) over {len(all_dx)} hits")
 
-    shadowed = [t for t in letters if t.shadow and t.fate in ("hit", "miss")]
-    if shadowed:
-        flips = [t for t in shadowed if t.shadow["would"] != t.shadow["typed"]]
-        saved = [t for t in flips if t.fate == "miss" and t.meant.lower() == t.shadow["would"].lower()]
-        broken = [t for t in flips if t.fate == "hit"]
-        missed = [t for t in shadowed if t.fate == "miss" and t not in saved]
-        print(f"\nshadow decoder (taps within 9 pt of another letter, "
-              f"not a word's first): judged {len(shadowed)}, would change {len(flips)} — "
-              f"saves {len(saved)} misses, breaks {len(broken)} hits; misses it left: {len(missed)}")
-        for t in flips:
-            sh = t.shadow
-            verdict = "SAVES" if t in saved else ("BREAKS" if t in broken else "?")
-            print(f"  {verdict:<6} {sh['prefix']}[{sh['typed']}→{sh['would']}] gap {sh['gap']} "
-                  f"dictionary {sh['typed_n']} vs {sh['other_n']}")
+    shadow_report(events)
 
     transitions = collections.Counter((t.prev.key, t.key) for t in misses if t.prev)
     if transitions:
