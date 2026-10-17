@@ -233,6 +233,7 @@ final class KeyboardModel {
     }
 
     func disappeared() {
+        rememberField(now: true)
         awaySince = Date()
         log("disappear")
         listening?.cancel()
@@ -243,6 +244,7 @@ final class KeyboardModel {
     /// The host moved the cursor or changed the text.
     func hostChanged() {
         observeField()
+        rememberField(now: false)
         if !(proxy?.documentContextBeforeInput?.hasSuffix(" ") ?? false) { spaceIsOurs = false }
         log("host-change")
         autoCapitalise()
@@ -440,6 +442,56 @@ final class KeyboardModel {
     /// When the keyboard last went away: what was learned of the field before a long absence may
     /// no longer be so — the text edited elsewhere, or another field altogether.
     private var awaySince: Date?
+    private var rememberedAt = Date.distantPast
+
+    /// The field as now known, into the app's memory — at most every few seconds while typing.
+    private func rememberField(now: Bool) {
+        guard now || Date().timeIntervalSince(rememberedAt) > 5 else { return }
+        rememberedAt = Date()
+        HostMemory.shared.saw(String(field.text), process: hostProcess, profile: profile.key)
+    }
+
+    /// Everything the keyboard knows of where the user is about to dictate, for the app's dictation:
+    /// the field around the cursor, what kind of field it is, the way of writing, the words typed
+    /// lately, and what it saw in this app before — other fields, earlier dictations. The far side
+    /// picks what helps.
+    private func dictationContext() -> [String: Any] {
+        let text = field.text
+        let cursor = min(max(field.cursor, 0), text.count)
+        var before = String(text[..<cursor]), after = String(text[cursor...])
+        if text.isEmpty {
+            before = proxy?.documentContextBeforeInput ?? ""
+            after = proxy?.documentContextAfterInput ?? ""
+        }
+        var context: [String: Any] = [
+            "field_before": String(before.suffix(4000)),
+            "field_after": String(after.prefix(1500)),
+            "profile": profile.key, "profile_picked": profileManual,
+            "recent_words": recentWords.suffix(60).joined(separator: " "),
+            "layout": "\(letters)",
+            "keyboard_type": proxy?.keyboardType?.rawValue ?? -1,
+            "return_type": proxy?.returnKeyType?.rawValue ?? -1,
+            "content_type": proxy?.textContentType?.rawValue ?? "",
+        ]
+        if let process = hostProcess { context["process"] = Int(process) }
+        if let host = HostMemory.shared.host(hostProcess) {
+            let now = Date()
+            let current = String(text).trimmingCharacters(in: .whitespacesAndNewlines)
+            let seen = { (items: [HostMemory.Seen]) in
+                items.map { ["text": $0.text, "minutes_ago": Int(now.timeIntervalSince($0.at) / 60), "profile": $0.profile ?? ""] as [String: Any] }
+            }
+            // The field itself is sent apart; its record here would only repeat it.
+            // The newest first, while they fit: a URL carries this to the app.
+            var budget = 12_000
+            let fields = host.fields.filter { $0.text != current }.reversed().prefix { field in
+                budget -= field.text.count
+                return budget >= 0
+            }
+            context["earlier_fields"] = seen(Array(fields.reversed()))
+            context["earlier_dictations"] = seen(host.dictated)
+        }
+        return context
+    }
     private var session: CursorSession?
 
     func setTrackpad(_ on: Bool) {
@@ -1063,6 +1115,7 @@ final class KeyboardModel {
         let before = proxy?.documentContextBeforeInput ?? ""
         let spaced = before.isEmpty || before.last?.isWhitespace == true ? text : " " + text
         insert(spaced)
+        HostMemory.shared.dictated(text, process: hostProcess, profile: profile.key)
         log("heard", ["text": text])
         let latin = text.unicodeScalars.filter { ("a"..."z").contains($0) || ("A"..."Z").contains($0) }.count
         let cyrillic = text.unicodeScalars.filter { (0x0400...0x04FF).contains($0.value) }.count
@@ -1078,8 +1131,15 @@ final class KeyboardModel {
     /// no UIApplication to open URLs with; the responder chain reaches the host's application, or
     /// its scene, which takes its own options object.
     func openDictation() {
-        KeyLog.note("open-dictation")
-        guard let url = URL(string: "sweetch://dictate") else { return }
+        observeField()
+        rememberField(now: true)
+        let context = dictationContext()
+        KeyLog.note("open-dictation", ["context_keys": Array(context.keys).sorted()])
+        var components = URLComponents(string: "sweetch://dictate")!
+        if let json = try? JSONSerialization.data(withJSONObject: context) {
+            components.queryItems = [URLQueryItem(name: "context", value: json.base64EncodedString())]
+        }
+        guard let url = components.url else { return }
         let selector = NSSelectorFromString("openURL:options:completionHandler:")
         typealias Open = @convention(c) (AnyObject, Selector, URL, AnyObject?, AnyObject?) -> Void
         var responder: UIResponder? = controller

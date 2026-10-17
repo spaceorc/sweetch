@@ -136,10 +136,11 @@ struct Server {
 
     /// Hands over what's on screen; the Mac reads it while the user speaks. Returns the id the
     /// recording goes with.
-    func context(screenshot: Data?, fieldBefore: String?) async throws -> String {
+    func context(screenshot: Data?, fieldBefore: String?, keyboard: [String: Any]? = nil) async throws -> String {
         var body: [String: Any] = [:]
         if let screenshot { body["screenshot"] = screenshot.base64EncodedString() }
         if let fieldBefore { body["field_before"] = fieldBefore }
+        if let keyboard { body["keyboard"] = keyboard }
         let reply = try await send("/context", body: try JSONSerialization.data(withJSONObject: body), timeout: 10)
         guard let id = reply["id"] as? String else { throw Failure("the Mac gave no id") }
         return id

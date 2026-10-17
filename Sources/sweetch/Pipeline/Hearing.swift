@@ -381,9 +381,9 @@ enum Hearing {
 
     private static func settle(_ versions: [Version], prompts: [String: String], context: ContextSnapshot.Gathered?) -> (String?, [String: Any]) {
         var block = ""
-        // The screen itself stays out: the prefix already distilled it, and a page of it pulls the
-        // model away from what was heard.
-        if let context { block += "<context>\n\(context.described(screenLimit: 0, fieldLimit: 500))\n</context>\n\n" }
+        // The screen itself stays out, and what the keyboard saw in the app: the prefix already
+        // distilled them, and a page of it pulls the model away from what was heard.
+        if let context { block += "<context>\n\(context.described(screenLimit: 0, fieldLimit: 500, keyboardLimit: 0))\n</context>\n\n" }
         for (language, prompt) in prompts.sorted(by: { $0.key < $1.key }) {
             block += "<prefix language=\"\(language)\">\(prompt)</prefix>\n"
         }

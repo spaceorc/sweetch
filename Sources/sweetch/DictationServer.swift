@@ -199,7 +199,9 @@ final class DictationServer {
             pending[id] = entry
         }
         let app = json["app"] as? String
-        let fieldBefore = json["field_before"] as? String ?? lock.withLock {
+        // What the keyboard knew, when its microphone opened the dictation.
+        let keyboard = json["keyboard"] as? [String: Any]
+        let fieldBefore = json["field_before"] as? String ?? (keyboard?["field_before"] as? String) ?? lock.withLock {
             field.flatMap { Date().timeIntervalSince($0.at) < 120 ? $0.text : nil }
         }
         let screenshot = (json["screenshot"] as? String).flatMap { Data(base64Encoded: $0, options: .ignoreUnknownCharacters) }
@@ -210,6 +212,7 @@ final class DictationServer {
             let started = Date()
             var saved: [String: Any] = ["app": app ?? Prefix.unknownApp, "device": "iPhone"]
             if let fieldBefore { saved["text_before_cursor"] = String(fieldBefore.suffix(2000)) }
+            if let keyboard { saved["keyboard"] = keyboard }
             var ocr: String?
             if let screenshot {
                 let png = entry.dir.appendingPathComponent("window.png")
@@ -223,7 +226,7 @@ final class DictationServer {
             saved["seconds"] = Date().timeIntervalSince(started)
             DictationStore.write(saved, to: entry.dir.appendingPathComponent("context.json"))
             let gathered = ContextSnapshot.Gathered(app: app ?? Prefix.unknownApp, windowTitle: nil, textBeforeCursor: fieldBefore,
-                                                    windowTexts: [], ocrText: ocr)
+                                                    windowTexts: [], ocrText: ocr, keyboard: keyboard.map(ContextSnapshot.keyboard))
             entry.context = gathered
             let gatheredSeconds = Date().timeIntervalSince(started)
             let prefix = Prefix.build(from: gathered)

@@ -63,15 +63,24 @@ enum PhonePipeline {
 
     /// The context for the prefix, worked out while the user speaks: the screenshot's text, then the
     /// prefix. Blocks on the model — call off the main thread.
-    static func context(screenshot: Data?, dir: URL) -> (Prefix?, ContextSnapshot.Gathered) {
+    /// `keyboard`: what the keyboard knew, when its microphone opened the dictation.
+    static func context(screenshot: Data?, keyboard: [String: Any]?, dir: URL) -> (Prefix?, ContextSnapshot.Gathered) {
         var ocr: String?
+        var saved: [String: Any] = ["app": Prefix.unknownApp, "device": "iPhone"]
         if let screenshot {
             let png = dir.appendingPathComponent("window.png")
             try? screenshot.write(to: png)
             ocr = ContextSnapshot.readText(in: png)
+            saved["ocr"] = ocr
         }
-        let gathered = ContextSnapshot.Gathered(app: Prefix.unknownApp, windowTitle: nil, textBeforeCursor: nil,
-                                                windowTexts: [], ocrText: ocr)
+        let fieldBefore = keyboard?["field_before"] as? String
+        if let fieldBefore { saved["text_before_cursor"] = fieldBefore }
+        if let keyboard { saved["keyboard"] = keyboard }
+        // As the Mac keeps it: the dictation can be heard again there (`sweetch --rehear`).
+        try? JSONSerialization.data(withJSONObject: saved, options: [.prettyPrinted])
+            .write(to: dir.appendingPathComponent("context.json"))
+        let gathered = ContextSnapshot.Gathered(app: Prefix.unknownApp, windowTitle: nil, textBeforeCursor: fieldBefore,
+                                                windowTexts: [], ocrText: ocr, keyboard: keyboard.map(ContextSnapshot.keyboard))
         return (Prefix.build(from: gathered), gathered)
     }
 

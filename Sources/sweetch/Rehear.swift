@@ -68,7 +68,8 @@ enum Rehear {
                                         windowTitle: c["window_title"] as? String,
                                         textBeforeCursor: before,
                                         windowTexts: c["window_texts"] as? [String] ?? [],
-                                        ocrText: c["ocr"] as? String)
+                                        ocrText: c["ocr"] as? String,
+                                        keyboard: (c["keyboard"] as? [String: Any]).map(ContextSnapshot.keyboard))
     }
 
     private static func json(_ url: URL) -> [String: Any] {

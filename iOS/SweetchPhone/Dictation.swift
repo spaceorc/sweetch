@@ -25,6 +25,9 @@ final class Dictation: ObservableObject {
     @Published private(set) var problem: String?
     /// The big dictation screen is up: opened from the keyboard's microphone.
     @Published var screen = false
+    /// What the keyboard knew when its microphone opened the dictation: the context, in place of a
+    /// screenshot. Taken by the next dictation.
+    var keyboard: [String: Any]?
 
     private var engine: AVAudioEngine?
     private let tap = Tap()
@@ -143,7 +146,7 @@ final class Dictation: ObservableObject {
                 return nil
             }
             Task { await Credentials.refresh(from: mac) }
-            return try? await mac.context(screenshot: self?.screenshot, fieldBefore: nil)
+            return try? await mac.context(screenshot: self?.screenshot, fieldBefore: nil, keyboard: self?.keyboard)
         }
     }
 
@@ -154,9 +157,9 @@ final class Dictation: ObservableObject {
     private func startLocalContext() {
         guard PhonePipeline.canHear, localContext == nil else { return }
         let dir = PhonePipeline.newDirectory()
-        let shot = screenshot
+        let shot = screenshot, keyboard = keyboard
         localDir = dir
-        localContext = Task.detached { PhonePipeline.context(screenshot: shot, dir: dir) }
+        localContext = Task.detached { PhonePipeline.context(screenshot: shot, keyboard: keyboard, dir: dir) }
     }
 
     func stop() async {
@@ -226,6 +229,7 @@ final class Dictation: ObservableObject {
         }
         localContext = nil
         localDir = nil
+        keyboard = nil
         if let last { PhoneServer.shared.publish(last) }
         try? FileManager.default.removeItem(at: recording)
         self.recording = nil

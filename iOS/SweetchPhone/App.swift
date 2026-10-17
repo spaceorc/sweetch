@@ -36,7 +36,11 @@ struct SweetchPhoneApp: App {
                     // sweetch://dictate — the keyboard's microphone: the big screen, listening at once.
                     .onOpenURL { url in
                         guard url.host == "dictate" else { return }
-                        DictationScreen.open()
+                        let keyboard = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
+                            .first { $0.name == "context" }?.value
+                            .flatMap { Data(base64Encoded: $0) }
+                            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+                        DictationScreen.open(keyboard: keyboard)
                     }
             }
         }

@@ -7,10 +7,11 @@ struct DictationScreen: View {
     @ObservedObject private var dictation = Dictation.shared
     @Environment(\.scenePhase) private var scenePhase
 
-    /// Up, and listening unless it already is.
-    static func open() {
+    /// Up, and listening unless it already is. `keyboard`: what the keyboard knew, for the context.
+    static func open(keyboard: [String: Any]?) {
         let dictation = Dictation.shared
         dictation.screen = true
+        if dictation.phase == .idle { dictation.keyboard = keyboard }
         if dictation.phase == .idle { Task { _ = try? await dictation.toggle(waitingForScreenshot: false) } }
     }
 

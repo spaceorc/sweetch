@@ -65,7 +65,8 @@ struct Prefix {
         // Only prose is what the speech continues; code before the cursor would make whisper hear code.
         let preceding = context.textBeforeCursor.map(tail).flatMap { isProse($0) ? $0 : nil }
         guard LLMClient.isConfigured else { return Prefix(spoken: [:], preceding: preceding) }
-        let screen = ([context.windowTitle ?? "", context.ocrText ?? "", context.textBeforeCursor ?? ""] + context.windowTexts)
+        let screen = ([context.windowTitle ?? "", context.ocrText ?? "", context.textBeforeCursor ?? "", context.keyboard ?? ""]
+                      + context.windowTexts)
             .joined(separator: "\n")
         let unknown = context.app == unknownApp
         let picked = pickTerms(context.described(screenLimit: 2000, fieldLimit: 600), namingTheApp: unknown)
