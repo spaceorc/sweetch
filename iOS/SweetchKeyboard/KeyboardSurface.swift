@@ -52,6 +52,7 @@ final class KeyboardSurface: UIView {
     private var keyViews: [KeyView] = []
     private var built: (layout: KeyboardModel.Layout, width: CGFloat, globe: Bool)?
     private var presses: [UITouch: Press] = [:]
+    private let selection = UISelectionFeedbackGenerator()
 
     init(model: KeyboardModel) {
         self.model = model
@@ -216,7 +217,10 @@ final class KeyboardSurface: UIView {
             if let alternates = press.alternates {
                 let was = alternates.chosen
                 alternates.select(at: convert(point, to: alternates.superview))
-                if alternates.chosen != was { KeyLog.note("alternate", ["touch": press.touch, "chosen": alternates.chosen ?? -1]) }
+                if alternates.chosen != was {
+                    KeyLog.note("alternate", ["touch": press.touch, "chosen": alternates.chosen ?? -1])
+                    if alternates.chosen != nil { selection.selectionChanged() }
+                }
             } else if let start = press.trackpadX {
                 press.carry += point.x - start
                 press.trackpadX = point.x
@@ -296,6 +300,9 @@ final class KeyboardSurface: UIView {
                         let labels = [character] + press.key.alternates
                         press.alternates = self.showCallout(for: press.key, labels: labels.map(self.model.display), selected: 1)
                         KeyLog.note("alternates-shown", ["touch": press.touch, "key": character])
+                        // As on iOS: the alternates open with a tap back, and each one slid onto ticks.
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        self.selection.prepare()
                     }
                 }
             }
