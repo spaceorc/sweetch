@@ -41,6 +41,9 @@ final class PhoneWhisper: ObservableObject {
     }
 
     private let queue = DispatchQueue(label: "sweetch.phone-whisper", qos: .userInitiated)
+    /// The Neural Engine's context loads apart: Core ML compiles the encoder for the device on the
+    /// first load after an install — half a minute — and a dictation in front mustn't wait for it.
+    private let aneQueue = DispatchQueue(label: "sweetch.phone-whisper-ane", qos: .utility)
     nonisolated(unsafe) private var context: OpaquePointer?
     /// The same model on the CPU, for listening while the app is in the background: loaded when
     /// first needed.
@@ -57,6 +60,8 @@ final class PhoneWhisper: ObservableObject {
     private var progress: NSKeyValueObservation?
 
     private init() {
+        // Launched by the Action Button the app starts behind, and no notification says so.
+        inFront = UIApplication.shared.applicationState != .background
         if enabled { load() }
         for (name, front) in [(UIApplication.didBecomeActiveNotification, true), (UIApplication.willResignActiveNotification, false)] {
             NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in self?.inFront = front }
@@ -112,11 +117,11 @@ final class PhoneWhisper: ObservableObject {
             let loaded = whisper_init_from_file_with_params(Self.modelFile.path, parameters)
             context = loaded
             DispatchQueue.main.async { self.state = loaded == nil ? .failed("the model didn't load") : .ready }
-            loadANE()
         }
+        aneQueue.async { [self] in loadANE() }
     }
 
-    /// The Neural Engine's context, on the queue, if its encoder is here.
+    /// The Neural Engine's context, on its own queue, if its encoder is here.
     nonisolated private func loadANE() {
         guard aneContext == nil, Self.hasEncoder else { return }
         if !FileManager.default.fileExists(atPath: Self.aneModel.path) {
@@ -195,12 +200,17 @@ final class PhoneWhisper: ObservableObject {
                 whisper_free(other)
                 cpuContext = nil
             }
-            if engine == .cpu, let other = aneContext {
-                whisper_free(other)
-                aneContext = nil
+            if engine == .cpu {
+                aneQueue.sync {
+                    if let other = aneContext {
+                        whisper_free(other)
+                        aneContext = nil
+                    }
+                }
             }
             if engine == .ane {
-                loadANE()
+                // Behind, it's worth waiting for: the CPU is slower than its loading, once compiled.
+                aneQueue.sync { loadANE() }
                 if aneContext == nil { engine = .cpu }
             }
             if engine == .gpu, context == nil { engine = .cpu }
