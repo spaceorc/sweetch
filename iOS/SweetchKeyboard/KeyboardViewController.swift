@@ -744,12 +744,26 @@ final class KeyboardModel {
     /// What the strip offers to take back: the word as it was typed.
     var revertOffer: String? { autoFixed?.typed }
 
-    /// Words the user took a correction back from: never corrected again.
-    private(set) var keepAsTyped: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "keepAsTyped") ?? [])
+    /// How often the user took a correction of each word back, fading by half every two weeks:
+    /// [weight, when last] — it raises how sure a correction of that word must be.
+    private var takenBack: [String: [Double]] = UserDefaults.standard.dictionary(forKey: "takenBack") as? [String: [Double]] ?? [:]
+    private static let halfLife: Double = 14 * 24 * 3600
+
+    /// The take-backs, faded to now.
+    var keepAsTyped: [String: Double] {
+        let now = Date().timeIntervalSince1970
+        return takenBack.mapValues { $0[0] * pow(0.5, (now - $0[1]) / Self.halfLife) }.filter { $0.value > 0.05 }
+    }
 
     private func keep(_ word: String) {
-        keepAsTyped.insert(word.lowercased())
-        UserDefaults.standard.set(Array(keepAsTyped.prefix(500)), forKey: "keepAsTyped")
+        let now = Date().timeIntervalSince1970
+        let key = word.lowercased()
+        let faded = takenBack[key].map { $0[0] * pow(0.5, (now - $0[1]) / Self.halfLife) } ?? 0
+        takenBack[key] = [faded + 1, now]
+        if takenBack.count > 1000 {
+            takenBack = Dictionary(uniqueKeysWithValues: takenBack.sorted { $0.value[1] > $1.value[1] }.prefix(800).map { ($0.key, $0.value) })
+        }
+        UserDefaults.standard.set(takenBack, forKey: "takenBack")
     }
 
     /// The correction for the word being typed, if a space came now.
@@ -839,7 +853,10 @@ final class KeyboardModel {
                 // correction, unless the word as typed is one the system knows or the user kept.
                 let exact = decoder.decode(taps, context: context)
                 var fixed = exact.correction
-                if fixed != nil, keep.contains(asked.lowercased()) || Self.systemKnows(asked) { fixed = nil }
+                // A word the user took corrections back from needs a surer one: each take-back
+                // raises the bar (fading over weeks) — a signal, not a ban.
+                let bar = decoder.threshold + 0.12 * Float(keep[asked.lowercased()] ?? 0)
+                if fixed != nil, exact.confidence < bar || Self.systemKnows(asked) { fixed = nil }
                 if let word = fixed, capital { fixed = word.prefix(1).uppercased() + word.dropFirst() }
                 let words = result.candidates.map { capital ? $0.word.prefix(1).uppercased() + $0.word.dropFirst() : $0.word }
                 var picked: [String] = []
