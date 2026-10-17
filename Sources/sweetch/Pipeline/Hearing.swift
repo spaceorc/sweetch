@@ -20,7 +20,8 @@ import Foundation
 /// Listenings whose texts differ only in case and punctuation heard the same words and make one
 /// version. Then a model settles what the user said, reading all of the context again, the prefix,
 /// and every version with how it was heard and which of its words whisper was unsure of. It is
-/// skipped when every listening heard the same words.
+/// skipped when every listening heard the same words — unless they all wrote it as bare speech, with
+/// no capitals and no stops (see `written`).
 enum Hearing {
     enum Kind {
         case auto
@@ -126,7 +127,8 @@ enum Hearing {
         // independent recognisers heard the same, in a language detection had little doubt about. The
         // prefixed listening would add nothing — where it matters, on English names and terms, Apple's
         // Russian model mangles them and doesn't agree.
-        if let apple, let bare = listened.first, !bare.heard.text.isEmpty, (p[other] ?? 0) < otherLanguageDoubt {
+        if let apple, let bare = listened.first, !bare.heard.text.isEmpty, written(bare.heard.text),
+           (p[other] ?? 0) < otherLanguageDoubt {
             let appleHeard = Listened(kind: .apple, prompt: nil,
                                       heard: Whisper.Heard(text: apple, language: "ru", languageProbabilities: [:], words: [],
                                                            json: dir.appendingPathComponent("preview")),
@@ -172,7 +174,7 @@ enum Hearing {
         // Apple's recogniser drops punctuation and endings, so it agrees with a version when its words
         // are that version's, loosely. The whisper versions it backs:
         let appleBacks = apple.map { a in whisperVersions.filter { agrees(a, with: $0) } }
-        if whisperVersions.count == 1, appleBacks.map({ !$0.isEmpty }) ?? true {
+        if whisperVersions.count == 1, written(first.text), appleBacks.map({ !$0.isEmpty }) ?? true {
             let why = listened.filter(\.kind.isWhisper).count == 2
                 ? "heard alike with and without the prefix; \(other) unlikely (\(String(format: "%.2f", doubt)))"
                 : "every listening heard the same"
@@ -217,7 +219,19 @@ enum Hearing {
         }
         return order.map { groups[$0]! }
             .sorted { ($0.count, sureness($0[0])) > ($1.count, sureness($1[0])) }
-            .map { Version(text: $0[0].heard.text, members: $0) }
+            .map { group in Version(text: group.max { writing($0.heard.text) < writing($1.heard.text) }!.heard.text, members: group) }
+    }
+
+    /// Whisper now and then writes a long dictation as speech — no capitals, no stops, no commas — when
+    /// its first words go that way. Such text is the words heard, not the text to type: it doesn't
+    /// end a listening early, and the model writes it out.
+    static func written(_ text: String) -> Bool {
+        wordsOf(text).split(separator: " ").count < 6 || writing(text) > 0
+    }
+
+    /// How much of the writing is there: stops and commas, and capitals.
+    private static func writing(_ text: String) -> Int {
+        text.filter { ".,!?:;—".contains($0) || $0.isUppercase }.count
     }
 
     /// Whether an answer stays with what was heard: every number in it was heard as such, and most of
