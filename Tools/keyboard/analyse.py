@@ -315,6 +315,23 @@ def shadow_report(events):
     print("\n".join(lines))
 
 
+def cursor_report(events):
+    """Moves up and down on the space-bar trackpad: how far from where the user settled (after
+    nudging sideways) each way of finding the line above or below would have left the cursor."""
+    moves = [e for e in events if e["e"] == "cursor-move"]
+    if not moves:
+        return
+    print(f"\ncursor moves up/down: {len(moves)} — characters off from where you settled (mean, exact hits):")
+    for key, name in (("rule", "40-character rule (in use)"), ("model_guess", "line model, guessed width"),
+                      ("model_learned", "line model, learned width")):
+        misses = [abs(e[key] - e["settled"]) for e in moves if e.get(key, -1) >= 0]
+        if misses:
+            print(f"  {name:<28} {statistics.mean(misses):5.1f}   {sum(m == 0 for m in misses)}/{len(misses)}")
+    widths = [e.get("next_width") for e in moves if e.get("next_width")]
+    if widths:
+        print(f"  learned width now {widths[-1]} pt (guess {moves[-1].get('guess_width')}, font {moves[-1].get('font_size')} pt)")
+
+
 def report(events):
     taps, lost = label(events)
     letters = [t for t in taps if t.key.isalpha() and t.layout]
@@ -380,6 +397,7 @@ def report(events):
         print(f"  overall ({statistics.mean(all_dx):+.1f},{statistics.mean(all_dy):+.1f}) over {len(all_dx)} hits")
 
     shadow_report(events)
+    cursor_report(events)
 
     transitions = collections.Counter((t.prev.key, t.key) for t in misses if t.prev)
     if transitions:

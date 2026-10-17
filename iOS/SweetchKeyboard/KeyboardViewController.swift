@@ -370,10 +370,68 @@ final class KeyboardModel {
         controller?.advanceToNextInputMode()
     }
 
-    func setTrackpad(_ on: Bool) { trackpad = on }
+    /// One trackpad session, for learning where the field wraps its lines: the text around the
+    /// cursor as it began, where the cursor is in it (followed move by move, as iOS's report of
+    /// the text lags behind), and the vertical moves made.
+    private struct CursorSession {
+        let text: String
+        var index: Int
+        var start: Int?          // where the first move up or down began
+        var lines = 0
+        var ruleLanded: Int?     // where the 40-character rule left the cursor after its last line
+    }
+    private var session: CursorSession?
+
+    func setTrackpad(_ on: Bool) {
+        trackpad = on
+        if on {
+            let before = proxy?.documentContextBeforeInput ?? ""
+            let after = proxy?.documentContextAfterInput ?? ""
+            session = CursorSession(text: before + after, index: before.count)
+        } else if let finished = session {
+            session = nil
+            noteCursorMove(finished)
+        }
+    }
 
     func moveCursor(by offset: Int) {
         proxy?.adjustTextPosition(byCharacterOffset: offset)
+        if let current = session { session!.index = min(max(current.index + offset, 0), current.text.count) }
+    }
+
+    /// The app's process, which iOS does tell a keyboard: the same process is the same app, for as
+    /// long as it runs — enough to learn a field's width per app.
+    private lazy var hostProcess: Int32? = {
+        guard let controller, controller.responds(to: NSSelectorFromString("_hostProcessIdentifier")),
+              let pid = (controller.value(forKey: "_hostProcessIdentifier") as? NSNumber)?.int32Value, pid > 0
+        else { return nil }
+        return pid
+    }()
+
+    /// A move up or down finished, nudged sideways to where the user meant: logged with where the
+    /// rule in use put the cursor and where the line model would have, at a guessed width and at
+    /// the width learned so far — which this move then teaches. Nothing here moves the cursor.
+    private func noteCursorMove(_ finished: CursorSession) {
+        guard let start = finished.start, finished.lines != 0 else { return }
+        let font = UIFont.preferredFont(forTextStyle: .body, compatibleWith: controller?.traitCollection)
+        let guess = (controller?.view.window?.bounds.width ?? 440) - 40
+        let process = hostProcess
+        // Wrapping text and fitting the width take a while: off the main thread.
+        FieldWidth.shared.queue.async {
+            let learned = FieldWidth.shared.width(for: process, font: font, fallback: guess)
+            let atGuess = TextLines(finished.text, width: guess, font: font).move(start, lines: finished.lines)
+            let atLearned = TextLines(finished.text, width: learned, font: font).move(start, lines: finished.lines)
+            let move = FieldWidth.Move(text: finished.text, start: start, lines: finished.lines, settled: finished.index)
+            let next = FieldWidth.shared.learn(move, process: process, font: font, fallback: guess)
+            DispatchQueue.main.async {
+                KeyLog.note("cursor-move", [
+                    "text": finished.text, "start": start, "lines": finished.lines, "settled": finished.index,
+                    "rule": finished.ruleLanded ?? -1, "model_guess": atGuess, "guess_width": KeyLog.round1(guess),
+                    "model_learned": atLearned, "learned_width": KeyLog.round1(learned), "next_width": KeyLog.round1(next),
+                    "font_size": KeyLog.round1(font.pointSize), "process": Int(process ?? 0),
+                ])
+            }
+        }
     }
 
     /// How many characters a line of the field holds, taken as given: iOS doesn't tell a keyboard
@@ -384,12 +442,20 @@ final class KeyboardModel {
     /// the user broke are found in the text; a long paragraph's wrapped lines are taken to be
     /// `lineLength` characters.
     func moveCursor(lines: Int) {
+        if session != nil, session!.start == nil { session!.start = session!.index }
         for _ in 0..<abs(lines) {
             let before = proxy?.documentContextBeforeInput ?? ""
             let after = proxy?.documentContextAfterInput ?? ""
             let offset = lines < 0 ? Self.lineUp(before: before) : Self.lineDown(before: before, after: after)
             guard offset != 0 else { break }
             proxy?.adjustTextPosition(byCharacterOffset: offset)
+            if let current = session {
+                session!.index = min(max(current.index + offset, 0), current.text.count)
+            }
+        }
+        if session != nil {
+            session!.lines += lines
+            session!.ruleLanded = session!.index
         }
     }
 
