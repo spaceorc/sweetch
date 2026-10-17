@@ -709,7 +709,10 @@ final class KeyboardModel {
         pendingCorrection = nil
         let tapped = hold && taps.count == word.filter(\.isLetter).count && taps.count >= 2
         if tapped { shadowDecode(word, taps: taps) }
-        if tapped, pending?.word != word { KeyLog.note("autocorrect-late", ["word": word]) }   // not worked out by the space
+        if tapped, pending?.word != word {   // not worked out by the space
+            KeyLog.note("autocorrect-late", ["word": word])
+            correctLate(word, taps: taps, boundary: boundary, before: before)
+        }
         // The decoder's correction, worked out while the word was typed: put in, and the strip offers
         // to take it back (so does ⌫ next).
         if tapped, let pending, pending.word == word, let fixed = pending.fixed, fixed != word {
@@ -757,6 +760,40 @@ final class KeyboardModel {
             }
         }
         return decoder
+    }
+
+    /// What a word's taps put right, if anything: the decoder's correction, unless the word as typed
+    /// is one the system knows or the user kept. On `decoderQueue`.
+    private static func correction(of asked: String, taps: [WordDecoder.Tap], decoder: WordDecoder,
+                                   context: WordDecoder.Context, keep: [String: Double]) -> (String?, Float) {
+        let exact = decoder.decode(taps, context: context)
+        var fixed = exact.correction
+        // A word the user took corrections back from needs a surer one: each take-back raises the
+        // bar (fading over weeks) — a signal, not a ban.
+        let bar = decoder.threshold + 0.12 * Float(keep[asked.lowercased()] ?? 0)
+        if fixed != nil, exact.confidence < bar || systemKnows(asked) { fixed = nil }
+        if let word = fixed, asked.first?.isUppercase == true { fixed = word.prefix(1).uppercased() + word.dropFirst() }
+        return (fixed, exact.confidence)
+    }
+
+    /// A word ended before its correction was worked out — fast typing, a short word: worked out
+    /// now, and put in if nothing was typed after the space or mark meanwhile.
+    private func correctLate(_ word: String, taps: [WordDecoder.Tap], boundary: String, before: String) {
+        let previous = previousWord(before: String(before.dropLast(word.count)))
+        let recent = recentWords, profileNow = profile, keep = keepAsTyped
+        Self.decoderQueue.async { [weak self] in
+            guard let decoder = Self.loadDecoder() else { return }
+            let context = Self.context(previous, recent: recent, lexicon: decoder.lexicon, profile: profileNow)
+            let (fixed, confidence) = Self.correction(of: word, taps: taps, decoder: decoder, context: context, keep: keep)
+            DispatchQueue.main.async {
+                guard let self, let fixed, fixed != word,
+                      (self.proxy?.documentContextBeforeInput ?? "").hasSuffix(word + boundary) else { return }
+                for _ in 0..<(word.count + boundary.count) { self.deleteBackward() }
+                self.insert(fixed + boundary)
+                self.log("autocorrect", ["typed": word, "fixed": fixed, "confidence": Double(confidence), "late": true])
+                self.autoFixed = (typed: word, fixed: fixed, boundary: boundary)
+            }
+        }
     }
 
     private func shadowDecode(_ word: String, taps: [WordDecoder.Tap]) {
@@ -917,13 +954,7 @@ final class KeyboardModel {
                 let result = decoder.decode(taps, complete: true, context: context)
                 // What a space would put right, worked out now so the space doesn't wait: the decoder's
                 // correction, unless the word as typed is one the system knows or the user kept.
-                let exact = decoder.decode(taps, context: context)
-                var fixed = exact.correction
-                // A word the user took corrections back from needs a surer one: each take-back
-                // raises the bar (fading over weeks) — a signal, not a ban.
-                let bar = decoder.threshold + 0.12 * Float(keep[asked.lowercased()] ?? 0)
-                if fixed != nil, exact.confidence < bar || Self.systemKnows(asked) { fixed = nil }
-                if let word = fixed, capital { fixed = word.prefix(1).uppercased() + word.dropFirst() }
+                let (fixed, confidence) = Self.correction(of: asked, taps: taps, decoder: decoder, context: context, keep: keep)
                 let words = result.candidates.map { capital ? $0.word.prefix(1).uppercased() + $0.word.dropFirst() : $0.word }
                 var picked: [String] = []
                 for candidate in words where !picked.contains(where: { $0.lowercased() == candidate.lowercased() }) {
@@ -932,7 +963,7 @@ final class KeyboardModel {
                 }
                 DispatchQueue.main.async {
                     guard let self, self.word == asked else { return }
-                    self.pendingCorrection = (asked, fixed, exact.confidence)
+                    self.pendingCorrection = (asked, fixed, confidence)
                     self.suggestionsFrom = "decoder"
                     self.suggestions = picked.filter { $0.lowercased() != asked.lowercased() }.count > 0 ? picked : []
                 }

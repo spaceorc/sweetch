@@ -224,7 +224,7 @@ sync-install:
 LEXICON = iOS/SweetchKeyboard/Lexicon.bin
 
 lexicon:
-	python3 -I Tools/keyboard/build_lexicon.py $(LEXICON)
+	$$(test -x $(DECODER_VENV) && echo $(DECODER_VENV) || echo python3) -I Tools/keyboard/build_lexicon.py $(LEXICON)
 
 # The keyboard's decoder run on the words the user typed on it (the keyboard log): how many words
 # it would break, how many typos it would fix. pymorphy3 (in ~/Library/Caches/sweetch/venv, if

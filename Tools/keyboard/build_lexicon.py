@@ -75,7 +75,8 @@ def read_list(lang):
 
 
 def personal_texts():
-    """What the user dictated and what Wispr Flow wrote for them — their own sentences."""
+    """What the user dictated and what Wispr Flow wrote for them — their own sentences, spelled
+    right."""
     texts = []
     for path in SUPPORT.glob("dictation/*/session.json"):
         try:
@@ -88,7 +89,6 @@ def personal_texts():
             texts.append(entry.get("editedText") or entry.get("formattedText") or "")
         except (OSError, ValueError):
             pass
-    texts.extend(sent_messages())
     return texts
 
 
@@ -117,8 +117,9 @@ def sent_messages():
 
 def personal_words():
     """The user's words: how often they used them, as they wrote them most often, and how many of
-    those uses were typed (a typed word may be a typo; dictated ones are spelled right)."""
-    texts, typed = personal_texts(), []
+    those uses were typed (a typed word may be a typo; dictated ones are spelled right). Messages
+    sent to Claude Code are typed too — on the phone as well, typos and all."""
+    texts, typed = personal_texts(), sent_messages()
     for path in SUPPORT.glob("keyboard/*.jsonl"):
         for line in path.open(encoding="utf-8"):
             if '"e":"word"' in line:
@@ -189,7 +190,8 @@ def bigrams(ids):
     the heavier) and the general lists' top three next words for each word."""
     weights = {}
     pairs = collections.Counter()
-    for text in personal_texts():
+    # Sent messages count here: a typo in them is no word of the lexicon, and makes no pair.
+    for text in personal_texts() + sent_messages():
         for sentence in SENTENCE.split(text):
             previous = 0
             for token in TOKEN.findall(sentence):
@@ -335,6 +337,69 @@ def write_bigrams(weights, path):
     return len(data)
 
 
+try:
+    import pymorphy3
+    MORPH = pymorphy3.MorphAnalyzer()
+except ImportError:
+    MORPH = None
+
+
+def real_word(key):
+    """A Russian word pymorphy3 knows; without pymorphy3, none is taken for real."""
+    return MORPH is not None and bool(re.search("[а-яё]", key)) and MORPH.word_is_known(key)
+
+
+RU_ROWS = ["йцукенгшщзхъ", "фывапролджэ", "ячсмитьбю"]
+EN_ROWS = ["qwertyuiop", "asdfghjkl", "zxcvbnm"]
+
+
+def adjacent_keys(rows):
+    """Each letter's neighbours on the keyboard: beside it, and the nearest above and below."""
+    near = {}
+    for r, row in enumerate(rows):
+        for i, letter in enumerate(row):
+            keys = set(row[max(0, i - 1):i + 2])
+            for other in (r - 1, r + 1):
+                if 0 <= other < len(rows):
+                    # Rows are offset by about half a key: the two nearest.
+                    keys |= set(rows[other][max(0, i - 1):i + 1])
+            keys.discard(letter)
+            near[letter] = keys
+    if "е" in near:
+        near["е"].add("ё")
+        near["ё"] = near["е"] - {"ё"} | {"е"}
+    return near
+
+
+RU_NEAR, EN_NEAR = adjacent_keys(RU_ROWS), adjacent_keys(EN_ROWS)
+
+
+def typo(key, n, general):
+    """A word the user only typed, taken for a typo: one slip (a letter wrong, missing, extra or
+    swapped) from a common word of the general lists — "историб", "чот", "nthe". Their slang has no
+    such neighbour ("фолбэк", "парсить", "скилл"). A letter wrong is a neighbouring key's
+    ("историб" — б by ю; not "войсы" for "войны"). Not a word typed often (15 times), nor a short
+    one, nor a Russian word pymorphy3 knows."""
+    if n >= 15 or len(key) < 3 or real_word(key):
+        return False
+    cyrillic = bool(re.search("[а-яё]", key))
+    nearby, common = (RU_NEAR, 120) if cyrillic else (EN_NEAR, 200)
+    letters = "".join(nearby)
+    splits = [(key[:i], key[i:]) for i in range(len(key) + 1)]
+    near = set()
+    for a, b in splits:
+        if b:
+            near.add(a + b[1:])
+        if len(b) > 1:
+            near.add(a + b[1] + b[0] + b[2:])
+        for x in letters:
+            if b and x in nearby.get(b[0], ()):
+                near.add(a + x + b[1:])
+            near.add(a + x + b)
+    near.discard(key)
+    return any(general.get(word, 0) >= common for word in near)
+
+
 def main():
     output = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parents[2] / "iOS/SweetchKeyboard/Lexicon.bin"
     entries, written_as = {}, {}
@@ -349,14 +414,19 @@ def main():
     general = len(entries)
 
     counts, spellings, typed_counts = personal_words()
-    added = boosted = 0
+    general_frequency = {key: frequency for key, (frequency, _) in entries.items()}
+    added = boosted = dropped = 0
     # The user's own frequency ranks their words: the most used near the top of the scale, the
     # others below by how often — over the general lists' order, which knows nothing of them.
     most = max(counts.values(), default=1)
     for key, n in counts.items():
-        # Dictated once is enough — dictation spells right; typed, only from twice.
+        # Dictated once is enough — dictation spells right. A word only ever typed may be a typo the
+        # user makes again and again, and in the lexicon it would never be put right (see `typo`).
         said = n - typed_counts[key]
         if (said < 1 and n < 2) or not WORD.match(key) or len(key) < 2:
+            continue
+        if said < 1 and key not in entries and typo(key, n, general_frequency):
+            dropped += 1
             continue
         written = spellings[key].most_common(1)[0][0]
         own = 190 + int(65 * math.log(n) / math.log(max(most, 2)))
@@ -394,7 +464,7 @@ def main():
     size = write_profiles(tables, profile_path)
     print(f"{profile_path}: " + ", ".join(f"{name} {len(tables[name][0])} words ±, {len(tables[name][1])} pairs from {tables[name][2]} texts"
                                           for name in PROFILES) + f" — {size / 1e6:.1f} MB")
-    print(f"{output}: {len(entries)} words ({general} general, {boosted} of them yours, {added} only yours), "
+    print(f"{output}: {len(entries)} words ({general} general, {boosted} of them yours, {added} only yours, {dropped} typed ones taken for typos), "
           f"{len(order)} nodes, {len(data) / 1e6:.1f} MB")
 
 
