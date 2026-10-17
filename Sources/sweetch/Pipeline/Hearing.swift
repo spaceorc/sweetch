@@ -127,7 +127,7 @@ enum Hearing {
         // independent recognisers heard the same, in a language detection had little doubt about. The
         // prefixed listening would add nothing — where it matters, on English names and terms, Apple's
         // Russian model mangles them and doesn't agree.
-        if let apple, let bare = listened.first, !bare.heard.text.isEmpty, written(bare.heard.text),
+        if let apple, let bare = listened.first, !bare.heard.text.isEmpty, written(bare.heard.text), short(bare.heard.text),
            (p[other] ?? 0) < otherLanguageDoubt {
             let appleHeard = Listened(kind: .apple, prompt: nil,
                                       heard: Whisper.Heard(text: apple, language: "ru", languageProbabilities: [:], words: [],
@@ -173,7 +173,8 @@ enum Hearing {
 
         // Apple's recogniser drops punctuation and endings, so it agrees with a version when its words
         // are that version's, loosely. The whisper versions it backs:
-        let appleBacks = apple.map { a in whisperVersions.filter { agrees(a, with: $0) } }
+        // Not asked at all on a long dictation (see `short`).
+        let appleBacks = apple.flatMap { a in short(first.text) ? whisperVersions.filter { agrees(a, with: $0) } : nil }
         if whisperVersions.count == 1, written(first.text), appleBacks.map({ !$0.isEmpty }) ?? true {
             let why = listened.filter(\.kind.isWhisper).count == 2
                 ? "heard alike with and without the prefix; \(other) unlikely (\(String(format: "%.2f", doubt)))"
@@ -220,6 +221,12 @@ enum Hearing {
         return order.map { groups[$0]! }
             .sorted { ($0.count, sureness($0[0])) > ($1.count, sureness($1[0])) }
             .map { group in Version(text: group.max { writing($0.heard.text) < writing($1.heard.text) }!.heard.text, members: group) }
+    }
+
+    /// Apple's recogniser agreeing means something only on a short phrase: on a long one it gets
+    /// a few words wrong anyway, and the loose agreement lets whisper's own mistakes through.
+    static func short(_ text: String) -> Bool {
+        wordsOf(text).split(separator: " ").count <= 8
     }
 
     /// Whisper now and then writes a long dictation as speech — no capitals, no stops, no commas — when
