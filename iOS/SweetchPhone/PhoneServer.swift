@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import UIKit
 
 /// What the app heard, for the keyboard on the same phone: a tiny server on the loopback address,
 /// answering the keyboard as a Mac's dictation server does (`/ping`, `/next`). It's how a dictation
@@ -13,6 +14,7 @@ final class PhoneServer: @unchecked Sendable {
     private var listener: NWListener?
     private let heard = NSCondition()
     private var latest: (seq: Int, text: String)?
+    private var delivered = false
 
     func start() {
         guard listener == nil else { return }
@@ -29,8 +31,28 @@ final class PhoneServer: @unchecked Sendable {
         guard !text.isEmpty else { return }
         heard.lock()
         latest = (Int(Date().timeIntervalSince1970 * 1000), text)
+        delivered = false
         heard.broadcast()
         heard.unlock()
+        stayAwake()
+    }
+
+    /// Behind, iOS suspends the app as soon as it has nothing to do — before the keyboard, waiting
+    /// on `/next` or coming back to the field, has the text. A few seconds for it.
+    private func stayAwake() {
+        DispatchQueue.main.async {
+            var task = UIBackgroundTaskIdentifier.invalid
+            task = UIApplication.shared.beginBackgroundTask { UIApplication.shared.endBackgroundTask(task) }
+            Task.detached { [self] in
+                for _ in 0..<40 {
+                    if heard.withLock({ delivered }) { break }
+                    try? await Task.sleep(for: .milliseconds(250))
+                }
+                // The answer on its way out.
+                try? await Task.sleep(for: .milliseconds(500))
+                await MainActor.run { UIApplication.shared.endBackgroundTask(task) }
+            }
+        }
     }
 
     private func serve(_ connection: NWConnection) {
@@ -60,6 +82,7 @@ final class PhoneServer: @unchecked Sendable {
         defer { heard.unlock() }
         while (latest?.seq ?? 0) <= after, heard.wait(until: deadline) {}
         guard let latest, latest.seq > after else { return ["seq": after] }
+        delivered = true
         return ["seq": latest.seq, "text": latest.text]
     }
 }

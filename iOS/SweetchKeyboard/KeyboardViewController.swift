@@ -1080,7 +1080,12 @@ final class KeyboardModel {
                 let (next, text) = try await server.next(after: seq, wait: caughtUp ? 25 : 0)
                 if Task.isCancelled { return }
                 if next > seq, let text, !text.isEmpty {
-                    if caughtUp { insertHeard(text) } else if last == nil { last = text }
+                    if caughtUp || Self.dictationAwaited(heardAt: next) {
+                        UserDefaults.standard.removeObject(forKey: Self.dictationOpenedKey)
+                        insertHeard(text)
+                    } else if last == nil {
+                        last = text
+                    }
                 }
                 seq = next
                 UserDefaults.standard.set(seq, forKey: seqKey)
@@ -1130,7 +1135,21 @@ final class KeyboardModel {
     /// GPU, and what it hears comes back here (from a Mac, or from the app itself). A keyboard has
     /// no UIApplication to open URLs with; the responder chain reaches the host's application, or
     /// its scene, which takes its own options object.
+    /// When the microphone last opened the app's dictation. The keyboard is gone meanwhile — the
+    /// app is in front — so what's heard waits for it to come back, and the first poll then, which
+    /// otherwise only catches up, types it.
+    private static let dictationOpenedKey = "dictationOpenedAt"
+
+    /// Heard (servers number their texts by the millisecond) after the microphone opened the
+    /// dictation, not long ago.
+    private static func dictationAwaited(heardAt seq: Int) -> Bool {
+        let opened = UserDefaults.standard.double(forKey: dictationOpenedKey)
+        let heard = Double(seq) / 1000
+        return opened > 0 && heard > opened && Date().timeIntervalSince1970 - opened < 300
+    }
+
     func openDictation() {
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.dictationOpenedKey)
         observeField()
         rememberField(now: true)
         let context = dictationContext()

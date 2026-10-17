@@ -355,7 +355,15 @@ enum Hearing {
        on the same mistake. When a heard word — especially an uncertain one — sounds like a name or \
        term the context shows and the context makes that reading the sensible one, write the name or \
        term, spelt as the context spells it.
-    5. TIDYING. The recogniser smooths over self-corrections and hesitations. A self-correction \
+    5. AN ENGLISH TERM HEARD AS NONSENSE. Inside Russian speech an English word or phrase often \
+       comes out as something that is a word in neither language — Cyrillic sounds, garbled Latin, \
+       or a mix ("войсерик огнешен", "войсрик Agnition" for "voice recognition"; "фичафлаг" for \
+       "feature flag"). When the heard thing is no real word and plainly sounds like an ordinary \
+       English word or phrase that makes sense in the sentence, write that English in Latin — \
+       the context needn't show it. A real Russian word stays as heard — and so does the user's \
+       Russian slang made from English, with Russian endings, which they write in Cyrillic \
+       ("ревью", "скилл", "промпты", "пушить", "задеплоил", "зарелизим", "заапрувит").
+    6. TIDYING. The recogniser smooths over self-corrections and hesitations. A self-correction \
        ("1300, нет, 1500") — keep what they settled on, as they said it.
 
     Deciding:
