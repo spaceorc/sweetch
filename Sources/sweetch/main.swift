@@ -4,6 +4,12 @@ let app = NSApplication.shared
 nonisolated(unsafe) var signalSources: [DispatchSourceSignal] = []
 
 // `sweetch --rehear <dictation folder>…`: run stored dictations through today's pipeline.
+// `sweetch --next-word-probe <cases.json> <out.json>`: the model guessing the next word typed.
+if let i = CommandLine.arguments.firstIndex(of: "--next-word-probe"), i + 2 < CommandLine.arguments.count {
+    NextWordProbe.run(URL(fileURLWithPath: CommandLine.arguments[i + 1]), URL(fileURLWithPath: CommandLine.arguments[i + 2]))
+    exit(0)
+}
+
 if let i = CommandLine.arguments.firstIndex(of: "--rehear") {
     Rehear.run(CommandLine.arguments[(i + 1)...].map { URL(fileURLWithPath: $0) })
     exit(0)

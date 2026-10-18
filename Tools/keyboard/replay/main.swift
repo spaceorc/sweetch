@@ -171,6 +171,29 @@ if let i = args.firstIndex(of: "--bench"), i + 1 < args.count {
     exit(0)
 }
 
+// `--at-letters <k>`: the decoder's suggestions with only the first k letters typed, for words of
+// four letters or more the lexicon has — first and in the top three, to set against a model's.
+if let i = args.firstIndex(of: "--at-letters"), i + 1 < args.count, let k = Int(args[i + 1]) {
+    var n = 0, first = 0, three = 0
+    for word in export.words where word.kind == "clean" && word.taps.count >= max(4, k + 1) {
+        let truth = word.truth.lowercased()
+        guard lexicon.lookup(truth) != nil, truth.count == word.taps.count else { continue }
+        let taps = word.taps.prefix(k).map { WordDecoder.Tap(point: CGPoint(x: $0.x, y: $0.y), keys: keys[$0.layout] ?? [], deliberate: $0.deliberate) }
+        var context = WordDecoder.Context()
+        if word.sentence_start == true { context.previous = 0 } else if let previous = word.previous { context.previous = lexicon.lookup(previous.lowercased()) }
+        var shown: [String] = []
+        for c in decoder.decode(Array(taps), complete: true, context: context).candidates where !shown.contains(c.word.lowercased()) {
+            shown.append(c.word.lowercased())
+            if shown.count == 3 { break }
+        }
+        n += 1
+        if shown.first == truth { first += 1 }
+        if shown.contains(truth) { three += 1 }
+    }
+    print("decoder with \(k) letters: \(n) words, first \(first) (\(100 * first / max(n, 1))%), in three \(three) (\(100 * three / max(n, 1))%)")
+    exit(0)
+}
+
 // `--post`: the previous word looked at again once the next is typed — the decoder's candidates
 // rescored with how likely each is right before the next word (the bigram's lift, as the left
 // context lifts it), changed only when the word wasn't one or the decoder doubted it. Counted:
