@@ -166,6 +166,11 @@ struct Server {
 
     /// The model's credentials and the user's name, for the phone to hear by itself (see
     /// PhonePipeline).
+    /// How well sweetch does, counted on the Mac without any text (see the Mac's Metrics).
+    func metrics() async throws -> [String: Any] {
+        try await get("/metrics", timeout: 20)
+    }
+
     func llmConfig() async throws -> (env: String, userName: String) {
         let reply = try await get("/llm-config", timeout: 5)
         guard let env = reply["env"] as? String else { throw Failure("no credentials from the Mac") }

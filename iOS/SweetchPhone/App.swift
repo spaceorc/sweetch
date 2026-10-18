@@ -31,6 +31,8 @@ struct SweetchPhoneApp: App {
         WindowGroup {
             if ProcessInfo.processInfo.arguments.contains("--keyboard-preview") {
                 KeyboardPreview()
+            } else if ProcessInfo.processInfo.arguments.contains("--metrics") {
+                NavigationStack { MetricsView() }
             } else {
                 ContentView()
                     // sweetch://dictate — the keyboard's microphone: the big screen, listening at once.
@@ -61,6 +63,13 @@ struct ContentView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    NavigationLink {
+                        MetricsView()
+                    } label: {
+                        Label("How It Goes", systemImage: "chart.bar.xaxis")
+                    }
+                }
                 Section {
                     TextField("Addresses", text: $address, axis: .vertical)
                         .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
