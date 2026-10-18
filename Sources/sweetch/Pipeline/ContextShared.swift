@@ -33,7 +33,8 @@ enum ContextSnapshot {
             if keyboardLimit > 0, let keyboard, !keyboard.isEmpty {
                 parts.append("<keyboard source=\"the user's iPhone keyboard in this app\">\n\(keyboard.suffix(keyboardLimit))\n</keyboard>")
             }
-            return parts.joined(separator: "\n\n")
+            // Nothing that looks like a key or a password goes to the model (Secrets.swift).
+            return Secrets.mask(parts.joined(separator: "\n\n"))
         }
     }
 

@@ -10,6 +10,12 @@ if let i = CommandLine.arguments.firstIndex(of: "--next-word-probe"), i + 2 < Co
     exit(0)
 }
 
+// `sweetch --sweep [--dry-run]`: mask the secrets in everything kept (Sweep.swift).
+if CommandLine.arguments.contains("--sweep") {
+    Sweep.run(dryRun: CommandLine.arguments.contains("--dry-run"))
+    exit(0)
+}
+
 if let i = CommandLine.arguments.firstIndex(of: "--rehear") {
     Rehear.run(CommandLine.arguments[(i + 1)...].map { URL(fileURLWithPath: $0) })
     exit(0)

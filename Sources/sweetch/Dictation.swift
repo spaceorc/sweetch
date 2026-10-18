@@ -485,7 +485,11 @@ enum DictationStore {
         ISO8601DateFormatter.string(from: date, timeZone: .current, formatOptions: [.withInternetDateTime, .withFractionalSeconds])
     }
 
+    /// Writes with every secret in it masked (Secrets.swift) — nothing kept holds one.
     static func write(_ object: [String: Any], to url: URL) {
+        var kinds: [String] = []
+        let object = Secrets.mask(object, kinds: &kinds)
+        if !kinds.isEmpty { log.info("dictation: masked \(kinds.count) secret(s) in \(url.lastPathComponent, privacy: .public)") }
         guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]) else {
             log.error("dictation: could not encode \(url.lastPathComponent, privacy: .public)")
             return

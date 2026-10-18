@@ -1,7 +1,9 @@
 #!/bin/sh
 # sweetch's recordings, the same on this Mac and the Mac mini: whatever is new — or newer — on
-# either side is copied to the other, and nothing is ever deleted, so a recording lost on one
-# Mac is still on the other. Each dictation is its own timestamped folder, so the two Macs never
+# either side is copied to the other, and nothing is deleted by accident, so a recording lost on
+# one Mac is still on the other. What was removed on purpose (a screenshot with a password on it, a
+# dictation forgotten) is named in a tombstone — sweetch's Tombstones, a file per Mac — which goes
+# across first and is carried out on both sides before anything else is copied, so it stays gone. Each dictation is its own timestamped folder, so the two Macs never
 # write the same one. Over Tailscale, so it works away from home too.
 set -u
 MINI=${MINI:-ivandashkevich@100.64.10.10}
@@ -19,6 +21,17 @@ if ! $SSH "$MINI" true 2>/dev/null; then
     fi
 fi
 status=0
+mkdir -p "$HERE/tombstones"
+$SSH "$MINI" "mkdir -p $THERE/tombstones"
+rsync -a --update -e "$SSH" "$HERE/tombstones/" "$MINI:$THERE/tombstones/" || status=1
+rsync -a --update -e "$SSH" "$MINI:$THERE/tombstones/" "$HERE/tombstones/" || status=1
+# Only paths inside the synced folders, nothing climbing out of them.
+dead=$(cat "$HERE"/tombstones/*.jsonl 2>/dev/null | sed -n 's/.*"path":"\([^"]*\)".*/\1/p' \
+    | grep -E '^(dictation|wispr-flow|keyboard)/[^/]+(/[^/]+)*$' | grep -v '\.\.' | sort -u)
+if [ -n "$dead" ]; then
+    printf '%s\n' "$dead" | while IFS= read -r p; do rm -rf -- "$HERE/$p"; done
+    printf '%s\n' "$dead" | $SSH "$MINI" "cd $THERE && while IFS= read -r p; do rm -rf -- \"\$p\"; done" || status=1
+fi
 for dir in dictation wispr-flow keyboard; do
     mkdir -p "$HERE/$dir"
     $SSH "$MINI" "mkdir -p $THERE/$dir"

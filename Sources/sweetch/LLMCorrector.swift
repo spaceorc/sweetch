@@ -63,7 +63,7 @@ enum LLMCorrector {
         FLIPPED: \(flipped)
         """
         if let context, !context.isEmpty, context != text {
-            firstUser += "\n\nSurrounding field text (reference only, do NOT include it): \(String(context.prefix(1000)))"
+            firstUser += "\n\nSurrounding field text (reference only, do NOT include it): \(Secrets.mask(String(context.prefix(1000))))"
         }
 
         var convo: [[String: String]] = [["role": "user", "content": firstUser]]

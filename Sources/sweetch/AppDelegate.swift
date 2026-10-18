@@ -30,6 +30,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Privacy.refreshLogText()   // the log carries text only while tracing
+        Sweep.runIfNew()
+        Quarantine.purge()
         watchPrivacy()
         // Newest instance wins. The watchdog hands over by starting a fresh copy, and this
         // is also what keeps a stray double-launch from leaving two event taps fighting.
@@ -609,6 +611,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let incognitoItem = NSMenuItem(title: "Incognito", action: #selector(toggleIncognito), keyEquivalent: "")
         incognitoItem.toolTip = "Nothing recorded, captured, sent to the AI or kept — dictation and AI correction off, layout switching on. Private browser windows and password fields are incognito by themselves."
         menu.addItem(incognitoItem)
+        let forgetItem = NSMenuItem(title: "Forget Last Dictation", action: #selector(forgetLastDictation), keyEquivalent: "")
+        forgetItem.toolTip = "Take the last dictation out of the history, here and on the Mac mini — kept aside on this Mac for 30 days, then gone"
+        menu.addItem(forgetItem)
         let dictationItem = NSMenuItem(title: "Dictation (Hold Space)", action: #selector(toggleDictation), keyEquivalent: "")
         dictationItem.toolTip = "Hold Space in a text field to dictate; Claude desktop and Claude Code keep their own"
         menu.addItem(dictationItem)
@@ -731,6 +736,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private var isDictationEnabled: Bool {
         UserDefaults.standard.object(forKey: Self.dictationEnabledKey) as? Bool ?? true
+    }
+
+    @objc private func forgetLastDictation() {
+        let fm = FileManager.default
+        let last = ((try? fm.contentsOfDirectory(at: DictationStore.dir, includingPropertiesForKeys: nil)) ?? [])
+            .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
+            .max { $0.lastPathComponent < $1.lastPathComponent }
+        guard let last, Quarantine.take(last, why: "forgotten") else {
+            loader.flash("nothing to forget", detail: "no dictation kept")
+            return
+        }
+        lastCorrection = nil
+        log.info("dictation: forgot \(last.lastPathComponent, privacy: .public)")
+        loader.flash("forgotten", detail: "the last dictation — here and on the Mac mini", symbol: "eye.slash")
     }
 
     @objc private func toggleIncognito() {
