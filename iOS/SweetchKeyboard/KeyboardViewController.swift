@@ -214,6 +214,7 @@ final class KeyboardModel {
 
     func appeared() {
         // Before anything is noted: a private tab's field is incognito from its first moment.
+        privateFieldDeclined = false
         privateField = looksPrivate()
         KeyLog.paused = incognito
         HostMemory.shared.paused = incognito
@@ -246,7 +247,6 @@ final class KeyboardModel {
             "secure": proxy?.isSecureTextEntry ?? false,
             "has_text_at_appear": proxy?.hasText ?? false,
             "selected_len": proxy?.selectedText?.count ?? 0,
-            "identifier": proxy?.documentIdentifier.uuidString ?? "",
             "layout": "\(layout)", "shift": "\(shift)",
         ])
         listening?.cancel()
@@ -1434,6 +1434,8 @@ final class KeyboardModel {
     /// A private field — Safari's private tab asks for a dark keyboard while the system is light —
     /// for as long as the keyboard is in it.
     private(set) var privateField = false { didSet { if privateField != oldValue { changed() } } }
+    /// The user turned incognito off in this private field: until the keyboard leaves it.
+    private var privateFieldDeclined = false
     var incognito: Bool { incognitoPicked || privateField }
 
     /// Safari, in a private tab, asks for a dark keyboard in its address and search fields while
@@ -1445,11 +1447,25 @@ final class KeyboardModel {
         return UIScreen.main.traitCollection.userInterfaceStyle == .light
     }
 
+    /// The strip's button: off when on (in a private tab, for this field), on by hand when off.
+    func toggleIncognito() {
+        if incognito {
+            if privateField {
+                privateFieldDeclined = true
+                privateField = false
+            }
+            setIncognito(false)
+        } else {
+            setIncognito(true)
+        }
+    }
+
     func setIncognito(_ on: Bool) {
-        guard on != incognitoPicked else { return }
-        if on, !privateField { KeyLog.note("incognito", ["on": true]) }   // the last thing logged
+        let was = incognito
+        if on, !was { KeyLog.note("incognito", ["on": true]) }   // the last thing logged
         incognitoPicked = on
         UserDefaults.standard.set(on, forKey: "incognito")
+        guard incognito != was else { return }
         KeyLog.paused = incognito
         HostMemory.shared.paused = incognito
         lastWord = nil
@@ -1460,6 +1476,7 @@ final class KeyboardModel {
             showStatus()
         } else {
             KeyLog.note("incognito", ["on": false])
+            showStatus()
             listening = Task { await listen() }
         }
     }

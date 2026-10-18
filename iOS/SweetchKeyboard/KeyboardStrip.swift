@@ -15,7 +15,9 @@ final class KeyboardStrip: UIView {
     private let microphone = UIButton(type: .system)
     private static let symbols = ["person", "briefcase", "sparkles"]
     private static let titles = ["Personal", "Work", "Agent"]
-    private var shownProfile: (Profiles.Name, Bool, Bool, Bool)?
+    private var shownProfile: (Profiles.Name, Bool)?
+    private let incognitoButton = UIButton(type: .system)
+    private var shownIncognito: Bool?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -31,20 +33,30 @@ final class KeyboardStrip: UIView {
         profileButton.layer.cornerRadius = 13
         profileButton.widthAnchor.constraint(equalToConstant: 46).isActive = true
         profileButton.heightAnchor.constraint(equalToConstant: 26).isActive = true
+        incognitoButton.setImage(UIImage(systemName: "eye.slash", withConfiguration: UIImage.SymbolConfiguration(pointSize: 12, weight: .medium)), for: .normal)
+        incognitoButton.layer.cornerRadius = 13
+        incognitoButton.widthAnchor.constraint(equalToConstant: 32).isActive = true
+        incognitoButton.heightAnchor.constraint(equalToConstant: 26).isActive = true
+        incognitoButton.addAction(UIAction { [weak self] _ in
+            UIDevice.current.playInputClick()
+            self?.model?.toggleIncognito()
+        }, for: .touchUpInside)
         microphone.setImage(UIImage(systemName: "mic.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .medium)), for: .normal)
         microphone.tintColor = .label
         microphone.addAction(UIAction { [weak self] _ in
             UIDevice.current.playInputClick()
             self?.model?.openDictation()
         }, for: .touchUpInside)
-        for part in [profileButton, suggestions, note, insert, microphone] as [UIView] {
+        for part in [profileButton, incognitoButton, suggestions, note, insert, microphone] as [UIView] {
             part.translatesAutoresizingMaskIntoConstraints = false
             addSubview(part)
         }
         NSLayoutConstraint.activate([
             profileButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
             profileButton.centerYAnchor.constraint(equalTo: centerYAnchor, constant: 1),
-            suggestions.leadingAnchor.constraint(equalTo: profileButton.trailingAnchor, constant: 4),
+            incognitoButton.leadingAnchor.constraint(equalTo: profileButton.trailingAnchor, constant: 4),
+            incognitoButton.centerYAnchor.constraint(equalTo: profileButton.centerYAnchor),
+            suggestions.leadingAnchor.constraint(equalTo: incognitoButton.trailingAnchor, constant: 4),
             microphone.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
             microphone.centerYAnchor.constraint(equalTo: centerYAnchor, constant: 1),
             microphone.widthAnchor.constraint(equalToConstant: 36),
@@ -52,7 +64,7 @@ final class KeyboardStrip: UIView {
             suggestions.trailingAnchor.constraint(equalTo: microphone.leadingAnchor, constant: -2),
             suggestions.topAnchor.constraint(equalTo: topAnchor, constant: 2),
             suggestions.bottomAnchor.constraint(equalTo: bottomAnchor),
-            note.leadingAnchor.constraint(equalTo: profileButton.trailingAnchor, constant: 10),
+            note.leadingAnchor.constraint(equalTo: incognitoButton.trailingAnchor, constant: 10),
             note.trailingAnchor.constraint(lessThanOrEqualTo: insert.leadingAnchor, constant: -8),
             note.centerYAnchor.constraint(equalTo: centerYAnchor, constant: 1),
             insert.trailingAnchor.constraint(equalTo: microphone.leadingAnchor, constant: -4),
@@ -66,7 +78,8 @@ final class KeyboardStrip: UIView {
 
     func render() {
         guard let model else { return }
-        showProfile(model.profile, picked: model.profileManual, incognito: model.incognito, incognitoPicked: model.incognitoPicked)
+        showProfile(model.profile, picked: model.profileManual)
+        showIncognito(model.incognito)
         microphone.isHidden = model.incognito
         // Just after a correction: first, the word as typed, to take it back.
         let undo = model.revertOffer
@@ -92,38 +105,37 @@ final class KeyboardStrip: UIView {
 
     /// The profile in use, on its one button: filled when the user picked it, faint when it's a
     /// guess; the menu has all three, the one in use ticked.
-    private func showProfile(_ profile: Profiles.Name, picked: Bool, incognito: Bool, incognitoPicked: Bool) {
-        if let shown = shownProfile, shown == (profile, picked, incognito, incognitoPicked) { return }
-        shownProfile = (profile, picked, incognito, incognitoPicked)
+    /// The profile in use, on its one button: filled when the user picked it, faint when it's a
+    /// guess; the menu has all three, the one in use ticked.
+    private func showProfile(_ profile: Profiles.Name, picked: Bool) {
+        if let shown = shownProfile, shown == (profile, picked) { return }
+        shownProfile = (profile, picked)
         var look = UIButton.Configuration.plain()
-        look.image = UIImage(systemName: incognito ? "eye.slash" : Self.symbols[profile.rawValue],
+        look.image = UIImage(systemName: Self.symbols[profile.rawValue],
                              withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .medium))
         look.baseForegroundColor = .label
         look.indicator = .popup
         look.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 6, bottom: 0, trailing: 4)
         profileButton.configuration = look
-        profileButton.backgroundColor = incognito ? UIColor.label.withAlphaComponent(0.85) : UIColor.label.withAlphaComponent(picked ? 0.18 : 0.08)
-        if incognito {
-            var dark = profileButton.configuration
-            dark?.baseForegroundColor = .systemBackground
-            profileButton.configuration = dark
-        }
+        profileButton.backgroundColor = UIColor.label.withAlphaComponent(picked ? 0.18 : 0.08)
         profileButton.accessibilityLabel = "Profile: \(Self.titles[profile.rawValue])"
-        let profiles = UIMenu(options: .displayInline, children: Profiles.Name.allCases.map { name in
+        profileButton.menu = UIMenu(children: Profiles.Name.allCases.map { name in
             UIAction(title: Self.titles[name.rawValue], image: UIImage(systemName: Self.symbols[name.rawValue]),
                      state: name == profile ? .on : .off) { [weak self] _ in
                 UIDevice.current.playInputClick()
                 self?.model?.chooseProfile(name)
             }
         })
-        // Incognito: nothing logged, learned or sent while it's on (see KeyboardModel.incognito).
-        let picked = incognitoPicked
-        let private_ = UIAction(title: "Incognito", subtitle: "Nothing logged, learned or sent",
-                                image: UIImage(systemName: "eye.slash"), state: picked ? .on : .off) { [weak self] _ in
-            UIDevice.current.playInputClick()
-            self?.model?.setIncognito(!picked)
-        }
-        profileButton.menu = UIMenu(children: [profiles, UIMenu(options: .displayInline, children: [private_])])
+    }
+
+    /// Incognito at a glance, and one tap to turn it: dark when on — by hand, or in a private tab
+    /// — faint when off.
+    private func showIncognito(_ on: Bool) {
+        guard shownIncognito != on else { return }
+        shownIncognito = on
+        incognitoButton.tintColor = on ? .systemBackground : .tertiaryLabel
+        incognitoButton.backgroundColor = on ? UIColor.label.withAlphaComponent(0.85) : .clear
+        incognitoButton.accessibilityLabel = on ? "Incognito on" : "Incognito off"
     }
 }
 
