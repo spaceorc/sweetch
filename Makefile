@@ -16,17 +16,18 @@ CERT_CRT   = $(CERT_DIR)/$(SIGN_ID).crt
 CERT_P12   = $(CERT_DIR)/$(SIGN_ID).p12
 CERT_CNF   = $(CERT_DIR)/$(SIGN_ID).cnf
 
-# The icon: Resources/icon/AppIcon-1024.png (Tools/icon/compose.py makes it from the user's
-# emblem). The iPhone has the same in layers (iOS/SweetchPhone/AppIcon.icon, Icon Composer's:
-# the background a fill, the emblem a layer), so its dark, clear and tinted looks are the system's. The Dock reads the *bundle* icon, so it has to end
-# up in Contents/Resources — setting applicationIconImage at runtime isn't picked up reliably when an accessory app
-# switches to a regular activation policy.
+# The icon: Resources/icon/AppIcon.icon, Icon Composer's (the user's emblem as a layer on a gradient
+# fill), the iPhone's too. actool makes Assets.car of it — the layers, so the system draws the
+# light, dark, clear and tinted looks — and AppIcon.icns for whatever still reads that. The Dock
+# reads the *bundle* icon, so it has to end up in Contents/Resources — setting
+# applicationIconImage at runtime isn't picked up reliably when an accessory app switches to a
+# regular activation policy.
 WATCHDOG_LABEL = com.spaceorc.sweetch.watchdog
 WATCHDOG_PLIST = $(HOME)/Library/LaunchAgents/$(WATCHDOG_LABEL).plist
 
-ICON_SRC   = Resources/icon/AppIcon-1024.png
-ICON_ICNS  = $(BUILD_DIR)/AppIcon.icns
-ICONSET    = $(BUILD_DIR)/AppIcon.iconset
+ICON_SRC   = Resources/icon/AppIcon.icon
+ICON_DIR   = $(BUILD_DIR)/icon
+ICON_ICNS  = $(ICON_DIR)/AppIcon.icns
 
 .PHONY: all build app run debug clean setup-signing tcc-reset icon stop start trace phone serve-app mini sync sync-install lexicon decoder-eval whisper-framework
 
@@ -80,21 +81,11 @@ start:
 
 icon: $(ICON_ICNS)
 
-$(ICON_ICNS): $(ICON_SRC)
-	@mkdir -p $(BUILD_DIR)
-	@cp $(ICON_SRC) $(BUILD_DIR)/icon-1024.png
-	@rm -rf $(ICONSET) && mkdir -p $(ICONSET)
-	@sips -z 16 16     $(BUILD_DIR)/icon-1024.png --out $(ICONSET)/icon_16x16.png      >/dev/null
-	@sips -z 32 32     $(BUILD_DIR)/icon-1024.png --out $(ICONSET)/icon_16x16@2x.png   >/dev/null
-	@sips -z 32 32     $(BUILD_DIR)/icon-1024.png --out $(ICONSET)/icon_32x32.png      >/dev/null
-	@sips -z 64 64     $(BUILD_DIR)/icon-1024.png --out $(ICONSET)/icon_32x32@2x.png   >/dev/null
-	@sips -z 128 128   $(BUILD_DIR)/icon-1024.png --out $(ICONSET)/icon_128x128.png    >/dev/null
-	@sips -z 256 256   $(BUILD_DIR)/icon-1024.png --out $(ICONSET)/icon_128x128@2x.png >/dev/null
-	@sips -z 256 256   $(BUILD_DIR)/icon-1024.png --out $(ICONSET)/icon_256x256.png    >/dev/null
-	@sips -z 512 512   $(BUILD_DIR)/icon-1024.png --out $(ICONSET)/icon_256x256@2x.png >/dev/null
-	@sips -z 512 512   $(BUILD_DIR)/icon-1024.png --out $(ICONSET)/icon_512x512.png    >/dev/null
-	@cp $(BUILD_DIR)/icon-1024.png $(ICONSET)/icon_512x512@2x.png
-	@iconutil -c icns $(ICONSET) -o $(ICON_ICNS)
+$(ICON_ICNS): $(ICON_SRC) $(ICON_SRC)/icon.json $(wildcard $(ICON_SRC)/Assets/*)
+	@rm -rf $(ICON_DIR) && mkdir -p $(ICON_DIR)
+	@DEVELOPER_DIR=$(XCODE_DEV) xcrun actool --compile $(CURDIR)/$(ICON_DIR) --platform macosx \
+		--minimum-deployment-target 26.0 --app-icon AppIcon --output-partial-info-plist $(CURDIR)/$(ICON_DIR)/partial.plist \
+		--output-format human-readable-text $(CURDIR)/$(ICON_SRC) | grep -E 'error|warning' || true
 	@echo "built $(ICON_ICNS)"
 
 build:
@@ -107,7 +98,7 @@ app: build setup-signing $(ICON_ICNS)
 	@mkdir -p $(APP_BUNDLE)/Contents/Resources
 	@cp .build/release/$(APP_NAME) $(APP_BUNDLE)/Contents/MacOS/$(APP_NAME)
 	@cp $(PLIST_SRC) $(APP_BUNDLE)/Contents/Info.plist
-	@cp $(ICON_ICNS) $(APP_BUNDLE)/Contents/Resources/AppIcon.icns
+	@cp $(ICON_ICNS) $(ICON_DIR)/Assets.car $(APP_BUNDLE)/Contents/Resources/
 	@cp .env $(APP_BUNDLE)/Contents/Resources/sweetch.env 2>/dev/null || echo "warning: .env missing — LLM correction disabled"
 	@codesign --force --sign "$(SIGN_ID)" $(APP_BUNDLE)
 	@touch $(APP_BUNDLE)
@@ -123,7 +114,7 @@ debug: setup-signing $(ICON_ICNS)
 	@mkdir -p $(APP_BUNDLE)/Contents/Resources
 	@cp .build/debug/$(APP_NAME) $(APP_BUNDLE)/Contents/MacOS/$(APP_NAME)
 	@cp $(PLIST_SRC) $(APP_BUNDLE)/Contents/Info.plist
-	@cp $(ICON_ICNS) $(APP_BUNDLE)/Contents/Resources/AppIcon.icns
+	@cp $(ICON_ICNS) $(ICON_DIR)/Assets.car $(APP_BUNDLE)/Contents/Resources/
 	@cp .env $(APP_BUNDLE)/Contents/Resources/sweetch.env 2>/dev/null || echo "warning: .env missing — LLM correction disabled"
 	@codesign --force --sign "$(SIGN_ID)" $(APP_BUNDLE)
 	@$(MAKE) --no-print-directory start

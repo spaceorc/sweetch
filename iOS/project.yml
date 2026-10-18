@@ -22,6 +22,8 @@ targets:
       # The keyboard's code too, for `--keyboard-preview`.
       - path: SweetchKeyboard
         excludes: [Info.plist]
+      # The app icon, the Mac's too: Icon Composer's, in layers.
+      - path: ../Resources/icon/AppIcon.icon
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.spaceorc.sweetch.phone
