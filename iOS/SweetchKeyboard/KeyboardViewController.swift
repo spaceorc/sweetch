@@ -255,7 +255,8 @@ final class KeyboardModel {
         listening?.cancel()
         KeyLog.paused = incognito
         HostMemory.shared.paused = incognito
-        listening = incognito ? nil : Task { await listen() }
+        let here = incognito
+        listening = Task { await listen(onlyHere: here) }
         autoCapitalise()
         fieldChanged()
     }
@@ -1277,9 +1278,10 @@ final class KeyboardModel {
     /// Waits on every Mac for what it hears next, and types it: a dictation goes to whichever Mac
     /// was reachable. What was heard before the keyboard came up isn't typed — it may have been
     /// meant for another field — but stays a tap away.
-    private func listen() async {
+    /// `onlyHere`: incognito — the app on this phone only, no Mac.
+    private func listen(onlyHere: Bool = false) async {
         await withTaskGroup(of: Void.self) { group in
-            for (index, addresses) in Server.macs.enumerated() {
+            for (index, addresses) in Server.macs.enumerated() where !onlyHere {
                 group.addTask { await self.listen(to: addresses, first: index == 0) }
             }
             // And the app on this phone, which hears by itself when no Mac answers.
@@ -1364,7 +1366,7 @@ final class KeyboardModel {
         insert(spaced)
         HostMemory.shared.dictated(text, process: hostProcess, profile: profile.key)
         log("heard", ["text": text, "dictation": id ?? "", "from": from, "how": how])
-        inField.append((id, text, Date()))
+        if !incognito { inField.append((id, text, Date())) }
         let latin = text.unicodeScalars.filter { ("a"..."z").contains($0) || ("A"..."Z").contains($0) }.count
         let cyrillic = text.unicodeScalars.filter { (0x0400...0x04FF).contains($0.value) }.count
         if latin + cyrillic > 0 {
@@ -1482,27 +1484,32 @@ final class KeyboardModel {
         lastWord = nil
         if incognito {
             listening?.cancel()
-            listening = nil
             connected = [:]
+            listening = Task { await listen(onlyHere: true) }
             showStatus()
         } else {
             incognitoResidue = proxy?.hasText == true || !field.text.isEmpty
             KeyLog.note("incognito", ["on": false])
             showStatus()
+            listening?.cancel()
             listening = Task { await listen() }
         }
     }
 
     func openDictation() {
-        guard !incognito else { return }
         UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.dictationOpenedKey)
         observeField()
         rememberField(now: true)
-        let context = dictationContext()
-        KeyLog.note("open-dictation", ["context_keys": Array(context.keys).sorted()])
         var components = URLComponents(string: "sweetch://dictate")!
-        if let json = try? JSONSerialization.data(withJSONObject: context) {
-            components.queryItems = [URLQueryItem(name: "context", value: json.base64EncodedString())]
+        if incognito {
+            // Heard on the phone alone, with nothing of the field.
+            components.queryItems = [URLQueryItem(name: "incognito", value: "1")]
+        } else {
+            let context = dictationContext()
+            KeyLog.note("open-dictation", ["context_keys": Array(context.keys).sorted()])
+            if let json = try? JSONSerialization.data(withJSONObject: context) {
+                components.queryItems = [URLQueryItem(name: "context", value: json.base64EncodedString())]
+            }
         }
         guard let url = components.url else { return }
         let selector = NSSelectorFromString("openURL:options:completionHandler:")

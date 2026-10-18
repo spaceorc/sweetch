@@ -44,7 +44,14 @@ struct SweetchPhoneApp: App {
                             .first { $0.name == "context" }?.value
                             .flatMap { Data(base64Encoded: $0) }
                             .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
-                        DictationScreen.open(keyboard: keyboard)
+                        let incognito = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
+                            .contains { $0.name == "incognito" && $0.value == "1" } ?? false
+                        DictationScreen.open(keyboard: keyboard, incognito: incognito)
+                    }
+                    // `--dictation-screen [incognito]`: the screen up at launch, to look at it in the simulator.
+                    .task {
+                        let arguments = ProcessInfo.processInfo.arguments
+                        if arguments.contains("--dictation-screen") { DictationScreen.open(keyboard: nil, incognito: arguments.last == "incognito") }
                     }
             }
         }

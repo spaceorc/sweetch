@@ -24,10 +24,18 @@ final class Dictation: ObservableObject {
     @Published private(set) var lastSeconds: Double?
     @Published private(set) var problem: String?
     /// The big dictation screen is up: opened from the keyboard's microphone.
-    @Published var screen = false
+    @Published var screen = false {
+        // Closed: incognito was the screen's — an Action Button dictation after it is as usual.
+        didSet { if !screen, phase == .idle { incognito = false } }
+    }
     /// What the keyboard knew when its microphone opened the dictation: the context, in place of a
     /// screenshot. Taken by the next dictation.
     var keyboard: [String: Any]?
+    /// Incognito: the keyboard's microphone opened the dictation while the keyboard was incognito.
+    /// Heard on the phone alone — whisper here, or Apple's hearing — with no context, no model, no
+    /// Mac; nothing kept (no folder, no log, not on the clipboard), nothing shown on the lock
+    /// screen; the text reaches the keyboard on the phone. Taken by the next dictation.
+    @Published var incognito = false
 
     private var engine: AVAudioEngine?
     private let tap = Tap()
@@ -88,9 +96,9 @@ final class Dictation: ObservableObject {
         tap.begin(file: file, live: live)
         recording = url
         self.live = live
-        server = Task { await Server.reachable() }
+        server = incognito ? nil : Task { await Server.reachable() }
         screenshot = nil
-        sendContext(waitingForScreenshot: waitingForScreenshot)
+        if !incognito { sendContext(waitingForScreenshot: waitingForScreenshot) }
         phase = .listening
         Task { await show(.listening, "") }
     }
@@ -169,7 +177,7 @@ final class Dictation: ObservableObject {
         microphoneOff()
         // The experiment: heard on the phone too, alongside the Mac, while the app is open (iOS gives
         // an app in the background no GPU).
-        if PhoneWhisper.shared.enabled, UIApplication.shared.applicationState == .active {
+        if !incognito, PhoneWhisper.shared.enabled, UIApplication.shared.applicationState == .active {
             let audioSeconds = Double((try? AVAudioFile(forReading: recording))?.length ?? 0) / 16_000
             PhoneWhisper.shared.hear(recording) { text, seconds in
                 // To the Mac's log beside the Mac's own hearing of the same recording.
@@ -186,6 +194,20 @@ final class Dictation: ObservableObject {
         await show(.recognizing, preview)
 
         let apple = await live?.transcript(waiting: 0.3)
+        if incognito {
+            let started = Date()
+            let text = await Self.hearPrivately(recording) ?? apple ?? ""
+            lastSeconds = Date().timeIntervalSince(started)
+            last = text
+            if !text.isEmpty { PhoneServer.shared.publish(text, id: nil) }
+            try? FileManager.default.removeItem(at: recording)
+            self.recording = nil
+            server = nil
+            keyboard = nil
+            await endActivity(showing: .init(phase: .done, text: "Incognito"))
+            if !screen { incognito = false }
+            return
+        }
         let contextID = await context?.value
         context = nil
         defer { server = nil }
@@ -264,7 +286,20 @@ final class Dictation: ObservableObject {
     private func heardSoFar(_ text: String) {
         guard phase == .listening else { return }
         preview = text
-        Task { await show(.listening, text) }
+        // Incognito: the words stay on the app's screen, not the lock screen's.
+        Task { await show(.listening, incognito ? "" : text) }
+    }
+
+    /// Incognito's hearing: whisper on the phone, bare — no prompt, no model after — or nil.
+    private nonisolated static func hearPrivately(_ wav: URL) async -> String? {
+        guard FileManager.default.fileExists(atPath: PhoneWhisper.modelFile.path), let samples = PhoneWhisper.samples(wav) else { return nil }
+        return await withCheckedContinuation { done in
+            DispatchQueue.global(qos: .userInitiated).async {
+                guard let heard = PhoneWhisper.shared.listen(samples, language: nil, prompt: nil) else { return done.resume(returning: nil) }
+                let text = Whisper.withoutRepeat(heard.segments).joined().trimmingCharacters(in: .whitespacesAndNewlines)
+                done.resume(returning: text.isEmpty || Whisper.isPhantom(text) ? nil : text)
+            }
+        }
     }
 
     private func show(_ phase: DictationActivity.ContentState.Phase, _ text: String) async {

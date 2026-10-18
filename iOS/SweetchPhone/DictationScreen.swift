@@ -8,16 +8,20 @@ struct DictationScreen: View {
     @Environment(\.scenePhase) private var scenePhase
 
     /// Up, and listening unless it already is. `keyboard`: what the keyboard knew, for the context.
-    static func open(keyboard: [String: Any]?) {
+    static func open(keyboard: [String: Any]?, incognito: Bool = false) {
         let dictation = Dictation.shared
         dictation.screen = true
-        if dictation.phase == .idle { dictation.keyboard = keyboard }
+        if dictation.phase == .idle {
+            dictation.keyboard = incognito ? nil : keyboard
+            dictation.incognito = incognito
+        }
         if dictation.phase == .idle { Task { _ = try? await dictation.toggle(waitingForScreenshot: false) } }
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
+            HStack(alignment: .top) {
+                if dictation.incognito { incognitoBadge }
                 Spacer()
                 Button {
                     dictation.screen = false
@@ -46,13 +50,28 @@ struct DictationScreen: View {
             button.padding(.bottom, 40)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(LinearGradient(colors: [Color(red: 0.07, green: 0.06, blue: 0.16), Color(red: 0.02, green: 0.02, blue: 0.05)],
+        .background(LinearGradient(colors: dictation.incognito
+                                   ? [Color(white: 0.13), Color(white: 0.03)]   // no colour: nothing of this is kept
+                                   : [Color(red: 0.07, green: 0.06, blue: 0.16), Color(red: 0.02, green: 0.02, blue: 0.05)],
                                    startPoint: .top, endPoint: .bottom).ignoresSafeArea())
         .preferredColorScheme(.dark)
         .onChange(of: scenePhase) { _, phase in
             // Back in the app it came from: stopped there, heard in the background.
             if phase == .background, dictation.phase == .listening { Self.stopInBackground() }
             if phase == .background, dictation.phase == .idle { dictation.screen = false }
+        }
+    }
+
+    /// Incognito, plainly: what it means, in a line.
+    private var incognitoBadge: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Label("Incognito", systemImage: "eye.slash")
+                .font(.system(size: 15, weight: .semibold))
+                .padding(.horizontal, 10).padding(.vertical, 5)
+                .background(.white, in: Capsule())
+                .foregroundStyle(.black)
+            Text("Heard on this phone only. Nothing kept, nothing sent.")
+                .font(.caption).foregroundStyle(.white.opacity(0.6))
         }
     }
 

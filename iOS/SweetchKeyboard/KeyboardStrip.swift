@@ -80,7 +80,6 @@ final class KeyboardStrip: UIView {
         guard let model else { return }
         showProfile(model.profile, picked: model.profileManual)
         showIncognito(model.incognito)
-        microphone.isHidden = model.incognito
         // Just after a correction: first, the word as typed, to take it back.
         let undo = model.revertOffer
         let words = (undo.map { [$0] } ?? []) + model.suggestions.prefix(undo == nil ? 3 : 2)
