@@ -30,6 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Privacy.refreshLogText()   // the log carries text only while tracing
+        watchPrivacy()
         // Newest instance wins. The watchdog hands over by starting a fresh copy, and this
         // is also what keeps a stray double-launch from leaving two event taps fighting.
         let handover = terminateOtherInstances()
@@ -632,10 +633,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// The menu bar is the only place a crash can be reported — there's no window to notice.
     private func refreshStatusIcon() {
-        let symbol = pendingCrashReport != nil ? "exclamationmark.triangle" : Privacy.incognito ? "eye.slash" : "keyboard"
+        let symbol = pendingCrashReport != nil ? "exclamationmark.triangle" : privateNow != nil ? "eye.slash" : "keyboard"
         let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "sweetch")
         image?.isTemplate = true
         statusItem?.button?.image = image
+        statusItem?.button?.toolTip = privateNow.map { "sweetch — private: \($0.text)" } ?? "sweetch"
+    }
+
+    /// Why the window in front is private now, if it is — for the icon: an eye.slash while
+    /// incognito is on, and while a private browser window or a password field is in front.
+    private var privateNow: Privacy.Reason?
+
+    /// Looks at what's in front on every app switch and once a second (a private window opened
+    /// in the same browser is no app switch) — the same check as a key press, well under 1 ms.
+    private func watchPrivacy() {
+        let look = { [weak self] in
+            guard let self else { return }
+            let reason = Privacy.check(NSWorkspace.shared.frontmostApplication)
+            if reason != self.privateNow { self.privateNow = reason; self.refreshStatusIcon() }
+        }
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { _ in look() }
+        Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in look() }
+        look()
     }
 
     /// Register as a login item once, on first launch only, so the app survives a reboot.
@@ -716,6 +736,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func toggleIncognito() {
         Privacy.incognito.toggle()
         if Privacy.incognito { lastCorrection = nil }
+        privateNow = Privacy.check(NSWorkspace.shared.frontmostApplication)
         refreshStatusIcon()
         log.info("incognito \(Privacy.incognito ? "on" : "off", privacy: .public)")
     }
