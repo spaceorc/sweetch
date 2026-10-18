@@ -119,7 +119,7 @@ enum CrashWatch {
     private static func summarize(_ report: URL) -> String? {
         guard let root = body(of: report) else { return nil }
 
-        var lines: [String] = ["sweetch crash report", ""]
+        var lines: [String] = ["Sweetch crash report", ""]
         if let time = root["captureTime"] as? String { lines.append("when:        \(time)") }
         if let version = root["appVersion"] as? String { lines.append("version:     \(version)") }
         if let exception = root["exception"] as? [String: Any] {
@@ -133,7 +133,7 @@ enum CrashWatch {
         let threads = root["threads"] as? [[String: Any]] ?? []
         if let faulting = threads.first(where: { $0["triggered"] as? Bool == true }) {
             lines.append("")
-            lines.append("faulting thread — sweetch's own frames marked with >>:")
+            lines.append("faulting thread — Sweetch's own frames marked with >>:")
             for frame in (faulting["frames"] as? [[String: Any]] ?? []).prefix(30) {
                 let index = frame["imageIndex"] as? Int ?? -1
                 let image = (index >= 0 && index < images.count) ? (images[index]["name"] as? String ?? "?") : "?"

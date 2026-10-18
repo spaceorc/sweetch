@@ -303,7 +303,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func setThinking(_ on: Bool) {
         if on { loader.show() } else { loader.hide() }
         guard let button = statusItem?.button else { return }
-        if on, let img = NSImage(systemSymbolName: "keyboard.badge.ellipsis", accessibilityDescription: "sweetch") {
+        if on, let img = NSImage(systemSymbolName: "keyboard.badge.ellipsis", accessibilityDescription: "Sweetch") {
             img.isTemplate = true
             button.image = img
         } else if !on {
@@ -387,9 +387,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         let appItem = NSMenuItem()
         let appMenu = NSMenu()
-        appMenu.addItem(NSMenuItem(title: "Hide sweetch", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h"))
+        appMenu.addItem(NSMenuItem(title: "Hide Sweetch", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h"))
         appMenu.addItem(NSMenuItem.separator())
-        appMenu.addItem(NSMenuItem(title: "Quit sweetch", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        appMenu.addItem(NSMenuItem(title: "Quit Sweetch", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         appItem.submenu = appMenu
         mainMenu.addItem(appItem)
 
@@ -600,7 +600,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(loginItem)
         let watchdogItem = NSMenuItem(title: "Restart on Crash", action: #selector(toggleWatchdog), keyEquivalent: "")
         watchdogItem.state = Watchdog.isInstalled ? .on : .off
-        watchdogItem.toolTip = "Run under a launchd agent that starts sweetch at login and brings it back if it dies"
+        watchdogItem.toolTip = "Run under a launchd agent that starts Sweetch at login and brings it back if it dies"
         menu.addItem(watchdogItem)
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Edit Dictionary…", action: #selector(openDictionary), keyEquivalent: ""))
@@ -631,7 +631,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(NSMenuItem(title: "Edit Key Remaps…", action: #selector(openRemaps), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Detect Key…", action: #selector(detectKey), keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "Quit sweetch", action: #selector(quit), keyEquivalent: "q"))
+        menu.addItem(NSMenuItem(title: "Quit Sweetch", action: #selector(quit), keyEquivalent: "q"))
         menu.delegate = self
         item.menu = menu
     }
@@ -639,10 +639,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// The menu bar is the only place a crash can be reported — there's no window to notice.
     private func refreshStatusIcon() {
         let symbol = pendingCrashReport != nil ? "exclamationmark.triangle" : privateNow != nil ? "eye.slash" : "keyboard"
-        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "sweetch")
+        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Sweetch")
         image?.isTemplate = true
         statusItem?.button?.image = image
-        statusItem?.button?.toolTip = privateNow.map { "sweetch — private: \($0.text)" } ?? "sweetch"
+        statusItem?.button?.toolTip = privateNow.map { "Sweetch — private: \($0.text)" } ?? "Sweetch"
     }
 
     /// Why the window in front is private now, if it is — for the icon: an eye.slash while

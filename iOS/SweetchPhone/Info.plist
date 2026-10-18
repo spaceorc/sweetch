@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>sweetch</string>
+	<string>Sweetch</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -37,11 +37,11 @@
 		<true/>
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>sweetch reaches your Mac on the local network when Tailscale is off.</string>
+	<string>Sweetch reaches your Mac on the local network when Tailscale is off.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>sweetch records what you dictate and hears it on your Mac.</string>
+	<string>Sweetch records what you dictate and hears it on your Mac.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>sweetch shows the words as you say them.</string>
+	<string>Sweetch shows the words as you say them.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
 	<key>SweetchToken</key>

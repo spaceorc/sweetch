@@ -23,7 +23,7 @@ final class LoaderOverlay {
         let panel = self.panel ?? makePanel()
         self.panel = panel
         caption?.stringValue = text
-        glyph?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "sweetch")
+        glyph?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Sweetch")
         spinner?.isHidden = !spinning
         if spinning { spinner?.startAnimation(nil) } else { spinner?.stopAnimation(nil) }
         layout(panel)
@@ -128,7 +128,7 @@ final class LoaderOverlay {
         self.blur = blur
 
         // Keyboard glyph on top.
-        if let img = NSImage(systemSymbolName: "keyboard", accessibilityDescription: "sweetch") {
+        if let img = NSImage(systemSymbolName: "keyboard", accessibilityDescription: "Sweetch") {
             let iv = NSImageView(image: img)
             iv.symbolConfiguration = .init(pointSize: 40, weight: .regular)
             iv.contentTintColor = .labelColor

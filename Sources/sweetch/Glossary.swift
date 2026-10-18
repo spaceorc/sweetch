@@ -30,7 +30,7 @@ enum Glossary {
     }
 
     private static func write(_ list: [String]) {
-        let header = "# sweetch glossary — one word per line. These are kept as-is by the corrector.\n"
+        let header = "# Sweetch glossary — one word per line. These are kept as-is by the corrector.\n"
         try? (header + list.joined(separator: "\n") + "\n").write(to: AppSupport.glossary, atomically: true, encoding: .utf8)
     }
 

@@ -1541,7 +1541,7 @@ final class KeyboardModel {
             unsafeBitCast(scene.method(for: selector), to: Open.self)(scene, selector, url, options, nil)
             return
         }
-        status = "open sweetch to dictate"
+        status = "open Sweetch to dictate"
     }
 
     func typeLast() {

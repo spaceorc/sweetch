@@ -147,7 +147,7 @@ struct ContentView: View {
                     Text("An experiment: a dictation made here, in the open app, is heard on the phone as well as on the Mac — the same model — to compare speed and text.")
                 }
             }
-            .navigationTitle("sweetch")
+            .navigationTitle("Sweetch")
         }
         .fullScreenCover(isPresented: $dictation.screen) { DictationScreen() }
     }

@@ -31,12 +31,12 @@ targets:
     info:
       path: SweetchPhone/Info.plist
       properties:
-        CFBundleDisplayName: sweetch
+        CFBundleDisplayName: Sweetch
         UILaunchScreen: {}
-        NSMicrophoneUsageDescription: sweetch records what you dictate and hears it on your Mac.
-        NSSpeechRecognitionUsageDescription: sweetch shows the words as you say them.
+        NSMicrophoneUsageDescription: Sweetch records what you dictate and hears it on your Mac.
+        NSSpeechRecognitionUsageDescription: Sweetch shows the words as you say them.
         NSSupportsLiveActivities: true
-        NSLocalNetworkUsageDescription: sweetch reaches your Mac on the local network when Tailscale is off.
+        NSLocalNetworkUsageDescription: Sweetch reaches your Mac on the local network when Tailscale is off.
         SweetchToken: $(SWEETCH_TOKEN)
         UIBackgroundModes: [audio]
         NSAppTransportSecurity:
@@ -61,7 +61,7 @@ targets:
     info:
       path: SweetchWidget/Info.plist
       properties:
-        CFBundleDisplayName: sweetch
+        CFBundleDisplayName: Sweetch
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
   SweetchKeyboard:
@@ -75,7 +75,7 @@ targets:
     info:
       path: SweetchKeyboard/Info.plist
       properties:
-        CFBundleDisplayName: sweetch
+        CFBundleDisplayName: Sweetch
         SweetchToken: $(SWEETCH_TOKEN)
         NSLocalNetworkUsageDescription: The keyboard reaches your Mac on the local network when Tailscale is off.
         NSAppTransportSecurity:
