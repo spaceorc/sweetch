@@ -31,23 +31,34 @@ enum Replayer {
             postKey(keyCode: 51, flags: [], down: false)
         }
 
-        // 2. Switch input source.
+        // 2. Switch input source — for what's typed next.
         InputSourceSwitcher.toggle()
-
-        // 3. Give the receiver a moment to pick up the TIS change.
         usleep(20_000)
 
-        // 4. Replay each keystroke (keyCodes are layout-independent — translation happens
-        //    in the receiver against the active TIS).
+        // 3. Replay each keystroke with the character it makes in the other layout carried in
+        //    the event. The receiver picks a layout change up when it gets to it — Spotlight
+        //    later than 20 ms — and a bare keyCode would come out in the old layout ("ыafari");
+        //    the character in the event doesn't wait for it (nor mind a modifier still held).
+        let (toSecondary, toPrimary) = LayoutTranslator.buildMaps()
         for k in word {
             let flags = k.flags.intersection(.maskShift)
-            postKey(keyCode: k.keyCode, flags: flags, down: true)
-            postKey(keyCode: k.keyCode, flags: flags, down: false)
+            let map = InputSourceSwitcher.secondaryIDs.contains(k.sourceID) ? toPrimary : toSecondary
+            let text = k.chars.count == 1 ? other(Character(k.chars), in: map) : nil
+            postKey(keyCode: k.keyCode, flags: flags, down: true, text: text)
+            postKey(keyCode: k.keyCode, flags: flags, down: false, text: text)
         }
 
-        // 5. Remember new layout on the same buffer entries so another press toggles back.
+        // 4. Remember new layout on the same buffer entries so another press toggles back.
         let newSourceID = InputSourceSwitcher.currentSourceID()
         buffer.relabel(range: range, sourceID: newSourceID)
+    }
+
+    /// `c` in the other layout; a capital through its small letter (the maps are built unshifted).
+    private static func other(_ c: Character, in map: [Character: Character]) -> String? {
+        if let o = map[c] { return String(o) }
+        let lower = Character(c.lowercased())
+        guard lower != c, let o = map[lower] else { return nil }
+        return o.uppercased()
     }
 
     static func postKeyPair(keyCode: Int64, flags: CGEventFlags) {
@@ -102,9 +113,13 @@ enum Replayer {
         }
     }
 
-    private static func postKey(keyCode: Int64, flags: CGEventFlags, down: Bool) {
+    private static func postKey(keyCode: Int64, flags: CGEventFlags, down: Bool, text: String? = nil) {
         guard let event = CGEvent(keyboardEventSource: eventSource, virtualKey: CGKeyCode(keyCode), keyDown: down) else { return }
         event.flags = flags
+        if let text {
+            let utf16 = Array(text.utf16)
+            utf16.withUnsafeBufferPointer { event.keyboardSetUnicodeString(stringLength: $0.count, unicodeString: $0.baseAddress) }
+        }
         // Post at HID level so the event traverses the full input stack like a real key —
         // Chromium-based inputs are stricter about where the event entered from.
         event.post(tap: .cghidEventTap)
