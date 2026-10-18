@@ -255,12 +255,25 @@ final class KeyboardModel {
         let previous = String(field.text)
         observeField()
         let now = String(field.text)
-        // Emptied — a message sent — or another field: what it held, before it's gone.
-        if now.isEmpty || !now.hasPrefix(String(previous.prefix(20))) {
+        if now.isEmpty, !previous.isEmpty {
+            // Emptied — a message sent — or only the focus leaving, when iOS shows an empty field a
+            // moment before the keyboard goes: told apart by whether it's still up, and empty, then.
             HostMemory.shared.saw(previous, process: hostProcess, profile: profile.key)
-            settleDictations(in: previous, why: now.isEmpty ? "emptied" : "other-field")
+            let since = visibleSince
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(500))
+                guard let self, self.visibleSince == since, since != nil, self.field.text.isEmpty else { return }
+                self.settleDictations(in: previous, why: "emptied")
+                self.noteExternal(from: previous, to: "")
+            }
+        } else {
+            // Another field: what it held, before it's gone.
+            if !now.hasPrefix(String(previous.prefix(20))) {
+                HostMemory.shared.saw(previous, process: hostProcess, profile: profile.key)
+                settleDictations(in: previous, why: "other-field")
+            }
+            noteExternal(from: previous, to: now)
         }
-        noteExternal(from: previous, to: now)
         rememberField(now: false)
         if !(proxy?.documentContextBeforeInput?.hasSuffix(" ") ?? false) { spaceIsOurs = false }
         log("host-change")
@@ -1263,8 +1276,18 @@ final class KeyboardModel {
                 UserDefaults.standard.removeObject(forKey: Self.pendingKey)
                 return
             }
+            // Typed once already: again only while the host may still be making its field anew — a
+            // moment after. Later, the field showing less (focus moved away and back) is no loss.
+            if let typedAt = pending["typed_at"] as? Double, Date().timeIntervalSince1970 - typedAt > 3 {
+                UserDefaults.standard.removeObject(forKey: Self.pendingKey)
+                self.log("heard-done", ["dictation": pending["id"] as? String ?? ""])
+                return
+            }
             let mark = String(text.suffix(24))
             if !(self.proxy?.documentContextBeforeInput ?? "").contains(mark) {
+                var typed = pending
+                if typed["typed_at"] == nil { typed["typed_at"] = Date().timeIntervalSince1970 }
+                UserDefaults.standard.set(typed, forKey: Self.pendingKey)
                 self.insertHeard(text, again: true, id: (pending["id"] as? String).flatMap { $0.isEmpty ? nil : $0 },
                                  from: pending["from"] as? String ?? "?", how: "after-app")
             }
