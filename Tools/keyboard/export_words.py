@@ -86,6 +86,24 @@ def examples(events):
 
     def flush():
         finish()
+        # Each word's next word in the text as it ended up (none past a sentence's end), and whether
+        # it was typed fast — taps under 0.35 s apart, the median.
+        for start, example in finished.items():
+            end = start
+            while end < len(buffer) and isinstance(buffer[end], dict):
+                end += 1
+            after = "".join(t["char"] if isinstance(t, dict) else t for t in buffer[end:])
+            stripped = after.lstrip(" ")
+            word = ""
+            if stripped[:1].isalpha() and after[:1] == " ":
+                for c in stripped:
+                    if not (c.isalpha() or c in "'’-"):
+                        break
+                    word += c
+            example["next"] = word or None
+            times = [t.get("t") for t in example["taps"] if isinstance(t, dict) and t.get("t")]
+            gaps = sorted(b - a for a, b in zip(times, times[1:]))
+            example["fast"] = bool(gaps) and gaps[len(gaps) // 2] < 0.35
         out.extend(finished.values())
         finished.clear()
         attempts.clear()
@@ -126,7 +144,7 @@ def examples(events):
                     continue
                 held = (last_up or {}).get("held_ms", 0)
                 buffer.append({"char": char, "x": down["x"], "y": down["y"], "layout": layout,
-                               "deliberate": last_touch in deliberate or held > 350})
+                               "deliberate": last_touch in deliberate or held > 350, "t": down.get("t")})
             else:
                 finish()
                 if e.get("before_our_space") and buffer and buffer[-1] == " ":

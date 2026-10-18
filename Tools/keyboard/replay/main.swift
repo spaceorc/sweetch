@@ -12,6 +12,8 @@ struct Export: Decodable {
     struct Word: Decodable {
         let kind: String; let taps: [Tap]; let truth: String; let typed_is_word: Bool?
         let previous: String?; let sentence_start: Bool?
+        /// The word after it in the text as it ended up, and whether its taps came fast.
+        let next: String?; let fast: Bool?
     }
     let layouts: [String: [[Value]]]
     let words: [Word]
@@ -39,6 +41,50 @@ let bigrams = args.contains("--no-context") ? nil : Bigrams(url: URL(fileURLWith
 let decoder = WordDecoder(lexicon: lexicon, bigrams: bigrams)
 if let i = args.firstIndex(of: "--threshold"), i + 1 < args.count, let t = Float(args[i + 1]) { decoder.threshold = t }
 if let i = args.firstIndex(of: "--language"), i + 1 < args.count, let l = Float(args[i + 1]) { decoder.costs.language = l }
+
+// `--post`: the previous word looked at again once the next is typed — the decoder's candidates
+// rescored with how likely each is right before the next word (the bigram's lift, as the left
+// context lifts it), changed only when the word wasn't one or the decoder doubted it. Counted:
+// words it would put right and words it would make wrong, typing fast and slowly apart.
+if args.contains("--post"), let bigrams {
+    var counts: [String: (fixed: Int, broken: Int, words: Int)] = [:]
+    var shown: [String] = []
+    let minLift = args.firstIndex(of: "--min-lift").flatMap { i in i + 1 < args.count ? Int(args[i + 1]) : nil } ?? 4
+    for word in export.words where word.taps.count >= 2 {
+        guard let next = word.next, let nextNode = lexicon.lookup(next.lowercased()) else { continue }
+        let taps = word.taps.map { WordDecoder.Tap(point: CGPoint(x: $0.x, y: $0.y), keys: keys[$0.layout] ?? [], deliberate: $0.deliberate) }
+        var context = WordDecoder.Context()
+        if word.sentence_start == true { context.previous = 0 } else if let previous = word.previous { context.previous = lexicon.lookup(previous) }
+        let result = decoder.decode(taps, context: context)
+        let typed = word.taps.map(\.char).joined().lowercased()
+        let live = (result.correction ?? result.literal).lowercased()
+        let truth = word.truth.lowercased()
+        let mode = word.fast == true ? "fast" : "slow"
+        counts[mode, default: (0, 0, 0)].words += 1
+        // Only a word the decoder left unsure: no word as typed, or a correction it nearly made.
+        guard !result.literalIsWord || result.confidence > decoder.threshold * 0.5 else { continue }
+        func rightLift(_ w: String) -> Int { lexicon.lookup(w).map { bigrams.weight(of: nextNode, after: $0) } ?? 0 }
+        let rescored = result.candidates.prefix(5).map { c -> (String, Float, Int) in
+            let lift = rightLift(c.word.lowercased())
+            let f = Float(c.frequency)
+            let lifted = lift > 0 ? f + Float(lift + 1) * (255 - f) / 16.5 : f
+            return (c.word.lowercased(), c.cost - decoder.costs.language * (min(lifted, 255) - f) / 255, lift)
+        }.sorted { $0.1 < $1.1 }
+        guard let best = rescored.first, best.0 != live, best.2 >= minLift else { continue }
+        if best.0 == truth && live != truth {
+            counts[mode]!.fixed += 1
+            shown.append("  FIXES  [\(mode)] \(typed) → \(best.0)  (live: \(live); before «\(next)»)")
+        } else if live == truth && best.0 != truth {
+            counts[mode]!.broken += 1
+            shown.append("  BREAKS [\(mode)] \(typed) → \(best.0)  (live had it right; before «\(next)»)")
+        }
+    }
+    for (mode, c) in counts.sorted(by: { $0.key < $1.key }) {
+        print("\(mode): \(c.words) words with a next word — the second look would put right \(c.fixed), make wrong \(c.broken)")
+    }
+    shown.forEach { print($0) }
+    exit(0)
+}
 
 var cleanTotal = 0, falseCorrections = 0, cleanTop = 0, typosLeft = 0
 var fixedTotal = 0, fixedRight = 0, fixedWrong = 0, fixedTop3 = 0
