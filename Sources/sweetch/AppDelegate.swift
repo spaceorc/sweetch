@@ -107,6 +107,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        TypingLog.shared.flushNow()
         Whisper.shutDown()
         CrashWatch.markCleanExit()
     }
@@ -141,11 +142,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func handleSwitch() {
+        TypingLog.shared.note("switch")
         InputSourceSwitcher.toggle()
         buffer.clear(reason: "manual layout toggle")
     }
 
     private func handleConvert() {
+        TypingLog.shared.note("convert")
         if converting { return }
         converting = true
 
@@ -178,6 +181,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func handleLLMCorrect() {
+        TypingLog.shared.note("correct")
         if llmCorrecting { return }
         // Private: the model is in the cloud — the layout is turned locally instead, as ⌥Space does.
         if let reason = Privacy.check(NSWorkspace.shared.frontmostApplication) {
@@ -655,6 +659,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let look = { [weak self] in
             guard let self else { return }
             let reason = Privacy.check(NSWorkspace.shared.frontmostApplication)
+            TypingLog.shared.setPrivate(reason != nil)
             if reason != self.privateNow { self.privateNow = reason; self.refreshStatusIcon() }
         }
         NSWorkspace.shared.notificationCenter.addObserver(
@@ -756,6 +761,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Privacy.incognito.toggle()
         if Privacy.incognito { lastCorrection = nil }
         privateNow = Privacy.check(NSWorkspace.shared.frontmostApplication)
+        TypingLog.shared.setPrivate(privateNow != nil)
         refreshStatusIcon()
         log.info("incognito \(Privacy.incognito ? "on" : "off", privacy: .public)")
     }

@@ -71,6 +71,7 @@ final class EventTapManager {
         let mask = (1 << CGEventType.null.rawValue)
                  | (1 << CGEventType.keyDown.rawValue)
                  | (1 << CGEventType.keyUp.rawValue)
+                 | (1 << CGEventType.flagsChanged.rawValue)
                  | (1 << CGEventType.leftMouseDown.rawValue)
                  | (1 << CGEventType.rightMouseDown.rawValue)
                  | (1 << CGEventType.otherMouseDown.rawValue)
@@ -161,10 +162,15 @@ final class EventTapManager {
         }
 
         switch type {
+        case .flagsChanged:
+            TypingLog.shared.key(type, event)
+            return Unmanaged.passUnretained(event)
         case .leftMouseDown, .rightMouseDown, .otherMouseDown:
+            TypingLog.shared.note("click")
             onMouseDown()
             return Unmanaged.passUnretained(event)
         case .keyDown, .keyUp:
+            TypingLog.shared.key(type, event)
             if holdToTalk.handle(type: type, event: event) { return nil }
             let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
             let flags = event.flags.intersection(relevantFlagsMask)

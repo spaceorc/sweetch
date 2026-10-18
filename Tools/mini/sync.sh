@@ -27,12 +27,12 @@ rsync -a --update -e "$SSH" "$HERE/tombstones/" "$MINI:$THERE/tombstones/" || st
 rsync -a --update -e "$SSH" "$MINI:$THERE/tombstones/" "$HERE/tombstones/" || status=1
 # Only paths inside the synced folders, nothing climbing out of them.
 dead=$(cat "$HERE"/tombstones/*.jsonl 2>/dev/null | sed -n 's/.*"path":"\([^"]*\)".*/\1/p' \
-    | grep -E '^(dictation|wispr-flow|keyboard)/[^/]+(/[^/]+)*$' | grep -v '\.\.' | sort -u)
+    | grep -E '^(dictation|wispr-flow|keyboard|typing)/[^/]+(/[^/]+)*$' | grep -v '\.\.' | sort -u)
 if [ -n "$dead" ]; then
     printf '%s\n' "$dead" | while IFS= read -r p; do rm -rf -- "$HERE/$p"; done
     printf '%s\n' "$dead" | $SSH "$MINI" "cd $THERE && while IFS= read -r p; do rm -rf -- \"\$p\"; done" || status=1
 fi
-for dir in dictation wispr-flow keyboard; do
+for dir in dictation wispr-flow keyboard typing; do
     mkdir -p "$HERE/$dir"
     $SSH "$MINI" "mkdir -p $THERE/$dir"
     rsync -a --update -e "$SSH" "$HERE/$dir/" "$MINI:$THERE/$dir/" || status=1
