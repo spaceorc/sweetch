@@ -16,14 +16,14 @@ CERT_CRT   = $(CERT_DIR)/$(SIGN_ID).crt
 CERT_P12   = $(CERT_DIR)/$(SIGN_ID).p12
 CERT_CNF   = $(CERT_DIR)/$(SIGN_ID).cnf
 
-# The icon is drawn in code (Tools/make-icon.swift) rather than checked in as a binary
-# asset. The Dock reads the *bundle* icon, so it has to end up in Contents/Resources —
-# setting applicationIconImage at runtime isn't picked up reliably when an accessory app
+# The icon: Resources/icon/AppIcon-1024.png (Tools/icon/compose.py makes it from the user's
+# emblem), the same one the iPhone app has. The Dock reads the *bundle* icon, so it has to end
+# up in Contents/Resources — setting applicationIconImage at runtime isn't picked up reliably when an accessory app
 # switches to a regular activation policy.
 WATCHDOG_LABEL = com.spaceorc.sweetch.watchdog
 WATCHDOG_PLIST = $(HOME)/Library/LaunchAgents/$(WATCHDOG_LABEL).plist
 
-ICON_TOOL  = Tools/make-icon.swift
+ICON_SRC   = Resources/icon/AppIcon-1024.png
 ICON_ICNS  = $(BUILD_DIR)/AppIcon.icns
 ICONSET    = $(BUILD_DIR)/AppIcon.iconset
 
@@ -79,10 +79,9 @@ start:
 
 icon: $(ICON_ICNS)
 
-$(ICON_ICNS): $(ICON_TOOL)
+$(ICON_ICNS): $(ICON_SRC)
 	@mkdir -p $(BUILD_DIR)
-	@swiftc -O $(ICON_TOOL) -o $(BUILD_DIR)/make-icon
-	@$(BUILD_DIR)/make-icon $(BUILD_DIR)/icon-1024.png
+	@cp $(ICON_SRC) $(BUILD_DIR)/icon-1024.png
 	@rm -rf $(ICONSET) && mkdir -p $(ICONSET)
 	@sips -z 16 16     $(BUILD_DIR)/icon-1024.png --out $(ICONSET)/icon_16x16.png      >/dev/null
 	@sips -z 32 32     $(BUILD_DIR)/icon-1024.png --out $(ICONSET)/icon_16x16@2x.png   >/dev/null
