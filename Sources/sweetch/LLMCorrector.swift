@@ -56,7 +56,7 @@ enum LLMCorrector {
     /// and never into what we type. Retries once if the model doesn't return valid JSON.
     static func correct(text: String, context: String?) async -> String? {
         let flipped = LayoutTranslator.flip(text)
-        log.info("LLM correct: flip hint '\(text, privacy: .public)' -> '\(flipped, privacy: .public)'")
+        log.info("LLM correct: flip hint '\(shown(text), privacy: .public)' -> '\(shown(flipped), privacy: .public)'")
 
         var firstUser = """
         RAW: \(text)
@@ -105,7 +105,7 @@ enum LLMCorrector {
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let result = obj["result"] as? String else { return nil }
         if let reasoning = obj["reasoning"] as? String {
-            log.info("LLM correct: reasoning='\(reasoning, privacy: .public)'")
+            log.info("LLM correct: reasoning='\(shown(reasoning), privacy: .public)'")
         }
         return result
     }

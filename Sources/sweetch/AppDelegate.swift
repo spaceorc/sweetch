@@ -29,6 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var crashItem: NSMenuItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        Privacy.refreshLogText()   // the log carries text only while tracing
         // Newest instance wins. The watchdog hands over by starting a fresh copy, and this
         // is also what keeps a stray double-launch from leaving two event taps fighting.
         let handover = terminateOtherInstances()
@@ -175,6 +176,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func handleLLMCorrect() {
         if llmCorrecting { return }
+        // Private: the model is in the cloud — the layout is turned locally instead, as ⌥Space does.
+        if let reason = Privacy.check(NSWorkspace.shared.frontmostApplication) {
+            lastCorrection = nil
+            loader.flash("private — no AI", detail: "\(reason.text) · layout turned on this Mac")
+            log.info("LLM correct: private, converting locally")
+            handleConvert()
+            return
+        }
 
         // Second press with nothing typed since the last correction = undo it (and learn that
         // the user preferred their original wording — feeds the glossary).
@@ -210,7 +219,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         llmCorrecting = true
         setThinking(true)
-        log.info("LLM correct: requesting for '\(source, privacy: .public)'")
+        log.info("LLM correct: requesting for '\(shown(source), privacy: .public)'")
 
         Task { [weak self] in
             let corrected = await LLMCorrector.correct(text: source, context: context)
@@ -232,7 +241,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                         log.info("LLM correct: selection changed during request, discarding")
                         return
                     }
-                    log.info("LLM correct (selection): '\(source, privacy: .public)' -> '\(corrected, privacy: .public)'")
+                    log.info("LLM correct (selection): '\(shown(source), privacy: .public)' -> '\(shown(corrected), privacy: .public)'")
                     Replayer.waitForModifierRelease()
                     // One Backspace deletes the whole selection, then type the correction.
                     Replayer.replace(deleteCount: 1, with: corrected)
@@ -249,7 +258,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                         log.info("LLM correct: buffer changed during request, discarding")
                         return
                     }
-                    log.info("LLM correct (buffer): '\(source, privacy: .public)' -> '\(corrected, privacy: .public)'")
+                    log.info("LLM correct (buffer): '\(shown(source), privacy: .public)' -> '\(shown(corrected), privacy: .public)'")
                     Replayer.waitForModifierRelease()
                     Replayer.replace(deleteCount: source.count, with: corrected)
                     self.activateLayout(for: corrected)
@@ -264,7 +273,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// Undo the last correction: delete what we typed, restore the original, revert layout.
     private func performRevert(_ lc: (typed: String, original: String)) {
-        log.info("revert: '\(lc.typed, privacy: .public)' -> '\(lc.original, privacy: .public)'")
+        log.info("revert: '\(shown(lc.typed), privacy: .public)' -> '\(shown(lc.original), privacy: .public)'")
         // Off the tap thread: waitForModifierRelease needs live flagsState, and typing sleeps.
         DispatchQueue.global(qos: .userInteractive).async { [weak self] in
             Replayer.waitForModifierRelease()
@@ -596,6 +605,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(NSMenuItem(title: "Show History…", action: #selector(showHistory), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Refine Dictionary from History", action: #selector(refineDictionary), keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
+        let incognitoItem = NSMenuItem(title: "Incognito", action: #selector(toggleIncognito), keyEquivalent: "")
+        incognitoItem.toolTip = "Nothing recorded, captured, sent to the AI or kept — dictation and AI correction off, layout switching on. Private browser windows and password fields are incognito by themselves."
+        menu.addItem(incognitoItem)
         let dictationItem = NSMenuItem(title: "Dictation (Hold Space)", action: #selector(toggleDictation), keyEquivalent: "")
         dictationItem.toolTip = "Hold Space in a text field to dictate; Claude desktop and Claude Code keep their own"
         menu.addItem(dictationItem)
@@ -620,7 +632,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// The menu bar is the only place a crash can be reported — there's no window to notice.
     private func refreshStatusIcon() {
-        let symbol = pendingCrashReport != nil ? "exclamationmark.triangle" : "keyboard"
+        let symbol = pendingCrashReport != nil ? "exclamationmark.triangle" : Privacy.incognito ? "eye.slash" : "keyboard"
         let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "sweetch")
         image?.isTemplate = true
         statusItem?.button?.image = image
@@ -701,6 +713,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         UserDefaults.standard.object(forKey: Self.dictationEnabledKey) as? Bool ?? true
     }
 
+    @objc private func toggleIncognito() {
+        Privacy.incognito.toggle()
+        if Privacy.incognito { lastCorrection = nil }
+        refreshStatusIcon()
+        log.info("incognito \(Privacy.incognito ? "on" : "off", privacy: .public)")
+    }
+
     @objc private func toggleDictation() {
         UserDefaults.standard.set(!isDictationEnabled, forKey: Self.dictationEnabledKey)
         if isDictationEnabled { Whisper.warmUp() }
@@ -739,6 +758,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         remapper.reloadIfChanged()   // pick up edits to remaps.txt without a restart
         if let item = menu.items.first(where: { $0.action == #selector(toggleDictation) }) {
             item.state = isDictationEnabled ? .on : .off
+        }
+        if let item = menu.items.first(where: { $0.action == #selector(toggleIncognito) }) {
+            item.state = Privacy.incognito ? .on : .off
         }
         if let item = menu.items.first(where: { $0.action == #selector(toggleServer) }) {
             item.state = isServerEnabled ? .on : .off

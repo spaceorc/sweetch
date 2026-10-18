@@ -39,7 +39,7 @@ enum SelectionConverter {
         // caller convert the last typed word instead. A selection that matches what was
         // just typed (e.g. made via Shift+Home) is real and gets converted as such.
         if !typedText.isEmpty && !typedText.contains(selectedText) {
-            log.info("convert-selection: selection '\(selectedText, privacy: .public)' not part of typed text — autocomplete artifact, dismissing")
+            log.info("convert-selection: selection '\(shown(selectedText), privacy: .public)' not part of typed text — autocomplete artifact, dismissing")
             waitForModifierRelease()
             Replayer.postKeyPair(keyCode: 51, flags: [])  // Backspace removes the highlighted completion
             usleep(30_000)
@@ -47,7 +47,7 @@ enum SelectionConverter {
         }
 
         let (converted, targetIDs) = translate(selectedText)
-        log.info("convert-selection: '\(selectedText, privacy: .public)' -> '\(converted, privacy: .public)'")
+        log.info("convert-selection: '\(shown(selectedText), privacy: .public)' -> '\(shown(converted), privacy: .public)'")
 
         waitForModifierRelease()
 

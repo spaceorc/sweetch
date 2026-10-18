@@ -141,7 +141,9 @@ $(KEYWATCH): Tools/keywatch.swift
 trace: $(KEYWATCH)
 	@mkdir -p $(TRACE_DIR)
 	@echo "recording to $(TRACE_DIR)/sweetch.log and $(TRACE_DIR)/keys.log — reproduce, then Ctrl-C"
-	@trap 'kill 0' INT TERM; \
+	@echo "(the log carries typed and dictated text while this runs — never in private windows)"
+	@defaults write $(BUNDLE_ID) logText -bool YES
+	@trap 'defaults delete $(BUNDLE_ID) logText 2>/dev/null; kill 0' INT TERM; \
 		/usr/bin/log stream --style compact --level debug --predicate 'subsystem == "$(BUNDLE_ID)"' > $(TRACE_DIR)/sweetch.log & \
 		$(KEYWATCH) > $(TRACE_DIR)/keys.log & \
 		wait

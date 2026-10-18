@@ -287,7 +287,7 @@ final class DictationServer {
                 heard.withLock { latest = (Int(Date().timeIntervalSince1970 * 1000), settled.text, entry.dir.lastPathComponent) }
                 heard.broadcast()
             }
-            log.info("dictation server: heard '\(settled.text, privacy: .public)'")
+            log.info("dictation server: heard '\(shown(settled.text), privacy: .public)'")
             return (200, ["text": settled.text, "seconds": record["seconds"] ?? 0, "versions": settled.versions.map(\.text)])
         } catch {
             record["error"] = String(describing: error)

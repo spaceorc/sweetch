@@ -45,6 +45,19 @@ final class LoaderOverlay {
         layout(panel)
     }
 
+    /// A moment's notice — private: what isn't done, and why — then gone.
+    func flash(_ text: String, detail: String, symbol: String = "eye.slash") {
+        show(caption: text, spinning: false, symbol: symbol)
+        showDetail(detail)
+        flashGeneration += 1
+        let generation = flashGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { [weak self] in
+            guard let self, self.flashGeneration == generation else { return }
+            self.hide()
+        }
+    }
+    private var flashGeneration = 0
+
     func hide() {
         guard let panel else { return }
         NSAnimationContext.runAnimationGroup({ ctx in

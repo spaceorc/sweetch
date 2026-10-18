@@ -66,7 +66,7 @@ final class Dictation {
                     "spoken": prefix.spoken, "preceding": prefix.preceding ?? NSNull(),
                     "context_seconds": gathered, "seconds": Date().timeIntervalSince(started),
                 ], to: dir.appendingPathComponent("prefix.json"))
-                log.info("dictation: prefix ready in \(Date().timeIntervalSince(started), privacy: .public)s — \(prefix.spoken, privacy: .public)")
+                log.info("dictation: prefix ready in \(Date().timeIntervalSince(started), privacy: .public)s — \(shown(prefix.spoken), privacy: .public)")
             }
         }
 
@@ -90,6 +90,13 @@ final class Dictation {
 
     /// False when the hold can't be recorded — the caller then lets Space be Space.
     func begin(app: NSRunningApplication, spaceSelected: Bool) -> Bool {
+        // Private: nothing recorded, captured, sent or kept — and the user sees why.
+        if let reason = Privacy.check(app) {
+            followUp.abandon()
+            overlay.flash("private — dictation off", detail: reason.text)
+            log.info("dictation: private, not started")
+            return false
+        }
         if let missing = Whisper.missing() {
             log.error("dictation: unavailable — missing \(missing, privacy: .public)")
             return false
@@ -222,7 +229,7 @@ final class Dictation {
                     log.info("dictation: nothing heard")
                     return
                 }
-                log.info("dictation: heard '\(heard.text, privacy: .public)' from \(heard.versions.map(\.text), privacy: .public)")
+                log.info("dictation: heard '\(shown(heard.text), privacy: .public)' from \(shown(heard.versions.map(\.text)), privacy: .public)")
                 record.merge(self?.insert(heard.text, session: session) ?? [:]) { $1 }
             }
         }
@@ -234,6 +241,7 @@ final class Dictation {
     /// with no HUD, so what we'd have heard can be set beside what the app wrote. False when we can't
     /// listen — no prompts are raised for this.
     func beginShadow(app: NSRunningApplication, target: String) -> Bool {
+        guard Privacy.check(app) == nil else { return false }   // nothing of a private context kept
         guard Whisper.missing() == nil, AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else { return false }
         let dir = DictationStore.newSessionDir()
         let session = Session(dir: dir, app: app, startedAt: Date(), prepared: Prepared(app: app, dir: dir), spaceSelected: false)
@@ -306,7 +314,7 @@ final class Dictation {
                 watched.wait()
                 record["theirs"] = theirs.value ?? NSNull()
                 DictationStore.write(record, to: session.dir.appendingPathComponent("session.json"))
-                log.info("dictation: \(target, privacy: .public) wrote '\(theirs.value ?? "?", privacy: .public)'; we heard '\(record["text"] as? String ?? "-", privacy: .public)'")
+                log.info("dictation: \(target, privacy: .public) wrote '\(shown(theirs.value), privacy: .public)'; we heard '\(shown(record["text"] as? String), privacy: .public)'")
             }
         }
     }
@@ -410,6 +418,14 @@ final class DictationFollowUp {
 
     func finish(reason: String) {
         queue.async { [self] in close(reason: reason) }
+    }
+
+    /// Private now: the watch ends without writing what the field held.
+    func abandon() {
+        queue.async { [self] in
+            watch?.timer?.cancel()
+            watch = nil
+        }
     }
 
     private func poll() {

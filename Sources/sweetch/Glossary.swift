@@ -53,11 +53,11 @@ enum Glossary {
                 promoted.append(word); known.insert(lw); pending[lw] = nil
             } else {
                 pending[lw] = count
-                log.info("glossary: '\(word, privacy: .public)' undone \(count, privacy: .public)/\(promoteThreshold, privacy: .public)")
+                log.info("glossary: '\(shown(word), privacy: .public)' undone \(count, privacy: .public)/\(promoteThreshold, privacy: .public)")
             }
         }
         UserDefaults.standard.set(pending, forKey: pendingKey)
-        if !promoted.isEmpty { add(promoted); log.info("glossary: learned \(promoted, privacy: .public)") }
+        if !promoted.isEmpty { add(promoted); log.info("glossary: learned \(shown(promoted), privacy: .public)") }
     }
 
     static func promptSection() -> String {

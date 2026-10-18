@@ -439,7 +439,7 @@ enum Hearing {
             return (nil, settlement)
         }
         if let reasoning = LLMJSON.string(raw, key: "reasoning") {
-            log.info("dictation: settled — \(reasoning, privacy: .public)")
+            log.info("dictation: settled — \(shown(reasoning), privacy: .public)")
         }
         return (text, settlement)
     }

@@ -23,7 +23,7 @@ enum Replayer {
         let word = Array(snapshot[range])
         let count = word.count
         let typed = word.map { $0.chars }.joined()
-        log.info("convert: replaying \(count, privacy: .public) keystrokes (was: '\(typed, privacy: .public)')")
+        log.info("convert: replaying \(count, privacy: .public) keystrokes (was: '\(shown(typed), privacy: .public)')")
 
         // 1. Backspaces, flags=[] to avoid Cmd+Backspace if user still holds the hotkey.
         for _ in 0..<count {
