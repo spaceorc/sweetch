@@ -1,6 +1,9 @@
 # The app icon: the emblem (Resources/icon/emblem.png, the S and the bars on transparent, made by
 # the user) at 78% of the square, centred on a dark navy background lit teal from the top right,
-# with a soft glow behind it. Writes Resources/icon/AppIcon-1024.png (the Mac's and the iPhone's).
+# with a soft glow behind it. Centred by eye, not by its box: the S is heavy at the bottom left and
+# the bowl with the bars is empty at the top right, so centred by the box it looks low — it's
+# lifted and moved right by most of the way from the box's centre to its centre of mass.
+# Writes Resources/icon/AppIcon-1024.png (the Mac's and the iPhone's).
 # Needs numpy and Pillow: python3 Tools/icon/compose.py
 import numpy as np
 from PIL import Image, ImageFilter
@@ -15,7 +18,8 @@ em = Image.open('Resources/icon/emblem.png').convert('RGBA')
 em = em.crop(em.getbbox())
 s = 0.78 * N / max(em.size)
 em = em.resize((round(em.size[0] * s), round(em.size[1] * s)), Image.LANCZOS)
-x, y = (N - em.size[0]) // 2, (N - em.size[1]) // 2
+OPTICAL = (10, -14)   # px at 1024
+x, y = (N - em.size[0]) // 2 + OPTICAL[0], (N - em.size[1]) // 2 + OPTICAL[1]
 glow = Image.new('RGBA', (N, N), (0, 0, 0, 0))
 g = Image.new('RGBA', em.size, (40, 220, 230, 0)); g.putalpha(em.getchannel('A').point(lambda v: int(v * 0.35)))
 glow.paste(g, (x, y), g); glow = glow.filter(ImageFilter.GaussianBlur(28))
