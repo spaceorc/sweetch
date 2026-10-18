@@ -29,7 +29,7 @@ ICON_SRC   = Resources/icon/AppIcon.icon
 ICON_DIR   = $(BUILD_DIR)/icon
 ICON_ICNS  = $(ICON_DIR)/AppIcon.icns
 
-.PHONY: all build app run debug clean setup-signing tcc-reset icon stop start trace phone serve-app mini sync sync-install lexicon decoder-eval whisper-framework
+.PHONY: all build app run debug clean setup-signing tcc-reset icon stop start trace phone serve-app mini sync sync-install lexicon decoder-eval whisper-framework bench-profiles
 
 all: app
 
@@ -245,6 +245,21 @@ bench:
 
 bench-compare:
 	@python3 -I Tools/keyboard/bench_compare.py $(RUNS)
+
+# Do the keyboard's profiles (personal, work, agent) earn their keep? The bench on the words typed
+# from DAY on — each in the profile it was typed in — with and without them, the lexicon and the
+# profiles built from the days before only: `make bench-profiles DAY=2026-10-25`. Prints the words
+# per profile too: below a few hundred in a profile, its difference is noise.
+bench-profiles:
+	@test -n "$(DAY)" || (echo "usage: make bench-profiles DAY=YYYY-MM-DD" && exit 1)
+	@mkdir -p $(BUILD_DIR)/heldout/$(DAY)
+	@SWEETCH_UNTIL=$(DAY) $(DECODER_VENV) -I Tools/keyboard/build_lexicon.py $(BUILD_DIR)/heldout/$(DAY)/Lexicon.bin | tail -1
+	@SWEETCH_SINCE=$(DAY) $(DECODER_VENV) -I Tools/keyboard/export_words.py $(BUILD_DIR)/heldout/$(DAY)/words.json
+	@python3 -I -c "import json,collections; print('words per profile:', dict(collections.Counter(w.get('profile') for w in json.load(open('$(BUILD_DIR)/heldout/$(DAY)/words.json'))['words'])))"
+	@swiftc -O -o $(BUILD_DIR)/replay Tools/keyboard/replay/main.swift iOS/SweetchKeyboard/Decoder/*.swift
+	@SWIFT_DETERMINISTIC_HASHING=1 $(BUILD_DIR)/replay $(BUILD_DIR)/heldout/$(DAY)/Lexicon.bin $(BUILD_DIR)/heldout/$(DAY)/words.json --bench profiles-off-$(DAY) > /dev/null
+	@SWIFT_DETERMINISTIC_HASHING=1 $(BUILD_DIR)/replay $(BUILD_DIR)/heldout/$(DAY)/Lexicon.bin $(BUILD_DIR)/heldout/$(DAY)/words.json --bench profiles-on-$(DAY) --profiles > /dev/null
+	@python3 -I Tools/keyboard/bench_compare.py profiles-off-$(DAY) profiles-on-$(DAY)
 
 # whisper.cpp for the iPhone app (the same engine as the Mac's, Metal on the phone): the prebuilt
 # xcframework from its release, kept out of git.
