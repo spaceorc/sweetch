@@ -42,6 +42,116 @@ let decoder = WordDecoder(lexicon: lexicon, bigrams: bigrams)
 if let i = args.firstIndex(of: "--threshold"), i + 1 < args.count, let t = Float(args[i + 1]) { decoder.threshold = t }
 if let i = args.firstIndex(of: "--language"), i + 1 < args.count, let l = Float(args[i + 1]) { decoder.costs.language = l }
 
+// `--bench <name>`: the bench — every measure at once, on the user's own typing, saved as
+// build/bench/<name>.json for comparing variants (Tools/keyboard/bench_compare.py):
+// - autocorrect: real words it would break, typos left in it would fix, the user's own fixes it
+//   would make (and get wrong);
+// - the second look at the previous word: put right and made wrong;
+// - suggestions: each word replayed letter by letter, the decoder's three suggestions after each
+//   (as the keyboard shows them, from two letters on) and the next-word predictions before the
+//   first — how many letters before the end the word is first in the top three and first of
+//   all, by length; keystrokes saved taking the first suggestion as soon as it's the word;
+// - time per word.
+if let i = args.firstIndex(of: "--bench"), i + 1 < args.count {
+    let name = args[i + 1]
+    var auto = (clean: 0, broke: 0, typosLeftFixed: 0, fixedWords: 0, madeRight: 0, madeWrong: 0)
+    var post = (fixed: 0, broke: 0, looked: 0)
+    struct Band { var words = 0, top3 = 0, top1 = 0, lettersSaved = 0, letters = 0, top1Left: [Int] = [] }
+    var bands: [String: Band] = [:]
+    var predicted = (words: 0, top3: 0, top1: 0)
+    var started = Date()
+    func band(_ n: Int) -> String { n <= 3 ? "2-3" : n <= 6 ? "4-6" : "7+" }
+    for word in export.words where word.taps.count >= 2 {
+        let taps = word.taps.map { WordDecoder.Tap(point: CGPoint(x: $0.x, y: $0.y), keys: keys[$0.layout] ?? [], deliberate: $0.deliberate) }
+        var context = WordDecoder.Context()
+        if word.sentence_start == true { context.previous = 0 } else if let previous = word.previous { context.previous = lexicon.lookup(previous.lowercased()) }
+        let truth = word.truth.lowercased(), typed = word.taps.map(\.char).joined().lowercased()
+        let truthIsWord = lexicon.lookup(truth) != nil
+        let result = decoder.decode(taps, context: context)
+        let live = (result.correction ?? result.literal).lowercased()
+        // Autocorrect.
+        if word.kind == "clean" {
+            auto.clean += 1
+            if let c = result.correction?.lowercased(), c != truth {
+                if word.typed_is_word ?? truthIsWord { auto.broke += 1 } else { auto.typosLeftFixed += 1 }
+            }
+        } else {
+            auto.fixedWords += 1
+            if result.correction?.lowercased() == truth { auto.madeRight += 1 } else if result.correction != nil { auto.madeWrong += 1 }
+        }
+        // The second look, before the next word.
+        if let bigrams, let next = word.next, let nextNode = lexicon.lookup(next.lowercased()),
+           !result.literalIsWord || result.confidence > decoder.threshold * 0.5 {
+            post.looked += 1
+            let rescored = result.candidates.prefix(5).map { c -> (String, Float, Int) in
+                let lift = lexicon.lookup(c.word.lowercased()).map { bigrams.weight(of: nextNode, after: $0) } ?? 0
+                let f = Float(c.frequency)
+                let lifted = lift > 0 ? min(255, f + Float(lift + 1) * (255 - f) / 16.5) : f
+                return (c.word.lowercased(), c.cost - decoder.costs.language * (lifted - f) / 255, lift)
+            }.sorted { $0.1 < $1.1 }
+            if word.fast == true, let best = rescored.first, best.0 != live, best.2 >= 4 {
+                if best.0 == truth { post.fixed += 1 } else if live == truth, truthIsWord { post.broke += 1 }
+            }
+        }
+        // Suggestions, letter by letter — for words the lexicon has (a typo left in is no target).
+        guard truthIsWord, truth.count >= 2, truth.count == taps.count || word.kind == "clean" else { continue }
+        let n = truth.count
+        var b = bands[band(n)] ?? Band()
+        b.words += 1
+        b.letters += n + 1
+        if context.previous != nil {
+            predicted.words += 1
+            let p = decoder.predictions(context).map { $0.lowercased() }
+            if p.contains(truth) { predicted.top3 += 1 }
+            if p.first == truth { predicted.top1 += 1 }
+        }
+        var first3: Int?, first1: Int?
+        if word.kind == "clean" {
+            for k in 2..<n {
+                let r = decoder.decode(Array(taps.prefix(k)), complete: true, context: context)
+                var shown: [String] = []
+                for c in r.candidates where !shown.contains(c.word.lowercased()) {
+                    shown.append(c.word.lowercased())
+                    if shown.count == 3 { break }
+                }
+                if first3 == nil, shown.contains(truth) { first3 = n - k }
+                if shown.first == truth { first1 = n - k; break }
+            }
+        }
+        if first3 != nil { b.top3 += 1 }
+        if let f = first1 {
+            b.top1 += 1
+            b.top1Left.append(f)
+            b.lettersSaved += f   // the rest of the word and the space, for the one tap
+        }
+        bands[band(n)] = b
+    }
+    let seconds = Date().timeIntervalSince(started)
+    var json: [String: Any] = [
+        "name": name, "words": export.words.count, "ms_per_word": 1000 * seconds / Double(max(export.words.count, 1)),
+        "autocorrect": ["clean": auto.clean, "breaks": auto.broke, "typos_left_fixed": auto.typosLeftFixed,
+                        "user_fixed": auto.fixedWords, "made_right": auto.madeRight, "made_wrong": auto.madeWrong],
+        "post": ["looked": post.looked, "fixed": post.fixed, "breaks": post.broke],
+        "prediction": ["words": predicted.words, "top3": predicted.top3, "top1": predicted.top1],
+    ]
+    var suggestions: [String: Any] = [:]
+    var saved = 0, letters = 0
+    for (key, b) in bands {
+        saved += b.lettersSaved
+        letters += b.letters
+        let left = b.top1Left.sorted()
+        suggestions[key] = ["words": b.words, "top3": b.top3, "top1": b.top1, "letters_saved": b.lettersSaved,
+                            "top1_left_median": left.isEmpty ? 0 : left[left.count / 2]]
+    }
+    suggestions["keystrokes_saved_pct"] = letters > 0 ? 100 * Double(saved) / Double(letters) : 0
+    json["suggestions"] = suggestions
+    let dir = URL(fileURLWithPath: "build/bench", isDirectory: true)
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys]).write(to: dir.appendingPathComponent("\(name).json"))
+    print(String(data: try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys]), encoding: .utf8)!)
+    exit(0)
+}
+
 // `--post`: the previous word looked at again once the next is typed — the decoder's candidates
 // rescored with how likely each is right before the next word (the bigram's lift, as the left
 // context lifts it), changed only when the word wasn't one or the decoder doubted it. Counted:

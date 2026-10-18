@@ -236,6 +236,19 @@ decoder-eval:
 	@mkdir -p $(BUILD_DIR) && swiftc -O -o $(BUILD_DIR)/replay Tools/keyboard/replay/main.swift iOS/SweetchKeyboard/Decoder/*.swift
 	@$(BUILD_DIR)/replay $(LEXICON) $(BUILD_DIR)/keyboard-words.json $(ARGS)
 
+# The bench: the decoder run on everything the user typed, every measure at once (autocorrect,
+# the second look, suggestions letter by letter), saved under build/bench/$(NAME).json; compare
+# runs with `make bench-compare RUNS="base variant"`. ARGS pass a variant's switches.
+NAME ?= base
+bench:
+	@test -f $(LEXICON) || $(MAKE) --no-print-directory lexicon
+	@$$( [ -x $(DECODER_VENV) ] && echo $(DECODER_VENV) || echo python3 ) -I Tools/keyboard/export_words.py $(BUILD_DIR)/keyboard-words.json
+	@mkdir -p $(BUILD_DIR) && swiftc -O -o $(BUILD_DIR)/replay Tools/keyboard/replay/main.swift iOS/SweetchKeyboard/Decoder/*.swift
+	@$(BUILD_DIR)/replay $(LEXICON) $(BUILD_DIR)/keyboard-words.json --bench $(NAME) $(ARGS)
+
+bench-compare:
+	@python3 -I Tools/keyboard/bench_compare.py $(RUNS)
+
 # whisper.cpp for the iPhone app (the same engine as the Mac's, Metal on the phone): the prebuilt
 # xcframework from its release, kept out of git.
 WHISPER_RELEASE = b5454
