@@ -213,6 +213,11 @@ final class KeyboardModel {
     private var proxy: UITextDocumentProxy? { controller?.textDocumentProxy }
 
     func appeared() {
+        // Before anything is noted: a private tab's field is incognito from its first moment.
+        privateField = looksPrivate()
+        KeyLog.paused = incognito
+        HostMemory.shared.paused = incognito
+        showStatus()
         lastWord = nil
         visibleSince = Date()
         deliverPending()
@@ -230,10 +235,24 @@ final class KeyboardModel {
             "autocorrect": proxy?.autocorrectionType?.rawValue ?? -1,
             "content_type": proxy?.textContentType?.rawValue ?? "",
             "appearance": proxy?.keyboardAppearance?.rawValue ?? -1,
+            // Everything else the field says of itself — what might tell a private tab, or a
+            // sensitive field, apart.
+            "spellcheck": proxy?.spellCheckingType?.rawValue ?? -1,
+            "smart_quotes": proxy?.smartQuotesType?.rawValue ?? -1,
+            "smart_dashes": proxy?.smartDashesType?.rawValue ?? -1,
+            "smart_insert": proxy?.smartInsertDeleteType?.rawValue ?? -1,
+            "inline_prediction": proxy?.inlinePredictionType?.rawValue ?? -1,
+            "return_auto": proxy?.enablesReturnKeyAutomatically ?? false,
+            "secure": proxy?.isSecureTextEntry ?? false,
+            "has_text_at_appear": proxy?.hasText ?? false,
+            "selected_len": proxy?.selectedText?.count ?? 0,
+            "identifier": proxy?.documentIdentifier.uuidString ?? "",
             "layout": "\(layout)", "shift": "\(shift)",
         ])
         listening?.cancel()
-        listening = Task { await listen() }
+        KeyLog.paused = incognito
+        HostMemory.shared.paused = incognito
+        listening = incognito ? nil : Task { await listen() }
         autoCapitalise()
         fieldChanged()
     }
@@ -507,6 +526,7 @@ final class KeyboardModel {
 
     /// The field as now known, into the app's memory — at most every few seconds while typing.
     private func rememberField(now: Bool) {
+        guard !incognito else { return }
         guard now || Date().timeIntervalSince(rememberedAt) > 5 else { return }
         rememberedAt = Date()
         HostMemory.shared.saw(String(field.text), process: hostProcess, profile: profile.key)
@@ -592,6 +612,7 @@ final class KeyboardModel {
     /// rule in use put the cursor and where the line model would have, at a guessed width and at
     /// the width learned so far — which this move then teaches. Nothing here moves the cursor.
     private func noteCursorMove(_ finished: CursorSession) {
+        guard !incognito else { return }
         guard let start = finished.start, finished.lines != 0 else { return }
         let process = hostProcess
         // Wrapping text and fitting the width take a while: off the main thread.
@@ -798,8 +819,10 @@ final class KeyboardModel {
         }
         KeyLog.note("word", ["word": word, "boundary": boundary, "session": fieldSession, "profile": profile.key])
         profileSees(word)
-        recentWords.append(word)
-        if recentWords.count > 100 { recentWords.removeFirst(recentWords.count - 100) }
+        if !incognito {
+            recentWords.append(word)
+            if recentWords.count > 100 { recentWords.removeFirst(recentWords.count - 100) }
+        }
         rememberField(now: false)
     }
 
@@ -1006,6 +1029,7 @@ final class KeyboardModel {
     }
 
     private func keep(_ word: String) {
+        guard !incognito else { return }
         let now = Date().timeIntervalSince1970
         let key = word.lowercased()
         let faded = takenBack[key].map { $0[0] * pow(0.5, (now - $0[1]) / Self.halfLife) } ?? 0
@@ -1057,6 +1081,7 @@ final class KeyboardModel {
             try? await Task.sleep(for: .milliseconds(600))
             guard !Task.isCancelled else { return }
             let field = proxy?.documentContextBeforeInput ?? ""
+            guard !incognito else { return }
             for mac in connected.values { await mac.noteField(field) }
         }
     }
@@ -1186,6 +1211,7 @@ final class KeyboardModel {
     /// A word finished: counted in the profile, and the profile the session's words point to taken
     /// up — unless the user picked one.
     private func profileSees(_ word: String) {
+        guard !incognito else { return }
         let current = profile, process = hostProcess, id = fieldSession
         Self.decoderQueue.async {
             guard let decoder = Self.loadDecoder(), let node = decoder.lexicon.lookup(word) else { return }
@@ -1303,6 +1329,10 @@ final class KeyboardModel {
     }
 
     private func showStatus() {
+        if incognito {
+            status = privateField ? "private tab — nothing leaves the phone" : "incognito — nothing leaves the phone"
+            return
+        }
         let names = Server.macs.map(\.[0]).filter { connected[$0] != nil }.map(Server.name)
         // Short enough to fit: which Macs the keyboard hears from.
         status = names.isEmpty ? "○ no Mac in reach" : "● " + names.joined(separator: " · ")
@@ -1395,7 +1425,47 @@ final class KeyboardModel {
     /// GPU, and what it hears comes back here (from a Mac, or from the app itself). A keyboard has
     /// no UIApplication to open URLs with; the responder chain reaches the host's application, or
     /// its scene, which takes its own options object.
+    /// Incognito: the keyboard alone, on the phone. Nothing is logged, nothing learned (words,
+    /// profiles, take-backs, field widths, what's typed in each app), nothing sent to a Mac — no
+    /// field, no context, no dictation; correcting and suggesting go on, from what was learned
+    /// before. Stays on until turned off.
+    /// Turned on by hand: stays until turned off.
+    private(set) var incognitoPicked = UserDefaults.standard.bool(forKey: "incognito") { didSet { changed() } }
+    /// A private field — Safari's private tab asks for a dark keyboard while the system is light —
+    /// for as long as the keyboard is in it.
+    private(set) var privateField = false { didSet { if privateField != oldValue { changed() } } }
+    var incognito: Bool { incognitoPicked || privateField }
+
+    /// Safari, in a private tab, asks for a dark keyboard in its address and search fields while
+    /// the system is light; a normal tab asks for a light one. Other traits are the same. In the
+    /// dark system theme the two can't be told apart.
+    private func looksPrivate() -> Bool {
+        guard let proxy, proxy.keyboardAppearance == .dark,
+              [.webSearch, .URL].contains(proxy.keyboardType ?? .default) else { return false }
+        return UIScreen.main.traitCollection.userInterfaceStyle == .light
+    }
+
+    func setIncognito(_ on: Bool) {
+        guard on != incognitoPicked else { return }
+        if on, !privateField { KeyLog.note("incognito", ["on": true]) }   // the last thing logged
+        incognitoPicked = on
+        UserDefaults.standard.set(on, forKey: "incognito")
+        KeyLog.paused = incognito
+        HostMemory.shared.paused = incognito
+        lastWord = nil
+        if incognito {
+            listening?.cancel()
+            listening = nil
+            connected = [:]
+            showStatus()
+        } else {
+            KeyLog.note("incognito", ["on": false])
+            listening = Task { await listen() }
+        }
+    }
+
     func openDictation() {
+        guard !incognito else { return }
         UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.dictationOpenedKey)
         observeField()
         rememberField(now: true)

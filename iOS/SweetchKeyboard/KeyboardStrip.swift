@@ -15,7 +15,7 @@ final class KeyboardStrip: UIView {
     private let microphone = UIButton(type: .system)
     private static let symbols = ["person", "briefcase", "sparkles"]
     private static let titles = ["Personal", "Work", "Agent"]
-    private var shownProfile: (Profiles.Name, Bool)?
+    private var shownProfile: (Profiles.Name, Bool, Bool, Bool)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -66,14 +66,15 @@ final class KeyboardStrip: UIView {
 
     func render() {
         guard let model else { return }
-        showProfile(model.profile, picked: model.profileManual)
+        showProfile(model.profile, picked: model.profileManual, incognito: model.incognito, incognitoPicked: model.incognitoPicked)
+        microphone.isHidden = model.incognito
         // Just after a correction: first, the word as typed, to take it back.
         let undo = model.revertOffer
         let words = (undo.map { [$0] } ?? []) + model.suggestions.prefix(undo == nil ? 3 : 2)
         suggestions.isHidden = words.isEmpty
         note.isHidden = !words.isEmpty
         insert.isHidden = !words.isEmpty || model.last == nil
-        note.text = model.last ?? model.status
+        note.text = model.incognito ? model.status : model.last ?? model.status
         note.textColor = model.last == nil ? .secondaryLabel : .label
 
         let shown = suggestions.arrangedSubviews.compactMap { ($0 as? SuggestionView).map { $0.undo ? "↶" + $0.word : $0.word } }
@@ -91,25 +92,38 @@ final class KeyboardStrip: UIView {
 
     /// The profile in use, on its one button: filled when the user picked it, faint when it's a
     /// guess; the menu has all three, the one in use ticked.
-    private func showProfile(_ profile: Profiles.Name, picked: Bool) {
-        if let shown = shownProfile, shown == (profile, picked) { return }
-        shownProfile = (profile, picked)
+    private func showProfile(_ profile: Profiles.Name, picked: Bool, incognito: Bool, incognitoPicked: Bool) {
+        if let shown = shownProfile, shown == (profile, picked, incognito, incognitoPicked) { return }
+        shownProfile = (profile, picked, incognito, incognitoPicked)
         var look = UIButton.Configuration.plain()
-        look.image = UIImage(systemName: Self.symbols[profile.rawValue],
+        look.image = UIImage(systemName: incognito ? "eye.slash" : Self.symbols[profile.rawValue],
                              withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .medium))
         look.baseForegroundColor = .label
         look.indicator = .popup
         look.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 6, bottom: 0, trailing: 4)
         profileButton.configuration = look
-        profileButton.backgroundColor = UIColor.label.withAlphaComponent(picked ? 0.18 : 0.08)
+        profileButton.backgroundColor = incognito ? UIColor.label.withAlphaComponent(0.85) : UIColor.label.withAlphaComponent(picked ? 0.18 : 0.08)
+        if incognito {
+            var dark = profileButton.configuration
+            dark?.baseForegroundColor = .systemBackground
+            profileButton.configuration = dark
+        }
         profileButton.accessibilityLabel = "Profile: \(Self.titles[profile.rawValue])"
-        profileButton.menu = UIMenu(children: Profiles.Name.allCases.map { name in
+        let profiles = UIMenu(options: .displayInline, children: Profiles.Name.allCases.map { name in
             UIAction(title: Self.titles[name.rawValue], image: UIImage(systemName: Self.symbols[name.rawValue]),
                      state: name == profile ? .on : .off) { [weak self] _ in
                 UIDevice.current.playInputClick()
                 self?.model?.chooseProfile(name)
             }
         })
+        // Incognito: nothing logged, learned or sent while it's on (see KeyboardModel.incognito).
+        let picked = incognitoPicked
+        let private_ = UIAction(title: "Incognito", subtitle: "Nothing logged, learned or sent",
+                                image: UIImage(systemName: "eye.slash"), state: picked ? .on : .off) { [weak self] _ in
+            UIDevice.current.playInputClick()
+            self?.model?.setIncognito(!picked)
+        }
+        profileButton.menu = UIMenu(children: [profiles, UIMenu(options: .displayInline, children: [private_])])
     }
 }
 

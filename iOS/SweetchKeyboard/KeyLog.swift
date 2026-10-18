@@ -20,7 +20,11 @@ enum KeyLog {
     /// Events kept while no Mac takes them: a keyboard has little memory to spare.
     private static let limit = 8_000
 
+    /// Incognito: nothing is noted at all while it's on.
+    static var paused = false
+
     static func note(_ event: String, _ fields: [String: Any] = [:]) {
+        guard !paused else { return }
         var entry = fields
         entry["e"] = event
         entry["t"] = (Date().timeIntervalSince1970 * 1000).rounded() / 1000

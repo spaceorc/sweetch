@@ -20,6 +20,8 @@ final class HostMemory {
     }
 
     private let key = "hostMemory"
+    /// Incognito: nothing seen is kept.
+    var paused = false
     private var hosts: [String: Host]
 
     private init() {
@@ -30,7 +32,7 @@ final class HostMemory {
     /// field (little in common with the last) is a new one.
     func saw(_ text: String, process: Int32?, profile: String) {
         let text = String(text.trimmingCharacters(in: .whitespacesAndNewlines).suffix(4000))
-        guard let process, text.count >= 3 else { return }
+        guard !paused, let process, text.count >= 3 else { return }
         var host = hosts[String(process)] ?? Host()
         if let last = host.fields.last, Self.sameField(last.text, text) {
             host.fields[host.fields.count - 1] = Seen(text: text, at: Date(), profile: profile)
@@ -44,7 +46,7 @@ final class HostMemory {
     }
 
     func dictated(_ text: String, process: Int32?, profile: String) {
-        guard let process, !text.isEmpty else { return }
+        guard !paused, let process, !text.isEmpty else { return }
         var host = hosts[String(process)] ?? Host()
         host.dictated.append(Seen(text: String(text.prefix(2000)), at: Date(), profile: profile))
         if host.dictated.count > 10 { host.dictated.removeFirst(host.dictated.count - 10) }
