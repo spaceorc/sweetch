@@ -15,7 +15,9 @@ Usage: Tools/keyboard/export_words.py [out.json]
 """
 
 import importlib.util
+import datetime
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -214,6 +216,12 @@ def valid_words():
 def main():
     target = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("/tmp/keyboard-words.json")
     events = analyse.load(analyse.LOG_DIR)
+    # `SWEETCH_SINCE=YYYY-MM-DD`: only the words typed from that day — the bench's test days, with a
+    # lexicon built from the days before (SWEETCH_UNTIL).
+    since = os.environ.get("SWEETCH_SINCE")
+    if since:
+        start = datetime.datetime.strptime(since, "%Y-%m-%d").timestamp()
+        events = [e for e in events if e.get("t", 0) >= start]
     words = examples(events)
     is_word = valid_words()
     for w in words:

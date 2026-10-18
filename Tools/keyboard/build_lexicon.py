@@ -74,16 +74,31 @@ def read_list(lang):
     return words[:KEEP[lang]]
 
 
+# `SWEETCH_UNTIL=YYYY-MM-DD`: only what the user wrote before that day — the bench then tests on
+# the days after, words and forms the lexicon hasn't seen, as the phone meets them.
+UNTIL = __import__("os").environ.get("SWEETCH_UNTIL")
+
+
+def before_cut(date):
+    """Whether something dated `date` (its first ten characters, YYYY-MM-DD) is to be read."""
+    return not UNTIL or (date or "")[:10] < UNTIL
+
+
+def dated(paths, day=lambda p: p.parent.name):
+    """The paths whose day comes before the cut."""
+    return [p for p in paths if before_cut(day(p))]
+
+
 def personal_texts():
     """What the user dictated and what Wispr Flow wrote for them — their own sentences, spelled
     right."""
     texts = []
-    for path in SUPPORT.glob("dictation/*/session.json"):
+    for path in dated(SUPPORT.glob("dictation/*/session.json")):
         try:
             texts.append(json.loads(path.read_text()).get("text") or "")
         except (OSError, ValueError):
             pass
-    for path in SUPPORT.glob("wispr-flow/history/*/entry.json"):
+    for path in dated(SUPPORT.glob("wispr-flow/history/*/entry.json")):
         try:
             entry = json.loads(path.read_text())
             texts.append(entry.get("editedText") or entry.get("formattedText") or "")
@@ -104,7 +119,7 @@ def sent_messages():
                 event = json.loads(line)
             except ValueError:
                 continue
-            if event.get("type") != "user" or event.get("isMeta"):
+            if event.get("type") != "user" or event.get("isMeta") or not before_cut(event.get("timestamp")):
                 continue
             content = event.get("message", {}).get("content")
             if isinstance(content, list):
@@ -120,7 +135,7 @@ def personal_words():
     those uses were typed (a typed word may be a typo; dictated ones are spelled right). Messages
     sent to Claude Code are typed too — on the phone as well, typos and all."""
     texts, typed = personal_texts(), sent_messages()
-    for path in SUPPORT.glob("keyboard/*.jsonl"):
+    for path in dated(SUPPORT.glob("keyboard/*.jsonl"), lambda p: p.name):
         for line in path.open(encoding="utf-8"):
             if '"e":"word"' in line:
                 try:
@@ -184,6 +199,12 @@ def build(entries):
 SENTENCE = re.compile(r"[.!?…\n]+")
 
 
+# The user's own pairs against the general lists' next words: weights 0–15 (SWEETCH_PAIR_BASE,
+# SWEETCH_GENERAL_PAIRS="8,6,4" try others on the bench).
+PAIR_BASE = int(__import__("os").environ.get("SWEETCH_PAIR_BASE", 5))
+GENERAL_PAIRS = dict(zip((1, 2, 3), map(int, __import__("os").environ.get("SWEETCH_GENERAL_PAIRS", "8,6,4").split(","))))
+
+
 def bigrams(ids):
     """(previous word id, word id) → weight 0–15: how much likelier the word is after that one.
     The root's id, 0, is a sentence's start. From the user's own sentences (the more often a pair,
@@ -201,7 +222,7 @@ def bigrams(ids):
                     pairs[(previous, node)] += 1
                 previous = node
     for pair, n in pairs.items():
-        weights[pair] = min(15, 5 + int(3 * math.log2(n)))
+        weights[pair] = min(15, PAIR_BASE + int(3 * math.log2(n)))
     for lang in ("ru", "en"):
         word = None
         for line in source(lang).open(encoding="utf-8"):
@@ -212,7 +233,7 @@ def bigrams(ids):
                 node = ids.get(name.replace("’", "'").lower())
                 if node is not None:
                     pair = (word, node)
-                    weights[pair] = max(weights.get(pair, 0), {1: 8, 2: 6, 3: 4}.get(int(rank), 4))
+                    weights[pair] = max(weights.get(pair, 0), GENERAL_PAIRS.get(int(rank), GENERAL_PAIRS[3]))
     return weights
 
 
@@ -230,7 +251,7 @@ def profile_texts():
     agent (Claude, Claude Code) — from where each was written, and the keyboard's sessions by the
     profile they ended with on the phone."""
     texts = {name: [] for name in PROFILES}
-    for path in SUPPORT.glob("dictation/*/session.json"):
+    for path in dated(SUPPORT.glob("dictation/*/session.json")):
         try:
             session = json.loads(path.read_text())
         except (OSError, ValueError):
@@ -238,7 +259,7 @@ def profile_texts():
         profile = APP_PROFILE.get(session.get("app") or "")
         if profile and session.get("text"):
             texts[profile].append(session["text"])
-    for path in SUPPORT.glob("wispr-flow/history/*/entry.json"):
+    for path in dated(SUPPORT.glob("wispr-flow/history/*/entry.json")):
         try:
             entry = json.loads(path.read_text())
         except (OSError, ValueError):
@@ -250,7 +271,7 @@ def profile_texts():
     texts["agent"].extend(sent_messages())
     # The phone's sessions: the words typed in each, under the profile the session ended with.
     words, label = collections.defaultdict(list), {}
-    for path in sorted(SUPPORT.glob("keyboard/*.jsonl")):
+    for path in sorted(dated(SUPPORT.glob("keyboard/*.jsonl"), lambda p: p.name)):
         for line in path.open(encoding="utf-8"):
             if '"session"' not in line:
                 continue
@@ -418,7 +439,7 @@ def add_forms(key, own, entries):
         word = form.word.replace("ё", "е") if "ё" not in key else form.word
         if word in entries or not WORD.match(word):
             continue
-        entries[word] = (max(120, min(220, own - 25)), 8)
+        entries[word] = (int(__import__("os").environ.get("SWEETCH_FORMS_FREQ", 0)) or max(120, min(220, own - 25)), 8)
         n += 1
     return n
 

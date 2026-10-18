@@ -15,6 +15,10 @@ final class WordDecoder {
     struct Key {
         let letter: Character
         let frame: CGRect
+        /// Where this user's finger lands on the key, from its centre: the match cost is measured
+        /// from the centre moved by it. The literal — the key a tap landed on — stays by the drawn
+        /// borders, so a tap well inside a key is still that key's (the anchor).
+        var offset: CGVector = .zero
     }
 
     struct Tap {
@@ -128,15 +132,17 @@ final class WordDecoder {
         let width = tap.keys.map(\.frame.width).min() ?? 30
         for key in tap.keys {
             let f = key.frame
-            let dx = (tap.point.x - f.midX) / (f.width / 2), dy = (tap.point.y - f.midY) / (f.height / 2)
+            let dx = (tap.point.x - f.midX - key.offset.dx) / (f.width / 2), dy = (tap.point.y - f.midY - key.offset.dy) / (f.height / 2)
             let squared = Float(dx * dx + dy * dy)
+            let px = (tap.point.x - f.midX) / (f.width / 2), py = (tap.point.y - f.midY) / (f.height / 2)
+            let plain = Float(px * px + py * py)
             // Near enough to have been meant: within a key's width of its edge.
             let edgeX = max(f.minX - tap.point.x, tap.point.x - f.maxX, 0), edgeY = max(f.minY - tap.point.y, tap.point.y - f.maxY, 0)
             guard hypot(edgeX, edgeY) < width else { continue }
             let factor = Self.sweetSpot(squared)
             let inside = f.contains(tap.point)
             let cost = costs.match * factor + (inside ? 0 : costs.proximity)
-            if nearest == nil || squared < nearest!.1 { nearest = (key.letter, squared) }
+            if nearest == nil || plain < nearest!.1 { nearest = (key.letter, plain) }
             for letter in Self.variants(of: key.letter) {
                 guard let index = lexicon.index(of: letter.0) else { continue }
                 let total = cost + letter.1

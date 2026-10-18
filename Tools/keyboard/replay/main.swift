@@ -34,8 +34,17 @@ guard args.count >= 3, let lexicon = Lexicon(url: URL(fileURLWithPath: args[1]))
 }
 let verbose = args.contains("--verbose")
 let export = try JSONDecoder().decode(Export.self, from: Data(contentsOf: URL(fileURLWithPath: args[2])))
+// `--offsets <file.json>`: {letter: [dx, dy]} — where the user's finger lands on each key, for the
+// decoder's match cost (WordDecoder.Key.offset).
+let offsets: [String: [Double]] = args.firstIndex(of: "--offsets").flatMap { i in
+    i + 1 < args.count ? (try? JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: args[i + 1])))) as? [String: [Double]] : nil
+} ?? [:]
 let keys: [String: [WordDecoder.Key]] = export.layouts.mapValues { rows in
-    rows.map { WordDecoder.Key(letter: Character($0[0].text), frame: CGRect(x: $0[1].number, y: $0[2].number, width: $0[3].number, height: $0[4].number)) }
+    rows.map {
+        let o = offsets[$0[0].text] ?? [0, 0]
+        return WordDecoder.Key(letter: Character($0[0].text), frame: CGRect(x: $0[1].number, y: $0[2].number, width: $0[3].number, height: $0[4].number),
+                               offset: CGVector(dx: o[0], dy: o.count > 1 ? o[1] : 0))
+    }
 }
 let bigrams = args.contains("--no-context") ? nil : Bigrams(url: URL(fileURLWithPath: args[1]).deletingLastPathComponent().appendingPathComponent("Bigrams.bin"))
 let decoder = WordDecoder(lexicon: lexicon, bigrams: bigrams)
@@ -59,6 +68,8 @@ if let i = args.firstIndex(of: "--bench"), i + 1 < args.count {
     struct Band { var words = 0, top3 = 0, top1 = 0, lettersSaved = 0, letters = 0, top1Left: [Int] = [] }
     var bands: [String: Band] = [:]
     var predicted = (words: 0, top3: 0, top1: 0)
+    // The decoder's first pick against the word as it ended up, on every word the lexicon has.
+    var accuracy = (words: 0, top1: 0, top3: 0, literalRight: 0)
     var started = Date()
     func band(_ n: Int) -> String { n <= 3 ? "2-3" : n <= 6 ? "4-6" : "7+" }
     for word in export.words where word.taps.count >= 2 {
@@ -69,6 +80,12 @@ if let i = args.firstIndex(of: "--bench"), i + 1 < args.count {
         let truthIsWord = lexicon.lookup(truth) != nil
         let result = decoder.decode(taps, context: context)
         let live = (result.correction ?? result.literal).lowercased()
+        if truthIsWord, truth.count == taps.count {
+            accuracy.words += 1
+            if result.candidates.first?.word.lowercased() == truth { accuracy.top1 += 1 }
+            if result.candidates.prefix(3).contains(where: { $0.word.lowercased() == truth }) { accuracy.top3 += 1 }
+            if result.literal.lowercased() == truth { accuracy.literalRight += 1 }
+        }
         // Autocorrect.
         if word.kind == "clean" {
             auto.clean += 1
@@ -133,6 +150,8 @@ if let i = args.firstIndex(of: "--bench"), i + 1 < args.count {
                         "user_fixed": auto.fixedWords, "made_right": auto.madeRight, "made_wrong": auto.madeWrong],
         "post": ["looked": post.looked, "fixed": post.fixed, "breaks": post.broke],
         "prediction": ["words": predicted.words, "top3": predicted.top3, "top1": predicted.top1],
+        "decoder": ["words": accuracy.words, "top1": accuracy.top1, "top3": accuracy.top3, "literal_right": accuracy.literalRight,
+                    "top1_pct": accuracy.words > 0 ? 100 * Double(accuracy.top1) / Double(accuracy.words) : 0],
     ]
     var suggestions: [String: Any] = [:]
     var saved = 0, letters = 0

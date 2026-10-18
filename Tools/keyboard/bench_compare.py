@@ -6,6 +6,10 @@ from pathlib import Path
 
 DIR = Path(__file__).resolve().parents[2] / "build/bench"
 LINES = [
+    ("decoder: first pick is the word, %", ("decoder", "top1_pct"), 1),
+    ("decoder: first pick is the word", ("decoder", "top1"), 1),
+    ("decoder: the word in its three", ("decoder", "top3"), 1),
+    ("taps landed on the word's keys", ("decoder", "literal_right"), 1),
     ("autocorrect: real words broken", ("autocorrect", "breaks"), -1),
     ("autocorrect: typos left in, fixed", ("autocorrect", "typos_left_fixed"), 1),
     ("autocorrect: user's fixes made", ("autocorrect", "made_right"), 1),

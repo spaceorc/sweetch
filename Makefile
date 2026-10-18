@@ -238,13 +238,17 @@ decoder-eval:
 
 # The bench: the decoder run on everything the user typed, every measure at once (autocorrect,
 # the second look, suggestions letter by letter), saved under build/bench/$(NAME).json; compare
-# runs with `make bench-compare RUNS="base variant"`. ARGS pass a variant's switches.
+# runs with `make bench-compare RUNS="base variant"`. ARGS pass a variant's switches. Hashing is
+# made deterministic: Swift's sets and dictionaries otherwise order ties differently each run, and
+# the bench's small differences were partly that.
+# A held-out day: a lexicon from the days before (SWEETCH_UNTIL=… build_lexicon.py) and the words
+# of that day (SWEETCH_SINCE=… export_words.py) — the bench on words and forms it hasn't seen.
 NAME ?= base
 bench:
 	@test -f $(LEXICON) || $(MAKE) --no-print-directory lexicon
 	@$$( [ -x $(DECODER_VENV) ] && echo $(DECODER_VENV) || echo python3 ) -I Tools/keyboard/export_words.py $(BUILD_DIR)/keyboard-words.json
 	@mkdir -p $(BUILD_DIR) && swiftc -O -o $(BUILD_DIR)/replay Tools/keyboard/replay/main.swift iOS/SweetchKeyboard/Decoder/*.swift
-	@$(BUILD_DIR)/replay $(LEXICON) $(BUILD_DIR)/keyboard-words.json --bench $(NAME) $(ARGS)
+	@SWIFT_DETERMINISTIC_HASHING=1 $(BUILD_DIR)/replay $(LEXICON) $(BUILD_DIR)/keyboard-words.json --bench $(NAME) $(ARGS)
 
 bench-compare:
 	@python3 -I Tools/keyboard/bench_compare.py $(RUNS)
