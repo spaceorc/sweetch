@@ -12,6 +12,12 @@ enum Metrics {
         var autocorrectUndone = 0
         var deletes = 0
         var typosLeft = 0
+        /// Fixing by hand: each run of backspaces (under 2 s apart, at most 40 characters — more is
+        /// rewriting, not a typo), its characters and how long the backspacing took; and the
+        /// suggestions picked in place of a word typed wrong.
+        var fixes: [(chars: Int, seconds: Double)] = []
+        var suggestionFixes = 0
+        var wordLetters = 0
         /// Seconds between words typed one after another (a pause over 8 s isn't typing).
         var typingGaps: [Double] = []
         var dictations = 0
@@ -38,9 +44,21 @@ enum Metrics {
         keyboard(into: &days)
         dictations(into: &days)
 
+        let gaps = days.values.flatMap(\.typingGaps)
+        let typingSecondsPerWord = median(gaps) ?? 1.2
+        let letters = days.values.reduce(0) { $0 + $1.wordLetters }, typedAll = days.values.reduce(0) { $0 + $1.typedWords }
+        // A character's time while typing: a word and the space after it.
+        let secondsPerChar = typingSecondsPerWord / (typedAll > 0 ? Double(letters) / Double(typedAll) + 1 : 6)
+        /// A fix by hand: the backspacing, typing the characters again, and half a second to notice.
+        func fixSeconds(_ fix: (chars: Int, seconds: Double)) -> Double { fix.seconds + Double(fix.chars) * secondsPerChar + 0.5 }
+        let medianFix = median(days.values.flatMap(\.fixes).map(fixSeconds)) ?? 2.5
+        let per100 = { (n: Int, words: Int) -> Any in words > 0 ? Double(n) * 100 / Double(words) : NSNull() }
         let series = dayNames.map { name -> [String: Any] in
             let d = days[name]!
             return [
+                "good_autocorrect_per_100": per100(d.autocorrected - d.autocorrectUndone, d.typedWords),
+                "undone_per_100": per100(d.autocorrectUndone, d.typedWords),
+                "fixes_per_100": per100(d.fixes.count + d.suggestionFixes, d.typedWords),
                 "day": name, "typed_words": d.typedWords, "dictated_words": d.dictatedWords,
                 "dictations": d.dictations, "autocorrected": d.autocorrected, "undone": d.autocorrectUndone,
                 "latency_median": median(d.latencies) ?? NSNull(),
@@ -51,8 +69,6 @@ enum Metrics {
         let typed = week.reduce(0) { $0 + $1.typedWords }
         let dictated = week.reduce(0) { $0 + $1.dictatedWords }
         let latencies = week.flatMap(\.latencies)
-        let gaps = days.values.flatMap(\.typingGaps)
-        let typingSecondsPerWord = median(gaps) ?? 1.2
         let recording = week.reduce(0) { $0 + $1.recordingSeconds }
         let speakingSecondsPerWord = dictated > 0 ? recording / Double(dictated) : 0.5
         // Dictating instead of typing: what typing those words would have taken, less speaking them
@@ -78,6 +94,14 @@ enum Metrics {
             "autocorrect_undone_rate": autocorrected > 0 ? Double(undone) / Double(autocorrected) : 0,
             "deletes_per_100": typed > 0 ? Double(week.reduce(0) { $0 + $1.deletes }) * 100 / Double(typed) : 0,
             "typos_left_per_100": typed > 0 ? Double(week.reduce(0) { $0 + $1.typosLeft }) * 100 / Double(typed) : 0,
+            "good_autocorrect_per_100": per100(autocorrected - undone, typed),
+            "undone_per_100": per100(undone, typed),
+            "fixes_per_100": per100(week.reduce(0) { $0 + $1.fixes.count + $1.suggestionFixes }, typed),
+            "fixing_minutes": week.flatMap(\.fixes).map(fixSeconds).reduce(0, +) / 60
+                + Double(week.reduce(0) { $0 + $1.suggestionFixes }) * 1.0 / 60,
+            "autocorrect_saved_minutes": Double(max(0, autocorrected - undone)) * medianFix / 60,
+            "autocorrect_lost_minutes": Double(undone) * medianFix / 60,
+            "fix_seconds_median": medianFix,
             "suggestion_share": typed > 0 ? Double(week.reduce(0) { $0 + $1.suggestionWords }) / Double(typed) : 0,
         ]
         return ["days": series, "week": totals, "computed_at": Date().timeIntervalSince1970]
@@ -87,7 +111,7 @@ enum Metrics {
 
     /// Only these lines are read (the log is mostly touches).
     private static let wanted = ["\"e\":\"word\"", "\"e\":\"autocorrect\"", "\"e\":\"autofix-undone\"", "\"e\":\"delete",
-                                 "\"e\":\"decoder\"", "\"e\":\"dictation-final\""]
+                                 "\"e\":\"decoder\"", "\"e\":\"dictation-final\"", "\"e\":\"choose\""]
 
     private static func keyboard(into days: inout [String: Day]) {
         let dir = AppSupport.dir.appendingPathComponent("keyboard", isDirectory: true)
@@ -109,6 +133,11 @@ enum Metrics {
         var day = Day()
         guard let text = try? String(contentsOf: file, encoding: .utf8) else { return day }
         var lastWord: (t: Double, session: String)?
+        var run: (chars: Int, first: Double, last: Double)?
+        func endRun() {
+            if let r = run, r.chars <= 40 { day.fixes.append((r.chars, r.last - r.first)) }
+            run = nil
+        }
         var seenLines = Set<String>()
         for line in text.split(separator: "\n") where wanted.contains(where: { line.contains($0) }) {
             // The same line twice (a batch sent again) counts once.
@@ -116,13 +145,25 @@ enum Metrics {
                   let event = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any],
                   let name = event["e"] as? String else { continue }
             let t = event["t"] as? Double ?? 0
+            if name == "delete" || name == "delete-word" {
+                let chars = name == "delete" ? 1 : event["chars"] as? Int ?? 1
+                if let r = run, t - r.last < 2 { run = (r.chars + chars, r.first, t) } else { endRun(); run = (chars, t, t) }
+            } else if let r = run, t - r.last >= 2 || name == "word" {
+                _ = r
+                endRun()
+            }
             switch name {
             case "word":
                 day.typedWords += 1
+                day.wordLetters += (event["word"] as? String ?? "").count
                 if event["boundary"] as? String == "suggestion" { day.suggestionWords += 1 }
                 let session = event["session"] as? String ?? ""
                 if let last = lastWord, last.session == session, t - last.t > 0, t - last.t < 8 { day.typingGaps.append(t - last.t) }
                 lastWord = (t, session)
+            case "choose":
+                // A suggestion in place of the word typed, not its ending: a typo put right by hand.
+                let typed = (event["word"] as? String ?? "").lowercased(), picked = (event["suggestion"] as? String ?? "").lowercased()
+                if !typed.isEmpty, !picked.hasPrefix(typed) { day.suggestionFixes += 1 }
             case "autocorrect": day.autocorrected += 1
             case "autofix-undone": day.autocorrectUndone += 1
             case "delete", "delete-word": day.deletes += 1
@@ -140,6 +181,7 @@ enum Metrics {
             default: break
             }
         }
+        endRun()
         return day
     }
 
@@ -205,6 +247,9 @@ private extension Metrics.Day {
         autocorrectUndone += other.autocorrectUndone
         deletes += other.deletes
         typosLeft += other.typosLeft
+        fixes += other.fixes
+        suggestionFixes += other.suggestionFixes
+        wordLetters += other.wordLetters
         typingGaps += other.typingGaps
     }
 }

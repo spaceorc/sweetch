@@ -14,6 +14,10 @@ struct MetricsView: View {
             let dictated: Int
             let latency: Double?
             let autocorrected: Int
+            /// Per 100 words typed; nil on a day with nothing typed.
+            let good: Double?
+            let undone: Double?
+            let fixes: Double?
             var id: Date { date }
         }
 
@@ -27,7 +31,9 @@ struct MetricsView: View {
             days = (json["days"] as? [[String: Any]] ?? []).compactMap { d in
                 guard let date = (d["day"] as? String).flatMap(f.date(from:)) else { return nil }
                 return Day(date: date, typed: d["typed_words"] as? Int ?? 0, dictated: d["dictated_words"] as? Int ?? 0,
-                           latency: d["latency_median"] as? Double, autocorrected: d["autocorrected"] as? Int ?? 0)
+                           latency: d["latency_median"] as? Double, autocorrected: d["autocorrected"] as? Int ?? 0,
+                           good: d["good_autocorrect_per_100"] as? Double, undone: d["undone_per_100"] as? Double,
+                           fixes: d["fixes_per_100"] as? Double)
             }
         }
 
@@ -38,7 +44,13 @@ struct MetricsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 if let metrics {
-                    hero(metrics)
+                    qualityChart(metrics)
+                    section("Typing, this week") {
+                        tile("Fixed by hand", per100(metrics.number("fixes_per_100")), "per 100 words · \(minutes(metrics.number("fixing_minutes"))) spent, \(seconds(metrics.number("fix_seconds_median"))) a fix")
+                        tile("Autocorrected", per100(metrics.number("good_autocorrect_per_100")), "per 100 words, kept · saved about \(minutes(metrics.number("autocorrect_saved_minutes")))")
+                        tile("Taken back", per100(metrics.number("undone_per_100")), "autocorrections per 100 words · \(percent(metrics.number("autocorrect_undone_rate"))) of them")
+                        tile("Typos left", String(format: "%.1f", metrics.number("typos_left_per_100") ?? 0), "per 100 words: the decoder doubted, nothing changed")
+                    }
                     section("Dictation") {
                         tile("To text", seconds(metrics.number("latency_median")), "median after release · 90% within \(seconds(metrics.number("latency_p90")))")
                         tile("Words", count(metrics.number("dictated_words")), "\(count(metrics.number("dictations"))) dictations · \(count(metrics.number("phone_dictations"))) from the iPhone")
@@ -48,9 +60,9 @@ struct MetricsView: View {
                     }
                     wordsChart(metrics)
                     latencyChart(metrics)
-                    section("Keyboard") {
-                        tile("Autocorrected", count(metrics.number("autocorrected")), "\(percent(metrics.number("autocorrect_undone_rate"))) taken back")
-                        tile("Typos left", String(format: "%.1f", metrics.number("typos_left_per_100") ?? 0), "per 100 words typed")
+                    section("Overall, this week") {
+                        tile("Dictated", percent(metrics.number("dictated_share")), "of \(count((metrics.number("dictated_words") ?? 0) + (metrics.number("typed_words") ?? 0))) words · \(count(metrics.number("typed_words"))) typed here")
+                        tile("Speaking over typing", duration(metrics.number("saved_minutes")), "estimate: typing at your phone speed")
                         tile("Backspaces", count(metrics.number("deletes_per_100")), "per 100 words typed")
                         tile("Suggestions", percent(metrics.number("suggestion_share")), "of the words typed")
                     }
@@ -82,32 +94,6 @@ struct MetricsView: View {
 
     // MARK: - Parts
 
-    private func hero(_ m: Metrics) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("This week").font(.subheadline.weight(.semibold)).foregroundStyle(.white.opacity(0.8))
-            Text(duration(m.number("saved_minutes"))).font(.system(size: 46, weight: .bold, design: .rounded)).foregroundStyle(.white)
-            Text("saved by speaking instead of typing").font(.subheadline).foregroundStyle(.white.opacity(0.85))
-            HStack(spacing: 18) {
-                stat(percent(m.number("dictated_share")), "of words dictated")
-                stat(count(m.number("dictated_words")), "words spoken")
-                stat(count(m.number("typed_words")), "typed")
-            }
-            .padding(.top, 8)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(LinearGradient(colors: [Color(red: 0.36, green: 0.27, blue: 0.95), Color(red: 0.62, green: 0.29, blue: 0.86)],
-                                   startPoint: .topLeading, endPoint: .bottomTrailing),
-                    in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-    }
-
-    private func stat(_ value: String, _ label: String) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(value).font(.headline.monospacedDigit()).foregroundStyle(.white)
-            Text(label).font(.caption2).foregroundStyle(.white.opacity(0.75))
-        }
-    }
-
     private func section<Content: View>(_ title: String, @ViewBuilder _ content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title).font(.title3.weight(.semibold))
@@ -125,6 +111,31 @@ struct MetricsView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    /// The keyboard day by day: per 100 words typed, autocorrections kept, autocorrections taken
+    /// back, and fixes by hand — whether autocorrection helps, and how much is left to the user.
+    private func qualityChart(_ m: Metrics) -> some View {
+        let typed = m.days.filter { $0.typed > 0 }
+        return card("Typing: per 100 words, day by day") {
+            Chart {
+                ForEach(typed) { day in
+                    BarMark(x: .value("Day", day.date, unit: .day), y: .value("Per 100", day.good ?? 0))
+                        .foregroundStyle(by: .value("What", "Autocorrected"))
+                        .position(by: .value("What", "Autocorrected"))
+                    BarMark(x: .value("Day", day.date, unit: .day), y: .value("Per 100", day.undone ?? 0))
+                        .foregroundStyle(by: .value("What", "Taken back"))
+                        .position(by: .value("What", "Taken back"))
+                    BarMark(x: .value("Day", day.date, unit: .day), y: .value("Per 100", day.fixes ?? 0))
+                        .foregroundStyle(by: .value("What", "Fixed by hand"))
+                        .position(by: .value("What", "Fixed by hand"))
+                }
+            }
+            .chartForegroundStyleScale(["Autocorrected": Color.green, "Taken back": Color.red, "Fixed by hand": Color.orange])
+            .chartXAxis { AxisMarks(values: .stride(by: .day)) { _ in AxisValueLabel(format: .dateTime.day()) } }
+            .frame(height: 180)
+            if typed.isEmpty { Text("Nothing typed on the keyboard yet").font(.footnote).foregroundStyle(.secondary) }
+        }
     }
 
     private func wordsChart(_ m: Metrics) -> some View {
@@ -169,6 +180,13 @@ struct MetricsView: View {
     private func count(_ value: Double?) -> String {
         guard let value else { return "—" }
         return value >= 10_000 ? String(format: "%.1fk", value / 1000) : String(Int(value.rounded()))
+    }
+
+    private func per100(_ value: Double?) -> String { value.map { String(format: "%.1f", $0) } ?? "—" }
+
+    private func minutes(_ value: Double?) -> String {
+        guard let value else { return "—" }
+        return value < 1 ? "\(Int((value * 60).rounded())) s" : "\(Int(value.rounded())) min"
     }
 
     private func percent(_ value: Double?) -> String { value.map { "\(Int(($0 * 100).rounded()))%" } ?? "—" }
