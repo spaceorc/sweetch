@@ -14,8 +14,6 @@ struct Export: Decodable {
         let previous: String?; let sentence_start: Bool?
         /// The word after it in the text as it ended up, and whether its taps came fast.
         let next: String?; let fast: Bool?
-        /// The keyboard's profile when it was typed (personal, work, agent).
-        let profile: String?
     }
     let layouts: [String: [[Value]]]
     let words: [Word]
@@ -49,16 +47,7 @@ let keys: [String: [WordDecoder.Key]] = export.layouts.mapValues { rows in
     }
 }
 let bigrams = args.contains("--no-context") ? nil : Bigrams(url: URL(fileURLWithPath: args[1]).deletingLastPathComponent().appendingPathComponent("Bigrams.bin"))
-// `--profiles`: the decoder with Profiles.bin, each word in the profile it was typed in — against
-// the same run without, to see whether the profiles earn their keep.
-let useProfiles = args.contains("--profiles")
-let profiles = useProfiles ? Profiles(url: URL(fileURLWithPath: args[1]).deletingLastPathComponent().appendingPathComponent("Profiles.bin")) : nil
-if useProfiles && profiles == nil { print("--profiles: no Profiles.bin beside the lexicon"); exit(1) }
-func profileOf(_ word: Export.Word) -> Profiles.Name? {
-    guard useProfiles, let key = word.profile else { return nil }
-    return Profiles.Name.allCases.first { $0.key == key }
-}
-var decoder = WordDecoder(lexicon: lexicon, bigrams: bigrams, profiles: profiles)
+var decoder = WordDecoder(lexicon: lexicon, bigrams: bigrams)
 if let i = args.firstIndex(of: "--threshold"), i + 1 < args.count, let t = Float(args[i + 1]) { decoder.threshold = t }
 if args.contains("--by-confidence") { decoder.byConfidence = true }
 if let i = args.firstIndex(of: "--language"), i + 1 < args.count, let l = Float(args[i + 1]) { decoder.costs.language = l }
@@ -94,7 +83,6 @@ if let i = args.firstIndex(of: "--bench"), i + 1 < args.count {
         guard word.taps.count >= 2 else { continue }
         let taps = word.taps.map { WordDecoder.Tap(point: CGPoint(x: $0.x, y: $0.y), keys: keys[$0.layout] ?? [], deliberate: $0.deliberate) }
         var context = WordDecoder.Context()
-        context.profile = profileOf(word)
         if word.sentence_start == true { context.previous = 0 } else if let previous = word.previous { context.previous = lexicon.lookup(previous.lowercased()) }
         if recentCount > 0 { context.recent = Set(typedSoFar.suffix(recentCount)) }
         let truth = word.truth.lowercased(), typed = word.taps.map(\.char).joined().lowercased()
@@ -207,7 +195,6 @@ if let i = args.firstIndex(of: "--at-letters"), i + 1 < args.count, let k = Int(
         guard lexicon.lookup(truth) != nil, truth.count == word.taps.count else { continue }
         let taps = word.taps.prefix(k).map { WordDecoder.Tap(point: CGPoint(x: $0.x, y: $0.y), keys: keys[$0.layout] ?? [], deliberate: $0.deliberate) }
         var context = WordDecoder.Context()
-        context.profile = profileOf(word)
         if word.sentence_start == true { context.previous = 0 } else if let previous = word.previous { context.previous = lexicon.lookup(previous.lowercased()) }
         if recentCount > 0 { context.recent = Set(typed.suffix(recentCount)) }
         var shown: [String] = []
@@ -235,7 +222,6 @@ if args.contains("--post"), let bigrams {
         guard let next = word.next, let nextNode = lexicon.lookup(next.lowercased()) else { continue }
         let taps = word.taps.map { WordDecoder.Tap(point: CGPoint(x: $0.x, y: $0.y), keys: keys[$0.layout] ?? [], deliberate: $0.deliberate) }
         var context = WordDecoder.Context()
-        context.profile = profileOf(word)
         if word.sentence_start == true { context.previous = 0 } else if let previous = word.previous { context.previous = lexicon.lookup(previous) }
         let result = decoder.decode(taps, context: context)
         let typed = word.taps.map(\.char).joined().lowercased()
@@ -276,7 +262,6 @@ for word in export.words where word.taps.count >= 2 {
     let taps = word.taps.map { WordDecoder.Tap(point: CGPoint(x: $0.x, y: $0.y), keys: keys[$0.layout] ?? [], deliberate: $0.deliberate) }
     let started = Date()
     var context = WordDecoder.Context()
-    context.profile = profileOf(word)
     if word.sentence_start == true { context.previous = 0 } else if let previous = word.previous { context.previous = lexicon.lookup(previous) }
     let result = decoder.decode(taps, context: context)
     seconds += Date().timeIntervalSince(started)

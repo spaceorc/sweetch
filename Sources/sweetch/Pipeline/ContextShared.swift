@@ -53,10 +53,6 @@ enum ContextSnapshot {
                        9: "Done", 10: "Emergency call", 11: "Continue"]
         if let type = k["return_type"] as? Int, let name = returns[type] { kind.append("return key: \(name)") }
         if !kind.isEmpty { lines.append("Field: \(kind.joined(separator: ", "))") }
-        if let profile = k["profile"] as? String {
-            let how = (k["profile_picked"] as? Bool) == true ? "picked by the user" : "guessed from the words"
-            lines.append("Way of writing here: \(profile) (one of personal / work / to an AI agent; \(how))")
-        }
         if let words = k["recent_words"] as? String, !words.isEmpty { lines.append("Words typed lately (any app): \(words)") }
         func listed(_ key: String, _ title: String) {
             guard let items = k[key] as? [[String: Any]], !items.isEmpty else { return }

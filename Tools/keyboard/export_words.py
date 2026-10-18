@@ -48,9 +48,6 @@ def examples(events):
     finished = {}        # word start → example
     downs, deliberate = {}, set()
     last_touch, last_up = None, None
-    # The profile the keyboard was in when the word was typed (its start-of-field guess, the words'
-    # move, or the user's pick) — for the bench's `--profiles`.
-    state = {"profile": None}
 
     def word_start():
         i = len(buffer)
@@ -81,13 +78,13 @@ def examples(events):
         truth = "".join(t["char"] for t in letters)
         taps = attempts.pop(start, None)
         if taps is None:
-            finished[start] = {"kind": "clean", "taps": letters, "truth": truth, "previous": previous, "sentence_start": sentence_start, "profile": state["profile"]}
+            finished[start] = {"kind": "clean", "taps": letters, "truth": truth, "previous": previous, "sentence_start": sentence_start}
         else:
             literal = "".join(t["char"] for t in taps)
             if literal.lower() == truth.lower():
-                finished[start] = {"kind": "clean", "taps": letters, "truth": truth, "previous": previous, "sentence_start": sentence_start, "profile": state["profile"]}
+                finished[start] = {"kind": "clean", "taps": letters, "truth": truth, "previous": previous, "sentence_start": sentence_start}
             elif damerau(literal.lower(), truth.lower()) <= 2:
-                finished[start] = {"kind": "fixed", "taps": taps, "truth": truth, "previous": previous, "sentence_start": sentence_start, "profile": state["profile"]}
+                finished[start] = {"kind": "fixed", "taps": taps, "truth": truth, "previous": previous, "sentence_start": sentence_start}
 
     def flush():
         finish()
@@ -131,8 +128,6 @@ def examples(events):
 
     for e in events:
         kind = e["e"]
-        if kind in ("profile", "word") and e.get("profile"):
-            state["profile"] = e["profile"]
         if kind == "appear":
             flush()
         elif kind == "down":
@@ -186,7 +181,7 @@ def examples(events):
             taps = attempts.pop(start, None)
             if taps and damerau("".join(t["char"] for t in taps).lower(), e["suggestion"].lower()) <= 2:
                 previous, sentence_start = previous_word(start)
-                finished[start] = {"kind": "fixed", "taps": taps, "truth": e["suggestion"], "previous": previous, "sentence_start": sentence_start, "profile": state["profile"]}
+                finished[start] = {"kind": "fixed", "taps": taps, "truth": e["suggestion"], "previous": previous, "sentence_start": sentence_start}
             buffer.extend(e.get("suggestion", "") + " ")
         elif kind in ("heard", "autofix"):
             finish()

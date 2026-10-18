@@ -285,7 +285,7 @@ final class KeyboardModel {
         } else if now.isEmpty, !previous.isEmpty {
             // Emptied — a message sent — or only the focus leaving, when iOS shows an empty field a
             // moment before the keyboard goes: told apart by whether it's still up, and empty, then.
-            HostMemory.shared.saw(previous, process: hostProcess, profile: profile.key)
+            HostMemory.shared.saw(previous, process: hostProcess)
             let since = visibleSince
             Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .milliseconds(500))
@@ -296,7 +296,7 @@ final class KeyboardModel {
         } else {
             // Another field: what it held, before it's gone.
             if !now.hasPrefix(String(previous.prefix(20))) {
-                HostMemory.shared.saw(previous, process: hostProcess, profile: profile.key)
+                HostMemory.shared.saw(previous, process: hostProcess)
                 settleDictations(in: previous, why: "other-field")
             }
             noteExternal(from: previous, to: now)
@@ -535,7 +535,7 @@ final class KeyboardModel {
         guard !incognito, !incognitoResidue else { return }
         guard now || Date().timeIntervalSince(rememberedAt) > 5 else { return }
         rememberedAt = Date()
-        HostMemory.shared.saw(String(field.text), process: hostProcess, profile: profile.key)
+        HostMemory.shared.saw(String(field.text), process: hostProcess)
     }
 
     /// Everything the keyboard knows of where the user is about to dictate, for the app's dictation:
@@ -544,7 +544,7 @@ final class KeyboardModel {
     /// picks what helps.
     private func dictationContext() -> [String: Any] {
         // Text typed in incognito isn't the dictation's to know.
-        guard !incognitoResidue else { return ["profile": profile.key, "layout": "\(letters)"] }
+        guard !incognitoResidue else { return ["layout": "\(letters)"] }
         let text = field.text
         let cursor = min(max(field.cursor, 0), text.count)
         var before = String(text[..<cursor]), after = String(text[cursor...])
@@ -555,7 +555,6 @@ final class KeyboardModel {
         var context: [String: Any] = [
             "field_before": String(before.suffix(4000)),
             "field_after": String(after.prefix(1500)),
-            "profile": profile.key, "profile_picked": profileManual,
             "recent_words": recentWords.suffix(60).joined(separator: " "),
             "layout": "\(letters)",
             "keyboard_type": proxy?.keyboardType?.rawValue ?? -1,
@@ -567,7 +566,7 @@ final class KeyboardModel {
             let now = Date()
             let current = String(text).trimmingCharacters(in: .whitespacesAndNewlines)
             let seen = { (items: [HostMemory.Seen]) in
-                items.map { ["text": $0.text, "minutes_ago": Int(now.timeIntervalSince($0.at) / 60), "profile": $0.profile ?? ""] as [String: Any] }
+                items.map { ["text": $0.text, "minutes_ago": Int(now.timeIntervalSince($0.at) / 60)] as [String: Any] }
             }
             // The field itself is sent apart; its record here would only repeat it.
             // The newest first, while they fit: a URL carries this to the app.
@@ -773,8 +772,8 @@ final class KeyboardModel {
         let spaced = next == nil || !(next!.isWhitespace || next!.isPunctuation)
         insert(spaced ? suggestion + " " : suggestion)
         log("choose", ["word": word, "suggestion": suggestion, "spaced": spaced, "from": suggestionsFrom])
-        KeyLog.note("word", ["word": suggestion, "boundary": "suggestion", "session": fieldSession, "profile": profile.key])
-        profileSees(suggestion)
+        KeyLog.note("word", ["word": suggestion, "boundary": "suggestion", "session": fieldSession])
+        wordSeen(suggestion)
         spaceIsOurs = spaced
         lastSpaceAt = Date()
         afterTyping()
@@ -825,8 +824,8 @@ final class KeyboardModel {
                                 previous: previousWord(before: String(before.dropLast(word.count))),
                                 fast: !gaps.isEmpty && gaps[gaps.count / 2] < 0.35, endedAt: Date())
         }
-        KeyLog.note("word", ["word": word, "boundary": boundary, "session": fieldSession, "profile": profile.key])
-        profileSees(word)
+        KeyLog.note("word", ["word": word, "boundary": boundary, "session": fieldSession])
+        wordSeen(word)
         if !incognito {
             recentWords.append(word)
             if recentWords.count > 100 { recentWords.removeFirst(recentWords.count - 100) }
@@ -856,8 +855,7 @@ final class KeyboardModel {
         if decoder == nil, !decoderFailed {
             if let url = Bundle.main.url(forResource: "Lexicon", withExtension: "bin"), let lexicon = Lexicon(url: url) {
                 let bigrams = Bundle.main.url(forResource: "Bigrams", withExtension: "bin").flatMap(Bigrams.init)
-                let profiles = Bundle.main.url(forResource: "Profiles", withExtension: "bin").flatMap(Profiles.init)
-                decoder = WordDecoder(lexicon: lexicon, bigrams: bigrams, profiles: profiles)
+                decoder = WordDecoder(lexicon: lexicon, bigrams: bigrams)
             } else {
                 decoderFailed = true
                 DispatchQueue.main.async { KeyLog.note("decoder-missing") }
@@ -884,10 +882,10 @@ final class KeyboardModel {
     /// now, and put in — also when the next word has been begun meanwhile, which stays as typed.
     private func correctLate(_ word: String, taps: [WordDecoder.Tap], boundary: String, before: String) {
         let previous = previousWord(before: String(before.dropLast(word.count)))
-        let recent = recentWords, profileNow = profile, keep = keepAsTyped
+        let recent = recentWords, keep = keepAsTyped
         Self.decoderQueue.async { [weak self] in
             guard let decoder = Self.loadDecoder() else { return }
-            let context = Self.context(previous, recent: recent, lexicon: decoder.lexicon, profile: profileNow)
+            let context = Self.context(previous, recent: recent, lexicon: decoder.lexicon)
             let (fixed, confidence) = Self.correction(of: word, taps: taps, decoder: decoder, context: context, keep: keep)
             DispatchQueue.main.async {
                 guard let self, let fixed, fixed != word else { return }
@@ -924,11 +922,11 @@ final class KeyboardModel {
     private func lookAgain(at last: LastWord, next: String, boundary: String, before: String) {
         guard last.fast, Date().timeIntervalSince(last.endedAt) < 3,
               before.hasSuffix(last.standing + last.boundary + next) else { return }
-        let recent = recentWords, profileNow = profile, keep = keepAsTyped
+        let recent = recentWords, keep = keepAsTyped
         Self.decoderQueue.async { [weak self] in
             guard let decoder = Self.loadDecoder(), let bigrams = decoder.bigrams,
                   let nextNode = decoder.lexicon.lookup(next.lowercased()) else { return }
-            let context = Self.context(last.previous, recent: recent, lexicon: decoder.lexicon, profile: profileNow)
+            let context = Self.context(last.previous, recent: recent, lexicon: decoder.lexicon)
             let result = decoder.decode(last.taps, context: context)
             let standing = last.standing.lowercased()
             // Only a word the decoder left unsure, and none the user kept as typed.
@@ -964,11 +962,10 @@ final class KeyboardModel {
     private func shadowDecode(_ word: String, taps: [WordDecoder.Tap]) {
         let previous = previousWord(before: proxy?.documentContextBeforeInput ?? "")
         let recent = recentWords
-        let profileNow = profile
         Self.decoderQueue.async {
             guard let decoder = Self.loadDecoder() else { return }
             let started = Date()
-            let result = decoder.decode(taps, context: Self.context(previous, recent: recent, lexicon: decoder.lexicon, profile: profileNow))
+            let result = decoder.decode(taps, context: Self.context(previous, recent: recent, lexicon: decoder.lexicon))
             let ms = Int(Date().timeIntervalSince(started) * 1000)
             DispatchQueue.main.async {
                 KeyLog.note("decoder", [
@@ -1116,13 +1113,12 @@ final class KeyboardModel {
         let insideWord = proxy?.documentContextAfterInput?.first?.isLetter == true
         let previous = previousWord(before: before)
         let recent = recentWords
-        let profileNow = profile
         // Before a letter of the next word: the words likeliest after the last one.
         if word.isEmpty, !insideWord, before.last?.isWhitespace == true, !Self.decoderFailed, !before.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let capital = previous.sentenceStart && proxy?.autocapitalizationType != UITextAutocapitalizationType.none
             Self.decoderQueue.async { [weak self] in
                 guard let decoder = Self.loadDecoder() else { return }
-                let words = decoder.predictions(Self.context(previous, recent: recent, lexicon: decoder.lexicon, profile: profileNow))
+                let words = decoder.predictions(Self.context(previous, recent: recent, lexicon: decoder.lexicon))
                     .map { capital ? $0.prefix(1).uppercased() + $0.dropFirst() : $0 }
                 DispatchQueue.main.async {
                     guard let self, self.word.isEmpty else { return }
@@ -1143,7 +1139,7 @@ final class KeyboardModel {
             let capital = word.first?.isUppercase == true
             Self.decoderQueue.async { [weak self] in
                 guard let decoder = Self.loadDecoder() else { return }
-                let context = Self.context(previous, recent: recent, lexicon: decoder.lexicon, profile: profileNow)
+                let context = Self.context(previous, recent: recent, lexicon: decoder.lexicon)
                 let result = decoder.decode(taps, complete: true, context: context)
                 // What a space would put right, worked out now so the space doesn't wait: the decoder's
                 // correction, unless the word as typed is one the system knows or the user kept.
@@ -1195,68 +1191,32 @@ final class KeyboardModel {
 
     /// What the decoder is told of the text around the word: the word before, and the recent ones.
     private static func context(_ previous: (word: String?, sentenceStart: Bool), recent: [String],
-                                lexicon: Lexicon, profile: Profiles.Name) -> WordDecoder.Context {
+                                lexicon: Lexicon) -> WordDecoder.Context {
         var context = WordDecoder.Context()
         if previous.sentenceStart { context.previous = 0 } else if let word = previous.word { context.previous = lexicon.lookup(word) }
         context.recent = Set(recent.compactMap { lexicon.lookup($0) })
-        context.profile = profile
-        context.boosts = memory.boosts(for: profile)
+        context.boosts = memory.boosts()
         return context
     }
 
-    // MARK: Profiles
+    // MARK: The user's words
 
-    /// The way of writing in use — personal, work, to an agent — and whether the user picked it
-    /// (then the words don't move it).
-    private(set) var profile: Profiles.Name = .agent { didSet { if profile != oldValue { changed() } } }
-    private(set) var profileManual = false { didSet { if profileManual != oldValue { changed() } } }
-    /// This field's session: what a profile is given to and moved with.
+    /// This field's session, for the log.
     private var fieldSession = ""
     /// Used only on `decoderQueue`.
-    nonisolated(unsafe) private static let memory = ProfileMemory()
+    nonisolated(unsafe) private static let memory = WordMemory()
 
     private func startSession() {
         fieldSession = String(UUID().uuidString.prefix(8))
-        profileManual = false
-        let process = hostProcess, id = fieldSession
-        Self.decoderQueue.async {
-            let name = Self.memory.start(process: process)
-            DispatchQueue.main.async { [weak self] in
-                guard let self, self.fieldSession == id else { return }
-                self.profile = name
-                KeyLog.note("profile", ["session": id, "profile": name.key, "by": "start"])
-            }
-        }
     }
 
-    /// A word finished: counted in the profile, and the profile the session's words point to taken
-    /// up — unless the user picked one.
-    private func profileSees(_ word: String) {
+    /// A word finished: counted, to be lifted in the suggestions.
+    private func wordSeen(_ word: String) {
         guard !incognito else { return }
-        let current = profile, process = hostProcess, id = fieldSession
         Self.decoderQueue.async {
             guard let decoder = Self.loadDecoder(), let node = decoder.lexicon.lookup(word) else { return }
-            let next = Self.memory.add(node, in: current, profiles: decoder.profiles)
-            guard next != current else { return }
-            DispatchQueue.main.async { [weak self] in
-                guard let self, self.fieldSession == id, !self.profileManual, self.profile == current else { return }
-                self.profile = next
-                Self.decoderQueue.async { Self.memory.move(from: current, to: next, process: process) }
-                KeyLog.note("profile", ["session": id, "profile": next.key, "by": "words",
-                                        "scores": Self.memory.scores.map { (($0 * 10).rounded()) / 10 }])
-            }
+            Self.memory.add(node)
         }
-    }
-
-    /// The user's pick: the session's words go to that profile, the process is remembered in it,
-    /// and the words no longer move it. Logged with what it was — what the guess got wrong.
-    func chooseProfile(_ name: Profiles.Name) {
-        let old = profile, process = hostProcess
-        profile = name
-        profileManual = true
-        KeyLog.note("profile", ["session": fieldSession, "profile": name.key, "by": "user", "was": old.key])
-        Self.decoderQueue.async { Self.memory.move(from: old, to: name, process: process) }
-        fieldChanged()   // suggestions in the new profile
     }
 
     /// Where the suggestions shown came from, for the log.
@@ -1377,7 +1337,7 @@ final class KeyboardModel {
         let before = proxy?.documentContextBeforeInput ?? ""
         let spaced = before.isEmpty || before.last?.isWhitespace == true ? text : " " + text
         insert(spaced)
-        HostMemory.shared.dictated(text, process: hostProcess, profile: profile.key)
+        HostMemory.shared.dictated(text, process: hostProcess)
         log("heard", ["text": text, "dictation": id ?? "", "from": from, "how": how])
         if !incognito { inField.append((id, text, Date())) }
         let latin = text.unicodeScalars.filter { ("a"..."z").contains($0) || ("A"..."Z").contains($0) }.count
@@ -1448,7 +1408,7 @@ final class KeyboardModel {
     /// no UIApplication to open URLs with; the responder chain reaches the host's application, or
     /// its scene, which takes its own options object.
     /// Incognito: the keyboard alone, on the phone. Nothing is logged, nothing learned (words,
-    /// profiles, take-backs, field widths, what's typed in each app), nothing sent to a Mac — no
+    /// take-backs, field widths, what's typed in each app), nothing sent to a Mac — no
     /// field, no context, no dictation; correcting and suggesting go on, from what was learned
     /// before. Stays on until turned off.
     /// Turned on by hand: stays until turned off.

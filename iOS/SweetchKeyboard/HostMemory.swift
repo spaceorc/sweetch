@@ -10,7 +10,6 @@ final class HostMemory {
     struct Seen: Codable {
         var text: String
         var at: Date
-        var profile: String?
     }
 
     struct Host: Codable {
@@ -30,14 +29,14 @@ final class HostMemory {
 
     /// A field's text as now known. The same field grown or edited replaces its last record; another
     /// field (little in common with the last) is a new one.
-    func saw(_ text: String, process: Int32?, profile: String) {
+    func saw(_ text: String, process: Int32?) {
         let text = String(text.trimmingCharacters(in: .whitespacesAndNewlines).suffix(4000))
         guard !paused, let process, text.count >= 3 else { return }
         var host = hosts[String(process)] ?? Host()
         if let last = host.fields.last, Self.sameField(last.text, text) {
-            host.fields[host.fields.count - 1] = Seen(text: text, at: Date(), profile: profile)
+            host.fields[host.fields.count - 1] = Seen(text: text, at: Date())
         } else {
-            host.fields.append(Seen(text: text, at: Date(), profile: profile))
+            host.fields.append(Seen(text: text, at: Date()))
             if host.fields.count > 16 { host.fields.removeFirst(host.fields.count - 16) }
         }
         host.lastSeen = Date()
@@ -45,10 +44,10 @@ final class HostMemory {
         save()
     }
 
-    func dictated(_ text: String, process: Int32?, profile: String) {
+    func dictated(_ text: String, process: Int32?) {
         guard !paused, let process, !text.isEmpty else { return }
         var host = hosts[String(process)] ?? Host()
-        host.dictated.append(Seen(text: String(text.prefix(2000)), at: Date(), profile: profile))
+        host.dictated.append(Seen(text: String(text.prefix(2000)), at: Date()))
         if host.dictated.count > 10 { host.dictated.removeFirst(host.dictated.count - 10) }
         host.lastSeen = Date()
         hosts[String(process)] = host

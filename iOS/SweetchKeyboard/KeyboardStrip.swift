@@ -1,6 +1,6 @@
 import UIKit
 
-/// Above the keys: the profiles — personal, work, agent, the one in use lit, a tap picks another — then the
+/// Above the keys: incognito, a tap turns it — then the
 /// suggestions for the word being typed, as on iOS's own keyboard; otherwise what was last
 /// dictated (a tap types it again) or how the keyboard is doing.
 final class KeyboardStrip: UIView {
@@ -11,12 +11,7 @@ final class KeyboardStrip: UIView {
     private let suggestions = UIStackView()
     private let note = UILabel()
     private let insert = UIButton(type: .system)
-    private let profiles = UIStackView()
-    private var profileButtons: [UIButton] = []
     private let microphone = UIButton(type: .system)
-    private static let symbols = ["person", "briefcase", "sparkles"]
-    private static let titles = ["Personal", "Work", "Agent"]
-    private var shownProfile: (Profiles.Name, Bool)?
     private let incognitoButton = UIButton(type: .system)
     private var shownIncognito: Bool?
 
@@ -30,24 +25,6 @@ final class KeyboardStrip: UIView {
         insert.setImage(UIImage(systemName: "text.insert"), for: .normal)
         insert.tintColor = .secondaryLabel
         insert.addAction(UIAction { [weak self] _ in self?.model?.typeLast() }, for: .touchUpInside)
-        // Three buttons, not one with a menu: a menu saved hardly any width and cost a tap.
-        profiles.axis = .horizontal
-        profiles.spacing = 2
-        for name in Profiles.Name.allCases {
-            let button = UIButton(type: .system)
-            button.setImage(UIImage(systemName: Self.symbols[name.rawValue],
-                                    withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .medium)), for: .normal)
-            button.layer.cornerRadius = 13
-            button.accessibilityLabel = "Profile: \(Self.titles[name.rawValue])"
-            button.addAction(UIAction { [weak self] _ in
-                UIDevice.current.playInputClick()
-                self?.model?.chooseProfile(name)
-            }, for: .touchUpInside)
-            button.widthAnchor.constraint(equalToConstant: 30).isActive = true
-            button.heightAnchor.constraint(equalToConstant: 26).isActive = true
-            profiles.addArrangedSubview(button)
-            profileButtons.append(button)
-        }
         incognitoButton.setImage(UIImage(systemName: "eye.slash", withConfiguration: UIImage.SymbolConfiguration(pointSize: 12, weight: .medium)), for: .normal)
         incognitoButton.layer.cornerRadius = 13
         incognitoButton.widthAnchor.constraint(equalToConstant: 32).isActive = true
@@ -62,15 +39,14 @@ final class KeyboardStrip: UIView {
             UIDevice.current.playInputClick()
             self?.model?.openDictation()
         }, for: .touchUpInside)
-        for part in [profiles, incognitoButton, suggestions, note, insert, microphone] as [UIView] {
+        for part in [incognitoButton, suggestions, note, insert, microphone] as [UIView] {
             part.translatesAutoresizingMaskIntoConstraints = false
             addSubview(part)
         }
         NSLayoutConstraint.activate([
-            profiles.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
-            profiles.centerYAnchor.constraint(equalTo: centerYAnchor, constant: 1),
-            incognitoButton.leadingAnchor.constraint(equalTo: profiles.trailingAnchor, constant: 4),
-            incognitoButton.centerYAnchor.constraint(equalTo: profiles.centerYAnchor),
+            // Incognito first: nothing to pick here about how the user writes — that's the keyboard's to learn.
+            incognitoButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
+            incognitoButton.centerYAnchor.constraint(equalTo: centerYAnchor, constant: 1),
             suggestions.leadingAnchor.constraint(equalTo: incognitoButton.trailingAnchor, constant: 4),
             microphone.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
             microphone.centerYAnchor.constraint(equalTo: centerYAnchor, constant: 1),
@@ -93,7 +69,6 @@ final class KeyboardStrip: UIView {
 
     func render() {
         guard let model else { return }
-        showProfile(model.profile, picked: model.profileManual)
         showIncognito(model.incognito)
         // Just after a correction: first, the word as typed, to take it back.
         let undo = model.revertOffer
@@ -114,18 +89,6 @@ final class KeyboardStrip: UIView {
                 UIDevice.current.playInputClick()
                 if isUndo { model?.revertAutoFix() } else { model?.choose(suggestion: word) }
             })
-        }
-    }
-
-    /// The profile in use stands out: filled when the user picked it, faint when it's a guess.
-    private func showProfile(_ profile: Profiles.Name, picked: Bool) {
-        if let shown = shownProfile, shown == (profile, picked) { return }
-        shownProfile = (profile, picked)
-        for (index, button) in profileButtons.enumerated() {
-            let on = index == profile.rawValue
-            button.tintColor = on ? .label : .tertiaryLabel
-            button.backgroundColor = on ? UIColor.label.withAlphaComponent(picked ? 0.18 : 0.08) : .clear
-            button.accessibilityTraits = on ? [.button, .selected] : .button
         }
     }
 
