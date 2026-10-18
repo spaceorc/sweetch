@@ -400,6 +400,29 @@ def typo(key, n, general):
     return any(general.get(word, 0) >= common for word in near)
 
 
+# `SWEETCH_FORMS=1`: each of the user's Russian words brings all its forms ("клик" → "кликом",
+# "задеплоил" → "задеплою"), pymorphy3 working them out by analogy for words it doesn't know — for
+# trying on the bench.
+FORMS = bool(__import__("os").environ.get("SWEETCH_FORMS"))
+
+
+def add_forms(key, own, entries):
+    """The forms of the user's word not in the lexicon yet, a little below the word itself."""
+    if MORPH is None or not re.search("[а-яё]", key):
+        return 0
+    parses = [p for p in MORPH.parse(key) if not ({"Name", "Surn", "Patr", "Geox", "Orgn"} & set(str(p.tag).replace(" ", ",").split(",")))]
+    if not parses:
+        return 0
+    n = 0
+    for form in parses[0].lexeme:
+        word = form.word.replace("ё", "е") if "ё" not in key else form.word
+        if word in entries or not WORD.match(word):
+            continue
+        entries[word] = (max(120, min(220, own - 25)), 8)
+        n += 1
+    return n
+
+
 def main():
     output = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parents[2] / "iOS/SweetchKeyboard/Lexicon.bin"
     entries, written_as = {}, {}
@@ -415,7 +438,7 @@ def main():
 
     counts, spellings, typed_counts = personal_words()
     general_frequency = {key: frequency for key, (frequency, _) in entries.items()}
-    added = boosted = dropped = 0
+    added = boosted = dropped = forms_added = 0
     # The user's own frequency ranks their words: the most used near the top of the scale, the
     # others below by how often — over the general lists' order, which knows nothing of them.
     most = max(counts.values(), default=1)
@@ -440,7 +463,11 @@ def main():
             if odd:
                 written_as[key] = odd
             added += 1
+        if FORMS:
+            forms_added += add_forms(key, own, entries)
 
+    if FORMS:
+        print(f"forms of the user's words: {forms_added} added")
     order, labels, first, count = build(entries)
     ids = {node["key"]: i for i, node in enumerate(order) if "key" in node}
     data = bytearray(b"SWLX") + struct.pack("<I", 1)

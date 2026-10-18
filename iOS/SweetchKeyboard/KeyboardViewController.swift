@@ -202,6 +202,8 @@ final class KeyboardModel {
     var fieldState: [String: Any] {
         let before = proxy?.documentContextBeforeInput ?? ""
         let after = proxy?.documentContextAfterInput ?? ""
+        // Text typed in incognito stays out of the log after it, lengths only.
+        if incognitoResidue { return ["before_len": before.count, "has_text": proxy?.hasText ?? false, "residue": true] }
         return ["before": String(before.suffix(24)), "after": String(after.prefix(12)),
                 "before_len": before.count, "has_text": proxy?.hasText ?? false]
     }
@@ -213,6 +215,7 @@ final class KeyboardModel {
     private var proxy: UITextDocumentProxy? { controller?.textDocumentProxy }
 
     func appeared() {
+        incognitoResidue = false
         // Before anything is noted: a private tab's field is incognito from its first moment.
         privateFieldDeclined = false
         privateField = looksPrivate()
@@ -276,7 +279,9 @@ final class KeyboardModel {
         let previous = String(field.text)
         observeField()
         let now = String(field.text)
-        if now.isEmpty, !previous.isEmpty {
+        if incognitoResidue {
+            if now.isEmpty { incognitoResidue = false }   // sent or cleared: what's typed next is seen
+        } else if now.isEmpty, !previous.isEmpty {
             // Emptied — a message sent — or only the focus leaving, when iOS shows an empty field a
             // moment before the keyboard goes: told apart by whether it's still up, and empty, then.
             HostMemory.shared.saw(previous, process: hostProcess, profile: profile.key)
@@ -526,7 +531,7 @@ final class KeyboardModel {
 
     /// The field as now known, into the app's memory — at most every few seconds while typing.
     private func rememberField(now: Bool) {
-        guard !incognito else { return }
+        guard !incognito, !incognitoResidue else { return }
         guard now || Date().timeIntervalSince(rememberedAt) > 5 else { return }
         rememberedAt = Date()
         HostMemory.shared.saw(String(field.text), process: hostProcess, profile: profile.key)
@@ -537,6 +542,8 @@ final class KeyboardModel {
     /// lately, and what it saw in this app before — other fields, earlier dictations. The far side
     /// picks what helps.
     private func dictationContext() -> [String: Any] {
+        // Text typed in incognito isn't the dictation's to know.
+        guard !incognitoResidue else { return ["profile": profile.key, "layout": "\(letters)"] }
         let text = field.text
         let cursor = min(max(field.cursor, 0), text.count)
         var before = String(text[..<cursor]), after = String(text[cursor...])
@@ -612,7 +619,7 @@ final class KeyboardModel {
     /// rule in use put the cursor and where the line model would have, at a guessed width and at
     /// the width learned so far — which this move then teaches. Nothing here moves the cursor.
     private func noteCursorMove(_ finished: CursorSession) {
-        guard !incognito else { return }
+        guard !incognito, !incognitoResidue else { return }
         guard let start = finished.start, finished.lines != 0 else { return }
         let process = hostProcess
         // Wrapping text and fitting the width take a while: off the main thread.
@@ -1081,7 +1088,7 @@ final class KeyboardModel {
             try? await Task.sleep(for: .milliseconds(600))
             guard !Task.isCancelled else { return }
             let field = proxy?.documentContextBeforeInput ?? ""
-            guard !incognito else { return }
+            guard !incognito, !incognitoResidue else { return }
             for mac in connected.values { await mac.noteField(field) }
         }
     }
@@ -1437,6 +1444,10 @@ final class KeyboardModel {
     /// The user turned incognito off in this private field: until the keyboard leaves it.
     private var privateFieldDeclined = false
     var incognito: Bool { incognitoPicked || privateField }
+    /// Incognito turned off with text in the field: what's in it was typed unseen, so the field's
+    /// own changes (a send clearing it, what it held) stay unlogged and unremembered until it's
+    /// emptied or another field comes — words typed from now on are logged as usual.
+    private var incognitoResidue = false
 
     /// Safari, in a private tab, asks for a dark keyboard in its address and search fields while
     /// the system is light; a normal tab asks for a light one. Other traits are the same. In the
@@ -1475,6 +1486,7 @@ final class KeyboardModel {
             connected = [:]
             showStatus()
         } else {
+            incognitoResidue = proxy?.hasText == true || !field.text.isEmpty
             KeyLog.note("incognito", ["on": false])
             showStatus()
             listening = Task { await listen() }
