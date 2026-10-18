@@ -47,7 +47,7 @@ let keys: [String: [WordDecoder.Key]] = export.layouts.mapValues { rows in
     }
 }
 let bigrams = args.contains("--no-context") ? nil : Bigrams(url: URL(fileURLWithPath: args[1]).deletingLastPathComponent().appendingPathComponent("Bigrams.bin"))
-let decoder = WordDecoder(lexicon: lexicon, bigrams: bigrams)
+var decoder = WordDecoder(lexicon: lexicon, bigrams: bigrams)
 if let i = args.firstIndex(of: "--threshold"), i + 1 < args.count, let t = Float(args[i + 1]) { decoder.threshold = t }
 if let i = args.firstIndex(of: "--language"), i + 1 < args.count, let l = Float(args[i + 1]) { decoder.costs.language = l }
 
@@ -68,14 +68,22 @@ if let i = args.firstIndex(of: "--bench"), i + 1 < args.count {
     struct Band { var words = 0, top3 = 0, top1 = 0, lettersSaved = 0, letters = 0, top1Left: [Int] = [] }
     var bands: [String: Band] = [:]
     var predicted = (words: 0, top3: 0, top1: 0)
+    // `--recent <n>` / `--recent-lift <l>`: the last n words typed, lifted as the keyboard lifts its
+    // recent words (it keeps 100).
+    let recentCount = args.firstIndex(of: "--recent").flatMap { j in j + 1 < args.count ? Int(args[j + 1]) : nil } ?? 0
+    if let j = args.firstIndex(of: "--recent-lift"), j + 1 < args.count, let l = Int(args[j + 1]) { decoder.recentLift = l }
+    var typedSoFar: [Int] = []
     // The decoder's first pick against the word as it ended up, on every word the lexicon has.
     var accuracy = (words: 0, top1: 0, top3: 0, literalRight: 0)
     var started = Date()
     func band(_ n: Int) -> String { n <= 3 ? "2-3" : n <= 6 ? "4-6" : "7+" }
-    for word in export.words where word.taps.count >= 2 {
+    for word in export.words {
+        defer { if let node = lexicon.lookup(word.truth.lowercased()) { typedSoFar.append(node) } }
+        guard word.taps.count >= 2 else { continue }
         let taps = word.taps.map { WordDecoder.Tap(point: CGPoint(x: $0.x, y: $0.y), keys: keys[$0.layout] ?? [], deliberate: $0.deliberate) }
         var context = WordDecoder.Context()
         if word.sentence_start == true { context.previous = 0 } else if let previous = word.previous { context.previous = lexicon.lookup(previous.lowercased()) }
+        if recentCount > 0 { context.recent = Set(typedSoFar.suffix(recentCount)) }
         let truth = word.truth.lowercased(), typed = word.taps.map(\.char).joined().lowercased()
         let truthIsWord = lexicon.lookup(truth) != nil
         let result = decoder.decode(taps, context: context)
@@ -175,12 +183,19 @@ if let i = args.firstIndex(of: "--bench"), i + 1 < args.count {
 // four letters or more the lexicon has — first and in the top three, to set against a model's.
 if let i = args.firstIndex(of: "--at-letters"), i + 1 < args.count, let k = Int(args[i + 1]) {
     var n = 0, first = 0, three = 0
-    for word in export.words where word.kind == "clean" && word.taps.count >= max(4, k + 1) {
+    // `--recent <n>`: the last n words typed before, lifted as the keyboard lifts its recent words.
+    let recentCount = args.firstIndex(of: "--recent").flatMap { j in j + 1 < args.count ? Int(args[j + 1]) : nil } ?? 0
+    if let j = args.firstIndex(of: "--recent-lift"), j + 1 < args.count, let l = Int(args[j + 1]) { decoder.recentLift = l }
+    var typed: [Int] = []
+    for word in export.words {
+        defer { if let node = lexicon.lookup(word.truth.lowercased()) { typed.append(node) } }
+        guard word.kind == "clean", word.taps.count >= max(4, k + 1) else { continue }
         let truth = word.truth.lowercased()
         guard lexicon.lookup(truth) != nil, truth.count == word.taps.count else { continue }
         let taps = word.taps.prefix(k).map { WordDecoder.Tap(point: CGPoint(x: $0.x, y: $0.y), keys: keys[$0.layout] ?? [], deliberate: $0.deliberate) }
         var context = WordDecoder.Context()
         if word.sentence_start == true { context.previous = 0 } else if let previous = word.previous { context.previous = lexicon.lookup(previous.lowercased()) }
+        if recentCount > 0 { context.recent = Set(typed.suffix(recentCount)) }
         var shown: [String] = []
         for c in decoder.decode(Array(taps), complete: true, context: context).candidates where !shown.contains(c.word.lowercased()) {
             shown.append(c.word.lowercased())

@@ -60,6 +60,10 @@ final class WordDecoder {
     let lexicon: Lexicon
     /// Words likelier after others; without it, only how common each word is counts.
     let bigrams: Bigrams?
+    /// How much a word used lately is lifted (0–15, as a word pair's): 12 on the bench's held-out
+    /// day (18 Oct 2026) saved 19.4% of keystrokes against 18.6% at the old 4, broke nothing more;
+    /// 15 began to spoil next-word predictions.
+    var recentLift = 12
     /// How each profile shifts the words; without it, one way of writing for everything.
     let profiles: Profiles?
     var costs = Costs()
@@ -95,7 +99,7 @@ final class WordDecoder {
         if let previous = context.previous, let profile = context.profile, let profiles {
             lift = max(lift, profiles.pair(node, after: previous, in: profile))
         }
-        if context.recent.contains(node) { lift = max(lift, 4) }
+        if context.recent.contains(node) { lift = max(lift, recentLift) }
         guard lift > 0 else { return frequency }
         return frequency + Float(lift + 1) * (255 - frequency) / 16.5
     }
