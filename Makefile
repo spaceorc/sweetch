@@ -17,7 +17,8 @@ CERT_P12   = $(CERT_DIR)/$(SIGN_ID).p12
 CERT_CNF   = $(CERT_DIR)/$(SIGN_ID).cnf
 
 # The icon: Resources/icon/AppIcon-1024.png (Tools/icon/compose.py makes it from the user's
-# emblem), the same one the iPhone app has. The Dock reads the *bundle* icon, so it has to end
+# emblem). The iPhone has the same in layers (iOS/SweetchPhone/AppIcon.icon, Icon Composer's:
+# the background a fill, the emblem a layer), so its dark, clear and tinted looks are the system's. The Dock reads the *bundle* icon, so it has to end
 # up in Contents/Resources — setting applicationIconImage at runtime isn't picked up reliably when an accessory app
 # switches to a regular activation policy.
 WATCHDOG_LABEL = com.spaceorc.sweetch.watchdog
