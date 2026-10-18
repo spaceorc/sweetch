@@ -213,6 +213,7 @@ final class KeyboardModel {
     private var proxy: UITextDocumentProxy? { controller?.textDocumentProxy }
 
     func appeared() {
+        lastWord = nil
         visibleSince = Date()
         deliverPending()
         startSession()
@@ -252,6 +253,7 @@ final class KeyboardModel {
 
     /// The host moved the cursor or changed the text.
     func hostChanged() {
+        lastWord = nil   // the cursor moved or the text changed under it
         let previous = String(field.text)
         observeField()
         let now = String(field.text)
@@ -365,6 +367,7 @@ final class KeyboardModel {
     }
 
     func backspace() {
+        lastWord = nil
         if wordTaps.isEmpty { wordTapsHold = false } else { wordTaps.removeLast() }
         spaceIsOurs = false
         if undoAutoFix() {
@@ -404,6 +407,7 @@ final class KeyboardModel {
 
     /// The word before the cursor, with the spaces after it — what a long-held backspace deletes.
     func deleteWord() {
+        lastWord = nil
         let before = proxy?.documentContextBeforeInput ?? ""
         let spaces = before.reversed().prefix { $0.isWhitespace }.count
         let word = before.dropLast(spaces).reversed().prefix { !$0.isWhitespace }.count
@@ -552,6 +556,7 @@ final class KeyboardModel {
     private var session: CursorSession?
 
     func setTrackpad(_ on: Bool) {
+        lastWord = nil
         if on { wordTapsHold = false }   // the cursor's going elsewhere in the text
         trackpad = on
         if on {
@@ -731,6 +736,7 @@ final class KeyboardModel {
     /// The word replaced by the suggestion, and a space after it — unless the text goes on right
     /// after it already (a word fixed in the middle of the text), where a space would be a second.
     func choose(suggestion: String) {
+        lastWord = nil
         wordTaps = []
         wordTapsHold = true
         for _ in word { deleteBackward() }
@@ -750,10 +756,13 @@ final class KeyboardModel {
     private func noteWordEnd(_ boundary: String) {
         let before = proxy?.documentContextBeforeInput ?? ""
         var word = String(before.reversed().prefix { $0.isLetter || $0 == "'" || $0 == "’" || $0 == "-" }.reversed())
-        let taps = wordTaps, hold = wordTapsHold
+        let taps = wordTaps, hold = wordTapsHold, times = wordTapTimes
         wordTaps = []
         wordTapsHold = true
-        guard !word.isEmpty else { return }
+        guard !word.isEmpty else {
+            lastWord = nil
+            return
+        }
         let pending = pendingCorrection
         pendingCorrection = nil
         let tapped = hold && taps.count == word.filter(\.isLetter).count && taps.count >= 2
@@ -768,15 +777,24 @@ final class KeyboardModel {
             for _ in word { deleteBackward() }
             insert(fixed)
             log("autocorrect", ["typed": word, "fixed": fixed, "confidence": Double(pending.confidence)])
-            autoFixed = (typed: word, fixed: fixed, boundary: boundary)
+            autoFixed = AutoFix(typed: word, fixed: fixed, boundary: boundary)
             word = fixed
         } else if !word.contains("-"), let fixed = Hyphens.fix(word) {
             // A word written with a hyphen, typed without one: put right, and ⌫ next puts it back.
             for _ in word { deleteBackward() }
             insert(fixed)
             log("autofix", ["typed": word, "fixed": fixed])
-            autoFixed = (typed: word, fixed: fixed, boundary: boundary)
+            autoFixed = AutoFix(typed: word, fixed: fixed, boundary: boundary)
             word = fixed
+        }
+        // The word before, looked at again now that this one follows it.
+        if tapped, autoFixed == nil, let last = lastWord { lookAgain(at: last, next: word, boundary: boundary, before: before) }
+        lastWord = nil
+        if tapped {
+            let gaps = zip(times, times.dropFirst()).map { $1.timeIntervalSince($0) }.sorted()
+            lastWord = LastWord(standing: word, boundary: boundary, taps: taps,
+                                previous: previousWord(before: String(before.dropLast(word.count))),
+                                fast: !gaps.isEmpty && gaps[gaps.count / 2] < 0.35, endedAt: Date())
         }
         KeyLog.note("word", ["word": word, "boundary": boundary, "session": fieldSession, "profile": profile.key])
         profileSees(word)
@@ -787,8 +805,14 @@ final class KeyboardModel {
 
     /// The taps that typed the word being typed, in order — while they're all there is to it (no
     /// letter typed some other way, no cursor moved off the end).
-    private var wordTaps: [WordDecoder.Tap] = []
+    private var wordTaps: [WordDecoder.Tap] = [] {
+        didSet {
+            if wordTaps.count > oldValue.count { wordTapTimes.append(Date()) } else { wordTapTimes = Array(wordTapTimes.prefix(wordTaps.count)) }
+        }
+    }
     private var wordTapsHold = true
+    /// When each of `wordTaps` came.
+    private var wordTapTimes: [Date] = []
 
     private static let decoderQueue = DispatchQueue(label: "sweetch.decoder", qos: .utility)
     nonisolated(unsafe) private static var decoder: WordDecoder?
@@ -843,7 +867,65 @@ final class KeyboardModel {
                 for _ in 0..<(word.count + boundary.count + next.count) { self.deleteBackward() }
                 self.insert(fixed + boundary + next)
                 self.log("autocorrect", ["typed": word, "fixed": fixed, "confidence": Double(confidence), "late": true])
-                self.autoFixed = (typed: word, fixed: fixed, boundary: boundary)
+                self.autoFixed = AutoFix(typed: word, fixed: fixed, boundary: boundary)
+            }
+        }
+    }
+
+    /// The word just finished, while the next may still change it: how it stands, the space or mark
+    /// after it, its taps, the word before it, and whether it was typed fast.
+    private struct LastWord {
+        let standing: String
+        let boundary: String
+        let taps: [WordDecoder.Tap]
+        let previous: (word: String?, sentenceStart: Bool)
+        let fast: Bool
+        let endedAt: Date
+    }
+    private var lastWord: LastWord?
+
+    /// The previous word looked at again once the next is typed — typing fast, words in a run: its
+    /// candidates rescored with how likely each is right before the next word, and the word changed
+    /// when it was no word or the decoder doubted it, and the next word clearly backs another
+    /// ("модно ли" → "можно ли"). Both words stay where the cursor left them; the strip offers the
+    /// take-back, and ⌫ next puts it back. On the user's typing, 7 typos put right for 1 word
+    /// made wrong (Tools/keyboard/replay `--post`).
+    private func lookAgain(at last: LastWord, next: String, boundary: String, before: String) {
+        guard last.fast, Date().timeIntervalSince(last.endedAt) < 3,
+              before.hasSuffix(last.standing + last.boundary + next) else { return }
+        let recent = recentWords, profileNow = profile, keep = keepAsTyped
+        Self.decoderQueue.async { [weak self] in
+            guard let decoder = Self.loadDecoder(), let bigrams = decoder.bigrams,
+                  let nextNode = decoder.lexicon.lookup(next.lowercased()) else { return }
+            let context = Self.context(last.previous, recent: recent, lexicon: decoder.lexicon, profile: profileNow)
+            let result = decoder.decode(last.taps, context: context)
+            let standing = last.standing.lowercased()
+            // Only a word the decoder left unsure, and none the user kept as typed.
+            guard !result.literalIsWord || result.confidence > decoder.threshold * 0.5,
+                  (keep[standing] ?? 0) == 0 else { return }
+            let rescored = result.candidates.prefix(5).map { candidate -> (word: String, cost: Float, lift: Int) in
+                let word = candidate.word.lowercased()
+                let lift = decoder.lexicon.lookup(word).map { bigrams.weight(of: nextNode, after: $0) } ?? 0
+                let f = Float(candidate.frequency)
+                let lifted = lift > 0 ? min(255, f + Float(lift + 1) * (255 - f) / 16.5) : f
+                return (word, candidate.cost - decoder.costs.language * (lifted - f) / 255, lift)
+            }.sorted { $0.cost < $1.cost }
+            guard let best = rescored.first, best.word != standing, best.lift >= 4 else { return }
+            let fixed = last.standing.first?.isUppercase == true ? best.word.prefix(1).uppercased() + best.word.dropFirst() : best.word
+            DispatchQueue.main.async {
+                guard let self else { return }
+                // Typed since: the space after the next word, letters of the one after at most.
+                let tail = last.boundary + next + boundary
+                let now = self.proxy?.documentContextBeforeInput ?? ""
+                let more = String(now.reversed().prefix { $0.isLetter }.reversed())
+                guard now.dropLast(more.count).hasSuffix(last.standing + tail) else { return }
+                for _ in 0..<(last.standing.count + tail.count + more.count) { self.deleteBackward() }
+                self.insert(fixed + tail + more)
+                self.log("autocorrect", ["typed": last.standing, "fixed": fixed, "post": true, "next": next,
+                                         "confidence": Double(result.confidence), "lift": best.lift])
+                if more.isEmpty {
+                    self.autoFixed = AutoFix(typed: last.standing, fixed: fixed, boundary: tail, kept: last.boundary + next)
+                }
             }
         }
     }
@@ -868,7 +950,17 @@ final class KeyboardModel {
     }
 
     /// The last word put right, while the next thing done may still be ⌫ taking it back.
-    private var autoFixed: (typed: String, fixed: String, boundary: String)? { didSet { changed() } }
+    /// A word put right: as typed, as fixed, and what follows it up to the cursor — the space or mark
+    /// after it, and for a word looked at again once the next was typed, that next word too.
+    /// `kept`: what of that ⌫ leaves in place when it takes the fix back.
+    private struct AutoFix {
+        let typed: String
+        let fixed: String
+        let boundary: String
+        var kept = ""
+    }
+
+    private var autoFixed: AutoFix? { didSet { changed() } }
 
     /// ⌫ right after a word was put right: the word as typed comes back, without the boundary.
     private func undoAutoFix() -> Bool {
@@ -877,7 +969,7 @@ final class KeyboardModel {
         let before = proxy?.documentContextBeforeInput ?? ""
         guard before.hasSuffix(fix.fixed + fix.boundary) else { return false }
         for _ in 0..<(fix.fixed.count + fix.boundary.count) { deleteBackward() }
-        insert(fix.typed)
+        insert(fix.typed + fix.kept)
         log("autofix-undone", ["typed": fix.typed, "fixed": fix.fixed, "by": "delete"])
         keep(fix.typed)
         return true
@@ -900,7 +992,7 @@ final class KeyboardModel {
     var revertOffer: String? { autoFixed?.typed }
 
     /// For the app's keyboard preview: the strip just after a correction.
-    func previewCorrection(typed: String, fixed: String) { autoFixed = (typed: typed, fixed: fixed, boundary: " ") }
+    func previewCorrection(typed: String, fixed: String) { autoFixed = AutoFix(typed: typed, fixed: fixed, boundary: " ") }
 
     /// How often the user took a correction of each word back, fading by half every two weeks:
     /// [weight, when last] — it raises how sure a correction of that word must be.
