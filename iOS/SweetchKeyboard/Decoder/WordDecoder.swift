@@ -69,6 +69,10 @@ final class WordDecoder {
     var costs = Costs()
     /// LatinIME's "modest" autocorrection threshold on its normalised score.
     var threshold: Float = 0.185
+    /// The correction is the candidate the decoder is surest of — its score scaled down by how far
+    /// it is from the literal — not just the cheapest: "потм" is "потом" (a letter left out), not
+    /// "моим" (two keys missed), though "моим" fits the taps a little better.
+    var byConfidence = false
 
     init(lexicon: Lexicon, bigrams: Bigrams? = nil, profiles: Profiles? = nil) {
         self.lexicon = lexicon
@@ -277,10 +281,16 @@ final class WordDecoder {
         // LatinIME's decision: the best word's score, scaled down by how far it is from the literal.
         var correction: String?
         var confidence: Float = 0
-        if let top = candidates.first, top.word.lowercased() != literal.lowercased() {
-            let score = 1 - top.cost / (costs.language + 0.1 * Float(taps.count))
-            let distance = Float(Self.damerauLevenshtein(literal.lowercased(), top.word.lowercased()))
-            confidence = score * (1 - distance / Float(max(top.word.count, 1)))
+        func sureness(_ c: Candidate) -> Float {
+            let score = 1 - c.cost / (costs.language + 0.1 * Float(taps.count))
+            let distance = Float(Self.damerauLevenshtein(literal.lowercased(), c.word.lowercased()))
+            return score * (1 - distance / Float(max(c.word.count, 1)))
+        }
+        let pick = byConfidence
+            ? candidates.prefix(3).filter { $0.word.lowercased() != literal.lowercased() }.max { sureness($0) < sureness($1) }
+            : candidates.first
+        if let top = pick, top.word.lowercased() != literal.lowercased() {
+            confidence = sureness(top)
             // A short Latin word is an abbreviation more often than a typo ("ux", "pr", "ci").
             let abbreviation = literal.count <= 3 && literal.unicodeScalars.allSatisfy { $0.isASCII }
             let mayCorrect = literalNode == nil && literal.count > 1 && !abbreviation && !taps.contains(where: \.deliberate)

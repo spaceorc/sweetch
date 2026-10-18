@@ -806,7 +806,7 @@ final class KeyboardModel {
             for _ in word { deleteBackward() }
             insert(fixed)
             log("autocorrect", ["typed": word, "fixed": fixed, "confidence": Double(pending.confidence)])
-            autoFixed = AutoFix(typed: word, fixed: fixed, boundary: boundary)
+            autoFixed = AutoFix(typed: word, fixed: fixed, boundary: boundary, taps: hold ? taps : [], times: times)
             word = fixed
         } else if !word.contains("-"), let fixed = Hyphens.fix(word) {
             // A word written with a hyphen, typed without one: put right, and ⌫ next puts it back.
@@ -898,7 +898,7 @@ final class KeyboardModel {
                 for _ in 0..<(word.count + boundary.count + next.count) { self.deleteBackward() }
                 self.insert(fixed + boundary + next)
                 self.log("autocorrect", ["typed": word, "fixed": fixed, "confidence": Double(confidence), "late": true])
-                self.autoFixed = AutoFix(typed: word, fixed: fixed, boundary: boundary)
+                self.autoFixed = AutoFix(typed: word, fixed: fixed, boundary: boundary, taps: taps)
             }
         }
     }
@@ -984,25 +984,38 @@ final class KeyboardModel {
     /// A word put right: as typed, as fixed, and what follows it up to the cursor — the space or mark
     /// after it, and for a word looked at again once the next was typed, that next word too.
     /// `kept`: what of that ⌫ leaves in place when it takes the fix back.
+    /// `taps`, `times`: the word's own taps, back with it when ⌫ takes the fix back — so the word
+    /// edited after ("жтой" back, then "жтом") is the decoder's again.
     private struct AutoFix {
         let typed: String
         let fixed: String
         let boundary: String
         var kept = ""
+        var taps: [WordDecoder.Tap] = []
+        var times: [Date] = []
     }
 
     private var autoFixed: AutoFix? { didSet { changed() } }
 
-    /// ⌫ right after a word was put right: the word as typed comes back, without the boundary.
+    /// ⌫ right after a word was put right: the word as typed comes back, without the boundary, and
+    /// with its taps. Not for a word looked at again once the next was typed: ⌫ there is for the
+    /// next word ("Можно ли" — ⌫ to fix "ли" mustn't quietly bring "Модно" back); the strip's
+    /// button takes that one back.
     private func undoAutoFix() -> Bool {
         guard let fix = autoFixed else { return false }
         autoFixed = nil
+        guard fix.kept.isEmpty else { return false }
         let before = proxy?.documentContextBeforeInput ?? ""
         guard before.hasSuffix(fix.fixed + fix.boundary) else { return false }
         for _ in 0..<(fix.fixed.count + fix.boundary.count) { deleteBackward() }
-        insert(fix.typed + fix.kept)
+        insert(fix.typed)
         log("autofix-undone", ["typed": fix.typed, "fixed": fix.fixed, "by": "delete"])
         keep(fix.typed)
+        if !fix.taps.isEmpty, fix.taps.count == fix.typed.filter(\.isLetter).count {
+            wordTaps = fix.taps
+            wordTapTimes = fix.times.count == fix.taps.count ? fix.times : fix.taps.map { _ in Date.distantPast }
+            wordTapsHold = true
+        }
         return true
     }
 

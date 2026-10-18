@@ -49,6 +49,7 @@ let keys: [String: [WordDecoder.Key]] = export.layouts.mapValues { rows in
 let bigrams = args.contains("--no-context") ? nil : Bigrams(url: URL(fileURLWithPath: args[1]).deletingLastPathComponent().appendingPathComponent("Bigrams.bin"))
 var decoder = WordDecoder(lexicon: lexicon, bigrams: bigrams)
 if let i = args.firstIndex(of: "--threshold"), i + 1 < args.count, let t = Float(args[i + 1]) { decoder.threshold = t }
+if args.contains("--by-confidence") { decoder.byConfidence = true }
 if let i = args.firstIndex(of: "--language"), i + 1 < args.count, let l = Float(args[i + 1]) { decoder.costs.language = l }
 
 // `--bench <name>`: the bench — every measure at once, on the user's own typing, saved as

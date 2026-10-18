@@ -111,7 +111,8 @@ enum Metrics {
 
     /// Only these lines are read (the log is mostly touches).
     private static let wanted = ["\"e\":\"word\"", "\"e\":\"autocorrect\"", "\"e\":\"autofix-undone\"", "\"e\":\"delete",
-                                 "\"e\":\"decoder\"", "\"e\":\"dictation-final\"", "\"e\":\"choose\""]
+                                 "\"e\":\"decoder\"", "\"e\":\"dictation-final\"", "\"e\":\"choose\"",
+                                 "\"e\":\"type\""]
 
     private static func keyboard(into days: inout [String: Day]) {
         let dir = AppSupport.dir.appendingPathComponent("keyboard", isDirectory: true)
@@ -138,6 +139,9 @@ enum Metrics {
             if let r = run, r.chars <= 40 { day.fixes.append((r.chars, r.last - r.first)) }
             run = nil
         }
+        // A fix ⌫ took back, while the ⌫s may still go on through the whole word: then the user was
+        // deleting it, not refusing the fix, and it counts neither way.
+        var takenBack: (beforeLen: Int, letters: Int)?
         var seenLines = Set<String>()
         for line in text.split(separator: "\n") where wanted.contains(where: { line.contains($0) }) {
             // The same line twice (a batch sent again) counts once.
@@ -165,8 +169,18 @@ enum Metrics {
                 let typed = (event["word"] as? String ?? "").lowercased(), picked = (event["suggestion"] as? String ?? "").lowercased()
                 if !typed.isEmpty, !picked.hasPrefix(typed) { day.suggestionFixes += 1 }
             case "autocorrect": day.autocorrected += 1
-            case "autofix-undone": day.autocorrectUndone += 1
-            case "delete", "delete-word": day.deletes += 1
+            case "autofix-undone":
+                day.autocorrectUndone += 1
+                if event["by"] as? String == "delete", let len = event["before_len"] as? Int {
+                    takenBack = (len, (event["typed"] as? String ?? "").count)
+                }
+            case "delete", "delete-word":
+                day.deletes += 1
+                if let back = takenBack, let len = event["before_len"] as? Int, len <= back.beforeLen - back.letters {
+                    day.autocorrectUndone -= 1
+                    day.autocorrected -= 1
+                    takenBack = nil
+                }
             case "decoder":
                 // A word the decoder took for no word, had a better one for, and left as typed.
                 let literal = (event["literal"] as? String ?? "").lowercased()
@@ -180,6 +194,7 @@ enum Metrics {
                 day.changedWords += max(heard.count, final.count) - commonRun(heard, final)
             default: break
             }
+            if name != "delete", name != "delete-word", name != "autofix-undone" { takenBack = nil }
         }
         endRun()
         return day
