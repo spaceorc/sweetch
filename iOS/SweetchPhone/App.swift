@@ -33,6 +33,8 @@ struct SweetchPhoneApp: App {
                 KeyboardPreview()
             } else if ProcessInfo.processInfo.arguments.contains("--metrics") {
                 NavigationStack { MetricsView() }
+            } else if ProcessInfo.processInfo.arguments.contains("--insights") {
+                NavigationStack { InsightsView() }
             } else {
                 ContentView()
                     // sweetch://dictate — the keyboard's microphone: the big screen, listening at once.
@@ -68,6 +70,11 @@ struct ContentView: View {
                         MetricsView()
                     } label: {
                         Label("How It Goes", systemImage: "chart.bar.xaxis")
+                    }
+                    NavigationLink {
+                        InsightsView()
+                    } label: {
+                        Label("Insights", systemImage: "hand.tap")
                     }
                 }
                 Section {

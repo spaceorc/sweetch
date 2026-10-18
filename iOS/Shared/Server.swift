@@ -171,6 +171,11 @@ struct Server {
         try await get("/metrics", timeout: 20)
     }
 
+    /// What the numbers say about the hands and the voice (see the Mac's Insights).
+    func insights() async throws -> [String: Any] {
+        try await get("/insights", timeout: 60)
+    }
+
     func llmConfig() async throws -> (env: String, userName: String) {
         let reply = try await get("/llm-config", timeout: 5)
         guard let env = reply["env"] as? String else { throw Failure("no credentials from the Mac") }
