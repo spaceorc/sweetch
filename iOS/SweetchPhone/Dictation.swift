@@ -81,6 +81,9 @@ final class Dictation: ObservableObject {
     }
 
     private func start(waitingForScreenshot: Bool) throws {
+        // The Action Button while the keyboard is incognito (by hand, or in a private tab): this
+        // one is too — no screenshot, nothing to the Mac, nothing kept.
+        if !screen, SharedState.keyboardIncognito { incognito = true }
         problem = nil
         preview = ""
         try microphoneOn()
@@ -133,7 +136,7 @@ final class Dictation: ObservableObject {
 
     /// The screenshot the Shortcut takes right after starting: the context waits a moment for it.
     func attach(screenshot: Data) {
-        guard phase == .listening else { return }
+        guard phase == .listening, !incognito else { return }
         self.screenshot = UIImage(data: screenshot)?.jpegData(compressionQuality: 0.8) ?? screenshot
     }
 

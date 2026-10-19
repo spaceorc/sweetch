@@ -1421,13 +1421,15 @@ final class KeyboardModel {
     /// field, no context, no dictation; correcting and suggesting go on, from what was learned
     /// before. Stays on until turned off.
     /// Turned on by hand: stays until turned off.
-    private(set) var incognitoPicked = UserDefaults.standard.bool(forKey: "incognito") { didSet { changed() } }
+    private(set) var incognitoPicked = UserDefaults.standard.bool(forKey: "incognito") { didSet { changed(); share() } }
     /// A private field — Safari's private tab asks for a dark keyboard while the system is light —
     /// for as long as the keyboard is in it.
-    private(set) var privateField = false { didSet { if privateField != oldValue { changed() } } }
+    private(set) var privateField = false { didSet { if privateField != oldValue { changed(); share() } } }
     /// The user turned incognito off in this private field: until the keyboard leaves it.
     private var privateFieldDeclined = false
     var incognito: Bool { incognitoPicked || privateField }
+    /// The app learns of it too (SharedState): a dictation the Action Button starts now is incognito.
+    private func share() { SharedState.keyboardIncognito = incognito }
     /// Incognito turned off with text in the field: what's in it was typed unseen, so the field's
     /// own changes (a send clearing it, what it held) stay unlogged and unremembered until it's
     /// emptied or another field comes — words typed from now on are logged as usual.
