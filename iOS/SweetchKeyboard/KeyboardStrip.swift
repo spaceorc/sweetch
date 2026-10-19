@@ -85,7 +85,7 @@ final class KeyboardStrip: UIView {
         for (index, word) in words.enumerated() {
             let isUndo = index == 0 && undo != nil
             suggestions.addArrangedSubview(SuggestionView(word: word, divided: index > 0 && !(index == 1 && undo != nil),
-                                                          undo: isUndo) { [weak model] picked in
+                                                          undo: isUndo, model: model) { [weak model] picked in
                 UIDevice.current.playInputClick()
                 if isUndo { model?.revertAutoFix() } else { model?.choose(suggestion: picked) }
             })
@@ -110,7 +110,7 @@ private final class SuggestionView: UIView {
     let undo: Bool
 
     /// `chosen`: what was tapped — the word, or one of the emoji of an emoji group.
-    init(word: String, divided: Bool, undo: Bool = false, chosen: @escaping (String) -> Void) {
+    init(word: String, divided: Bool, undo: Bool = false, model: KeyboardModel? = nil, chosen: @escaping (String) -> Void) {
         self.word = word
         self.undo = undo
         super.init(frame: .zero)
@@ -125,6 +125,8 @@ private final class SuggestionView: UIView {
                 one.setTitle(emoji, for: .normal)
                 one.titleLabel?.font = .systemFont(ofSize: 22)
                 one.addAction(UIAction { _ in chosen(emoji) }, for: .touchUpInside)
+                // A long press: the skin tones, and «not again».
+                one.menu = Self.emojiMenu(emoji, model: model)
                 group.addArrangedSubview(one)
             }
             button = group
@@ -186,4 +188,27 @@ private final class SuggestionView: UIView {
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    private static func emojiMenu(_ emoji: String, model: KeyboardModel?) -> UIMenu {
+        var items: [UIMenuElement] = []
+        if let variants = Emoji.toneVariants(emoji) {
+            items.append(UIMenu(options: .displayInline, children: variants.map { variant in
+                UIAction(title: variant, state: variant == emoji ? .on : .off) { [weak model] _ in
+                    UIDevice.current.playInputClick()
+                    model?.chooseEmoji(variant)
+                }
+            }))
+        }
+        var hide: [UIAction] = []
+        if let word = model?.emojiWord {
+            hide.append(UIAction(title: "Не показывать для «\(word)»", image: UIImage(systemName: "eye.slash")) { [weak model] _ in
+                model?.hideEmoji(emoji, forThisWord: true)
+            })
+        }
+        hide.append(UIAction(title: "Не показывать никогда", image: UIImage(systemName: "nosign"), attributes: .destructive) { [weak model] _ in
+            model?.hideEmoji(emoji, forThisWord: false)
+        })
+        items.append(UIMenu(options: .displayInline, children: hide))
+        return UIMenu(title: emoji, children: items)
+    }
 }

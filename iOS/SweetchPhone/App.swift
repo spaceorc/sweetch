@@ -83,6 +83,11 @@ struct ContentView: View {
                     } label: {
                         Label("Insights", systemImage: "hand.tap")
                     }
+                    NavigationLink {
+                        EmojiView()
+                    } label: {
+                        Label("Emoji", systemImage: "face.smiling")
+                    }
                 }
                 Section {
                     TextField("Addresses", text: $address, axis: .vertical)

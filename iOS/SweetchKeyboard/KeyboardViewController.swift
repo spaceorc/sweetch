@@ -51,6 +51,7 @@ final class KeyboardViewController: UIInputViewController {
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        EmojiMemory.shared.reload()   // the app's Emoji screen may have changed it
         surface.showsGlobe = needsInputModeSwitchKey
         model.appeared()
         stalls.start()
@@ -417,6 +418,15 @@ final class KeyboardModel {
         while end < a.count - start, end < b.count - start, a[a.count - 1 - end] == b[b.count - 1 - end] { end += 1 }
         let removed = String(a[start..<(a.count - end)]), added = String(b[start..<(b.count - end)])
         let kind = now.isEmpty ? "cleared" : removed.isEmpty ? "added" : added.isEmpty ? "removed" : "replaced"
+        // Emoji put in from the system's emoji keyboard right after a word: that word's, next time.
+        if kind == "added", !incognito, !incognitoResidue {
+            let emoji = added.split(separator: " ").map(String.init).filter(Emoji.isEmoji)
+            let head = String(b[..<start]).trimmingCharacters(in: .whitespaces)
+            let word = String(head.reversed().prefix { $0.isLetter }.reversed())
+            if !emoji.isEmpty, emoji.count == added.split(separator: " ").count, !word.isEmpty {
+                for one in emoji { EmojiMemory.shared.typed(Emoji.base(of: one), after: word) }
+            }
+        }
         KeyLog.note("external", ["kind": kind, "added": String(added.prefix(2000)), "removed": String(removed.prefix(2000)),
                                  "at": start, "field_len": b.count, "session": fieldSession])
     }
@@ -767,27 +777,52 @@ final class KeyboardModel {
     /// after the word is done (a space typed) it's added at the end.
     private enum EmojiUse { case replace, append }
     private var emojiUse: EmojiUse?
+    /// The word the strip's emoji are for (what a pick is remembered under, what «not for this
+    /// word» hides them for).
+    private(set) var emojiWord: String?
 
     /// The emoji, as the last suggestion after two words, when the word being typed — or one of the
     /// first two suggestions for it — has one.
     private func withEmoji(_ words: [String], for asked: String) -> [String] {
         emojiUse = nil
-        guard let emoji = ([asked] + words.prefix(2)).lazy.compactMap(Emoji.for).first else { return words }
+        emojiWord = nil
+        guard let (word, emoji) = ([asked] + words.prefix(2)).lazy
+                .compactMap({ w -> (String, [String])? in let e = Emoji.ranked(for: w); return e.isEmpty ? nil : (w, e) }).first
+        else { return words }
         emojiUse = .replace
-        return Array(words.prefix(2)) + [emoji]
+        emojiWord = word
+        return Array(words.prefix(2)) + [emoji.joined(separator: " ")]
     }
 
     /// After a word just finished: its emoji stays on the strip, beside the next word's predictions.
     private func emojiAfter(_ words: [String], previous: String?, before: String) -> [String] {
         emojiUse = nil
-        guard let previous, before.hasSuffix(previous + " "), let emoji = Emoji.for(previous) else { return words }
+        emojiWord = nil
+        guard let previous, before.hasSuffix(previous + " ") else { return words }
+        let emoji = Emoji.ranked(for: previous)
+        guard !emoji.isEmpty else { return words }
         emojiUse = .append
-        return Array(words.prefix(2)) + [emoji]
+        emojiWord = previous
+        return Array(words.prefix(2)) + [emoji.joined(separator: " ")]
+    }
+
+    /// The strip's long press on an emoji: a skin tone picked (remembered, and the emoji typed)…
+    func chooseEmoji(_ toned: String) {
+        if !incognito { EmojiMemory.shared.setTone(toned, for: Emoji.base(of: toned)) }
+        choose(suggestion: toned)
+    }
+
+    /// …or the emoji never shown again: for this word, or for any.
+    func hideEmoji(_ emoji: String, forThisWord: Bool) {
+        EmojiMemory.shared.hide(Emoji.base(of: emoji), for: forThisWord ? emojiWord : nil)
+        log("emoji-hidden", ["emoji": Emoji.base(of: emoji), "word": forThisWord ? (emojiWord ?? "") : "*"])
+        fieldChanged()
     }
 
     func choose(suggestion: String) {
         if Emoji.isEmoji(suggestion), let use = emojiUse {
             emojiUse = nil
+            if !incognito, let emojiWord { EmojiMemory.shared.pick(Emoji.base(of: suggestion), for: emojiWord) }
             if use == .replace {
                 lastWord = nil
                 wordTaps = []
