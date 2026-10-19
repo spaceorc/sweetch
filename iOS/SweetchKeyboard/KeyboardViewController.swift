@@ -795,13 +795,22 @@ final class KeyboardModel {
         pendingCorrection = nil
         let tapped = hold && taps.count == word.filter(\.isLetter).count && taps.count >= 2
         if tapped { shadowDecode(word, taps: taps) }
-        if tapped, pending?.word != word {   // not worked out by the space
+        // An English contraction typed without its apostrophe («im», «Ill»): what it is, ahead of
+        // the decoder — unless the user took it back before.
+        let contraction = (keepAsTyped[word.lowercased()] ?? 0) < 1 ? Apostrophes.fix(word) : nil
+        if tapped, contraction == nil, pending?.word != word {   // not worked out by the space
             KeyLog.note("autocorrect-late", ["word": word])
             correctLate(word, taps: taps, boundary: boundary, before: before)
         }
+        if let fixed = contraction {
+            for _ in word { deleteBackward() }
+            insert(fixed)
+            log("autofix", ["typed": word, "fixed": fixed])
+            autoFixed = AutoFix(typed: word, fixed: fixed, boundary: boundary, taps: hold ? taps : [], times: times)
+            word = fixed
         // The decoder's correction, worked out while the word was typed: put in, and the strip offers
         // to take it back (so does ⌫ next).
-        if tapped, let pending, pending.word == word, let fixed = pending.fixed, fixed != word {
+        } else if tapped, let pending, pending.word == word, let fixed = pending.fixed, fixed != word {
             for _ in word { deleteBackward() }
             insert(fixed)
             log("autocorrect", ["typed": word, "fixed": fixed, "confidence": Double(pending.confidence)])
