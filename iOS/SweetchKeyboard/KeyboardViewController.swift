@@ -763,7 +763,38 @@ final class KeyboardModel {
 
     /// The word replaced by the suggestion, and a space after it — unless the text goes on right
     /// after it already (a word fixed in the middle of the text), where a space would be a second.
+    /// The word an emoji suggestion stands for — the one typed, or the suggestion it was found by.
+    private var emojiWord: String?
+
+    /// The word's emoji, if it has one, as the last suggestion after at most two words.
+    private func withEmoji(_ words: [String], for asked: String) -> [String] {
+        emojiWord = nil
+        guard let (word, emoji) = ([asked] + words).lazy.compactMap({ w in Emoji.for(w).map { (w, $0) } }).first
+        else { return words }
+        emojiWord = word
+        return Array(words.filter { !Emoji.isEmoji($0) }.prefix(2)) + [emoji]
+    }
+
     func choose(suggestion: String) {
+        // An emoji: the word stays — as the suggestion it was found by — and the emoji follows it.
+        if Emoji.isEmoji(suggestion), let base = emojiWord {
+            emojiWord = nil
+            if base != word {
+                lastWord = nil
+                wordTaps = []
+                wordTapsHold = true
+                for _ in word { deleteBackward() }
+                insert(base)
+            }
+            log("choose", ["word": word, "suggestion": suggestion, "emoji": true, "from": suggestionsFrom])
+            pendingCorrection = nil   // the word is the emoji's own: no correcting it on the way
+            space()
+            insert(suggestion + " ")
+            spaceIsOurs = true
+            lastSpaceAt = Date()
+            afterTyping()
+            return
+        }
         lastWord = nil
         wordTaps = []
         wordTapsHold = true
@@ -1163,7 +1194,7 @@ final class KeyboardModel {
                     guard let self, self.word == asked else { return }
                     self.pendingCorrection = (asked, fixed, confidence)
                     self.suggestionsFrom = "decoder"
-                    self.suggestions = picked.filter { $0.lowercased() != asked.lowercased() }.count > 0 ? picked : []
+                    self.suggestions = self.withEmoji(picked.filter { $0.lowercased() != asked.lowercased() }.count > 0 ? picked : [], for: asked)
                 }
             }
             return
@@ -1172,7 +1203,7 @@ final class KeyboardModel {
             guard let self, self.word == asked else { return }
             if seconds > 0.05 { KeyLog.note("suggest-slow", ["ms": Int(seconds * 1000), "for": asked]) }
             self.suggestionsFrom = "dictionary"
-            self.suggestions = words
+            self.suggestions = self.withEmoji(words, for: asked)
         }
     }
 
