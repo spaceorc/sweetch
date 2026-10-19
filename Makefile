@@ -143,9 +143,9 @@ clean:
 	swift package clean
 	rm -rf $(BUILD_DIR) .build
 
-# The iPhone app (iOS/): generate the project, build, sign with the personal team and install on
-# the phone — over the cable or, once paired, the local network. Free provisioning lasts 7 days;
-# running this again renews it.
+# The iPhone app (iOS/): generate the project, build, sign with the user's team (a paid membership
+# since 19 Oct 2026 — profiles last a year, and app groups are allowed) and install on the phone —
+# over the cable or, once paired, the local network.
 PHONE_ID  ?= 00008150-000034D81E47401C
 XCODE_DEV  = /Applications/Xcode.app/Contents/Developer
 
