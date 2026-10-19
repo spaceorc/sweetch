@@ -244,6 +244,10 @@ final class HoldToTalk {
         guard let el = SelectionConverter.focusedElement(wait: false) else { return false }
         var role: CFTypeRef?
         AXUIElementCopyAttributeValue(el, kAXRoleAttribute as CFString, &role)
-        return ["AXTextArea", "AXTextField", "AXComboBox"].contains(role as? String ?? "")
+        if ["AXTextArea", "AXTextField", "AXComboBox"].contains(role as? String ?? "") { return true }
+        // A page's own editor (contenteditable — ChatGPT's prompt): the browser names the editable
+        // element it sits in, whatever its role.
+        var editable: CFTypeRef?
+        return AXUIElementCopyAttributeValue(el, "AXEditableAncestor" as CFString, &editable) == .success && editable != nil
     }
 }

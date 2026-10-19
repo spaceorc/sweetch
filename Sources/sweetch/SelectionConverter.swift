@@ -137,12 +137,21 @@ enum SelectionConverter {
         return nil
     }
 
+    /// The system-wide focused element — or, when that question fails (it does: kAXErrorCannotComplete
+    /// while the app answers fine — the ChatGPT page in Chrome, Telegram), the app in front's own.
     private static func copyFocusedElement() -> AXUIElement? {
-        let systemWide = AXUIElementCreateSystemWide()
         var focused: CFTypeRef?
-        let result = AXUIElementCopyAttributeValue(systemWide, kAXFocusedUIElementAttribute as CFString, &focused)
-        guard result == .success, let focused else { return nil }
-        return (focused as! AXUIElement)
+        if AXUIElementCopyAttributeValue(AXUIElementCreateSystemWide(), kAXFocusedUIElementAttribute as CFString, &focused) == .success,
+           let focused, CFGetTypeID(focused) == AXUIElementGetTypeID() {
+            return (focused as! AXUIElement)
+        }
+        guard let app = MainQueue.sync({ NSWorkspace.shared.frontmostApplication }) else { return nil }
+        let element = AXUIElementCreateApplication(app.processIdentifier)
+        AXUIElementSetMessagingTimeout(element, 0.2)
+        var own: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXFocusedUIElementAttribute as CFString, &own) == .success,
+              let own, CFGetTypeID(own) == AXUIElementGetTypeID() else { return nil }
+        return (own as! AXUIElement)
     }
 
     /// Electron apps (Claude, sometimes Slack) build no Accessibility tree until an assistive
