@@ -85,9 +85,9 @@ final class KeyboardStrip: UIView {
         for (index, word) in words.enumerated() {
             let isUndo = index == 0 && undo != nil
             suggestions.addArrangedSubview(SuggestionView(word: word, divided: index > 0 && !(index == 1 && undo != nil),
-                                                          undo: isUndo) { [weak model] in
+                                                          undo: isUndo) { [weak model] picked in
                 UIDevice.current.playInputClick()
-                if isUndo { model?.revertAutoFix() } else { model?.choose(suggestion: word) }
+                if isUndo { model?.revertAutoFix() } else { model?.choose(suggestion: picked) }
             })
         }
     }
@@ -109,12 +109,26 @@ private final class SuggestionView: UIView {
     let word: String
     let undo: Bool
 
-    init(word: String, divided: Bool, undo: Bool = false, chosen: @escaping () -> Void) {
+    /// `chosen`: what was tapped — the word, or one of the emoji of an emoji group.
+    init(word: String, divided: Bool, undo: Bool = false, chosen: @escaping (String) -> Void) {
         self.word = word
         self.undo = undo
         super.init(frame: .zero)
-        let button: UIButton
-        if undo {
+        let button: UIView
+        if Emoji.isEmoji(word) {
+            // Several emoji in one place, each its own button.
+            let group = UIStackView()
+            group.axis = .horizontal
+            group.distribution = .fillEqually
+            for emoji in word.split(separator: " ").map(String.init) {
+                let one = UIButton(type: .system)
+                one.setTitle(emoji, for: .normal)
+                one.titleLabel?.font = .systemFont(ofSize: 22)
+                one.addAction(UIAction { _ in chosen(emoji) }, for: .touchUpInside)
+                group.addArrangedSubview(one)
+            }
+            button = group
+        } else if undo {
             var look = UIButton.Configuration.gray()
             look.cornerStyle = .capsule
             look.image = UIImage(systemName: "arrow.uturn.backward",
@@ -124,19 +138,22 @@ private final class SuggestionView: UIView {
             look.contentInsets = NSDirectionalEdgeInsets(top: 5, leading: 12, bottom: 5, trailing: 14)
             look.attributedTitle = AttributedString("«\(word)»", attributes: AttributeContainer([.font: UIFont.systemFont(ofSize: 16, weight: .medium)]))
             look.titleLineBreakMode = .byTruncatingMiddle
-            button = UIButton(configuration: look)
-            button.layer.borderColor = UIColor.separator.cgColor
-            button.layer.borderWidth = 1 / UIScreen.main.scale
-            button.layer.cornerRadius = 16
-            button.accessibilityLabel = "Undo correction, keep \(word)"
+            let capsule = UIButton(configuration: look)
+            capsule.layer.borderColor = UIColor.separator.cgColor
+            capsule.layer.borderWidth = 1 / UIScreen.main.scale
+            capsule.layer.cornerRadius = 16
+            capsule.accessibilityLabel = "Undo correction, keep \(word)"
+            capsule.addAction(UIAction { _ in chosen(word) }, for: .touchUpInside)
+            button = capsule
         } else {
-            button = UIButton(type: .system)
-            button.setTitle(word, for: .normal)
-            button.setTitleColor(.label, for: .normal)
-            button.titleLabel?.font = .systemFont(ofSize: 17)
-            button.titleLabel?.lineBreakMode = .byTruncatingMiddle
+            let plain = UIButton(type: .system)
+            plain.setTitle(word, for: .normal)
+            plain.setTitleColor(.label, for: .normal)
+            plain.titleLabel?.font = .systemFont(ofSize: 17)
+            plain.titleLabel?.lineBreakMode = .byTruncatingMiddle
+            plain.addAction(UIAction { _ in chosen(word) }, for: .touchUpInside)
+            button = plain
         }
-        button.addAction(UIAction { _ in chosen() }, for: .touchUpInside)
         button.translatesAutoresizingMaskIntoConstraints = false
         addSubview(button)
         if undo {

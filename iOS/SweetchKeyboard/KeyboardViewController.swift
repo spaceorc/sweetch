@@ -763,33 +763,39 @@ final class KeyboardModel {
 
     /// The word replaced by the suggestion, and a space after it — unless the text goes on right
     /// after it already (a word fixed in the middle of the text), where a space would be a second.
-    /// The word an emoji suggestion stands for — the one typed, or the suggestion it was found by.
-    private var emojiWord: String?
+    /// What a tap on the emoji suggestion does: while a word is typed it takes the word's place;
+    /// after the word is done (a space typed) it's added at the end.
+    private enum EmojiUse { case replace, append }
+    private var emojiUse: EmojiUse?
 
-    /// The word's emoji, if it has one, as the last suggestion after at most two words.
+    /// The emoji, as the last suggestion after two words, when the word being typed — or one of the
+    /// first two suggestions for it — has one.
     private func withEmoji(_ words: [String], for asked: String) -> [String] {
-        emojiWord = nil
-        guard let (word, emoji) = ([asked] + words).lazy.compactMap({ w in Emoji.for(w).map { (w, $0) } }).first
-        else { return words }
-        emojiWord = word
-        return Array(words.filter { !Emoji.isEmoji($0) }.prefix(2)) + [emoji]
+        emojiUse = nil
+        guard let emoji = ([asked] + words.prefix(2)).lazy.compactMap(Emoji.for).first else { return words }
+        emojiUse = .replace
+        return Array(words.prefix(2)) + [emoji]
+    }
+
+    /// After a word just finished: its emoji stays on the strip, beside the next word's predictions.
+    private func emojiAfter(_ words: [String], previous: String?, before: String) -> [String] {
+        emojiUse = nil
+        guard let previous, before.hasSuffix(previous + " "), let emoji = Emoji.for(previous) else { return words }
+        emojiUse = .append
+        return Array(words.prefix(2)) + [emoji]
     }
 
     func choose(suggestion: String) {
-        // An emoji: the word stays — as the suggestion it was found by — and the emoji follows it.
-        if Emoji.isEmoji(suggestion), let base = emojiWord {
-            emojiWord = nil
-            if base != word {
+        if Emoji.isEmoji(suggestion), let use = emojiUse {
+            emojiUse = nil
+            if use == .replace {
                 lastWord = nil
                 wordTaps = []
                 wordTapsHold = true
                 for _ in word { deleteBackward() }
-                insert(base)
             }
-            log("choose", ["word": word, "suggestion": suggestion, "emoji": true, "from": suggestionsFrom])
-            pendingCorrection = nil   // the word is the emoji's own: no correcting it on the way
-            space()
             insert(suggestion + " ")
+            log("choose", ["word": word, "suggestion": suggestion, "emoji": use == .replace ? "replace" : "append", "from": suggestionsFrom])
             spaceIsOurs = true
             lastSpaceAt = Date()
             afterTyping()
@@ -1163,7 +1169,7 @@ final class KeyboardModel {
                 DispatchQueue.main.async {
                     guard let self, self.word.isEmpty else { return }
                     self.suggestionsFrom = "prediction"
-                    self.suggestions = words
+                    self.suggestions = self.emojiAfter(words, previous: previous.word, before: before)
                 }
             }
             return
