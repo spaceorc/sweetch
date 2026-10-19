@@ -51,6 +51,8 @@ var decoder = WordDecoder(lexicon: lexicon, bigrams: bigrams)
 if let i = args.firstIndex(of: "--threshold"), i + 1 < args.count, let t = Float(args[i + 1]) { decoder.threshold = t }
 if args.contains("--by-confidence") { decoder.byConfidence = true }
 if let i = args.firstIndex(of: "--language"), i + 1 < args.count, let l = Float(args[i + 1]) { decoder.costs.language = l }
+if let i = args.firstIndex(of: "--substitution"), i + 1 < args.count, let v = Float(args[i + 1]) { decoder.costs.substitution = v }
+if let i = args.firstIndex(of: "--distance"), i + 1 < args.count, let v = Float(args[i + 1]) { decoder.costs.distance = v }
 
 // `--bench <name>`: the bench — every measure at once, on the user's own typing, saved as
 // build/bench/<name>.json for comparing variants (Tools/keyboard/bench_compare.py):
@@ -265,6 +267,11 @@ for word in export.words where word.taps.count >= 2 {
     if word.sentence_start == true { context.previous = 0 } else if let previous = word.previous { context.previous = lexicon.lookup(previous) }
     let result = decoder.decode(taps, context: context)
     seconds += Date().timeIntervalSince(started)
+    // `--explain <typed>`: the candidates for that word and what each cost.
+    if let i = args.firstIndex(of: "--explain"), i + 1 < args.count, word.taps.map(\.char).joined() == args[i + 1] {
+        print("\(args[i + 1]) → \(result.correction ?? "(left)") conf \(String(format: "%.3f", result.confidence))")
+        for c in result.candidates.prefix(6) { print("   \(c.word): cost \(String(format: "%.3f", c.cost)), edits \(c.edits), frequency \(c.frequency)") }
+    }
     let truth = word.truth.lowercased()
     let typed = word.taps.map(\.char).joined()
     let top3 = result.candidates.prefix(3).map { $0.word.lowercased() }
@@ -289,6 +296,11 @@ for word in export.words where word.taps.count >= 2 {
         } else if let c = result.correction {
             fixedWrong += 1
             lines.append("  WRONG   \(typed) → \(c), meant \(word.truth)")
+            if verbose {
+                for cand in result.candidates.prefix(5) {
+                    lines.append("            \(cand.word): cost \(String(format: "%.2f", cand.cost)), edits \(cand.edits), frequency \(cand.frequency)")
+                }
+            }
         } else if verbose {
             lines.append("  misses  \(typed) (meant \(word.truth)); top: \(top3.joined(separator: ", ")) conf \(String(format: "%.3f", result.confidence))")
         }

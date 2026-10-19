@@ -36,6 +36,13 @@ final class WordDecoder {
         var insertion: Float = 0.7248      // a tap that's in no letter of the word
         var transposition: Float = 0.5608  // two letters typed swapped
         var substitution: Float = 0.3806   // a key nowhere near
+        /// And more the farther it is: per key width between the tap and the key's edge, beyond
+        /// the first. «й» typed for «е», four keys off, can't have been meant — LatinIME's flat
+        /// price for any miss let a commoner word win over the one under the finger
+        /// («осмвсленный» → «осмысленные», 19 Oct). A vowel for a vowel is exempt. On the bench
+        /// (19 Oct, 1453 words): the user's own fixes 77 right / 18 wrong against 76 / 21, the top
+        /// pick the word 6 times more; 0.35–0.8 alike, the mildest taken.
+        var distance: Float = 0.35
         var language: Float = 1.1214       // × how uncommon the word is
         var maxEdits = 2
         var beam = 170
@@ -119,6 +126,8 @@ final class WordDecoder {
     /// For one tap: what typing each letter near it costs, and the letter it landed on.
     private struct Spread {
         var cost: [UInt8: Float] = [:]
+        /// How far the tap is from each letter's key, in key widths from its edge.
+        var far: [UInt8: Float] = [:]
         var landed: Character = " "
         var landedCost: Float = 0
     }
@@ -135,6 +144,9 @@ final class WordDecoder {
             let plain = Float(px * px + py * py)
             // Near enough to have been meant: within a key's width of its edge.
             let edgeX = max(f.minX - tap.point.x, tap.point.x - f.maxX, 0), edgeY = max(f.minY - tap.point.y, tap.point.y - f.maxY, 0)
+            for letter in Self.variants(of: key.letter) {
+                if let index = lexicon.index(of: letter.0) { spread.far[index] = Float(hypot(edgeX, edgeY) / width) }
+            }
             guard hypot(edgeX, edgeY) < width else { continue }
             let factor = Self.sweetSpot(squared)
             let inside = f.contains(tap.point)
@@ -155,6 +167,15 @@ final class WordDecoder {
             spread.cost = [only: 0]
         }
         return spread
+    }
+
+    private static let vowels: Set<Character> = Set("аеёиоуыэюяaeiouy")
+    nonisolated(unsafe) private static var vowelNodeCache: Set<UInt8>?
+    private static func vowelNodes(_ lexicon: Lexicon) -> Set<UInt8> {
+        if let cached = vowelNodeCache { return cached }
+        let set = Set(vowels.compactMap { lexicon.index(of: $0) })
+        vowelNodeCache = set
+        return set
     }
 
     /// Letters a key types: е is also ё, ь is also ъ (both on the key, held).
@@ -199,7 +220,12 @@ final class WordDecoder {
                         beams[position + 1].append(Hypothesis(node: child, cost: hypothesis.cost + cost,
                                                               edits: hypothesis.edits, path: hypothesis.path + [letter]))
                     } else if canErr, !taps[position].deliberate {
-                        beams[position + 1].append(Hypothesis(node: child, cost: hypothesis.cost + costs.substitution + costs.match * 1.2,
+                        // A vowel for a vowel is a slip of spelling as often as of the finger
+                        // («упеминания», «добежале») — the distance tells nothing there; a letter not
+                        // on the keys (the apostrophe) has none.
+                        let spelling = Self.vowels.contains(here.landed) && Self.vowelNodes(lexicon).contains(letter)
+                        let off = spelling ? 0 : max(0, (here.far[letter] ?? 1) - 1)
+                        beams[position + 1].append(Hypothesis(node: child, cost: hypothesis.cost + costs.substitution + costs.match * 1.2 + costs.distance * off,
                                                               edits: hypothesis.edits + 1, path: hypothesis.path + [letter]))
                     }
                     // A letter never typed: this child is skipped, its child takes the tap.
@@ -282,7 +308,10 @@ final class WordDecoder {
             confidence = sureness(top)
             // A short Latin word is an abbreviation more often than a typo ("ux", "pr", "ci").
             let abbreviation = literal.count <= 3 && literal.unicodeScalars.allSatisfy { $0.isASCII }
-            let mayCorrect = literalNode == nil && literal.count > 1 && !abbreviation && !taps.contains(where: \.deliberate)
+            // A name for a word typed small: «пише» isn't «Мише» (19 Oct, taken back) — a name is typed
+            // with its capital, and a small letter means a common word was meant.
+            let toName = top.word.first?.isUppercase == true && literal.first?.isLowercase == true
+            let mayCorrect = literalNode == nil && literal.count > 1 && !abbreviation && !toName && !taps.contains(where: \.deliberate)
             if mayCorrect, confidence >= threshold { correction = top.word }
         }
         return Result(literal: literal, literalIsWord: literalNode != nil, candidates: Array(candidates),
