@@ -15,7 +15,8 @@ import Foundation
 /// - **the likelier language, with its prefix**. If it heard the same words as the first and the
 ///   other language was unlikely, that's the answer — about a second after release;
 /// - otherwise **the other language, with its prefix** — for accented English detected as Russian,
-///   and the reverse — and then the model.
+///   and the reverse — and, when detection was in two minds (`twoMinds`), **without it** too, so that
+///   language has a version the prefix can't be blamed for — and then the model.
 ///
 /// Listenings whose texts differ only in case and punctuation heard the same words and make one
 /// version. Then a model settles what the user said, reading all of the context again, the prefix,
@@ -98,6 +99,12 @@ enum Hearing {
     /// the clear cases.
     static let otherLanguageDoubt = 0.1
 
+    /// Detection's probability for the other language at which that language is listened to without
+    /// the prefix as well. English said and taken for Russian at 0.52 against 0.36 (19 Oct) came out
+    /// in English only from the prefixed listening, and the model, wary of the prefix leaking,
+    /// took the Russian translations.
+    static let twoMinds = 0.25
+
     /// Below this a word is reported as possibly misheard. Gemma's value, calibrated on English;
     /// Russian is still to be calibrated on the recordings.
     static let uncertainProbability = 0.7
@@ -154,6 +161,7 @@ enum Hearing {
         if !agreed || doubt >= otherLanguageDoubt {
             let otherPrimed = prefix?.text(for: other)
             listen(.other(other), prefix: otherPrimed, name: otherPrimed == nil ? "listen-\(other)" : "listen-\(other)-prefix")
+            if otherPrimed != nil, doubt >= twoMinds { listen(.other(other), prefix: nil, name: "listen-\(other)") }
         }
         if !failures.isEmpty { log.error("dictation: listenings failed: \(failures, privacy: .public)") }
         if listened.isEmpty { throw Subprocess.Failure(description: failures.joined(separator: "; ")) }
@@ -341,7 +349,10 @@ enum Hearing {
     1. A TOLD LANGUAGE TRANSLATES. Listenings told a language — "the likelier language", picked \
        from detection, and "the other language" — write speech in another language as a translation. \
        A version in a language the speech wasn't in is never what was said; it only tells you the \
-       meaning. Versions marked only_other_language are the usual suspects.
+       meaning. A translation reads awkwardly ("эта вопроса", "одна вопроса") with many uncertain \
+       words, where a version in the language spoken reads naturally. Versions marked \
+       only_other_language are the usual suspects — and so are those of "the likelier language" \
+       when detection was close.
     2. DETECTION MISTAKES ACCENTED ENGLISH FOR RUSSIAN. Short English said with a Russian accent \
        comes out in Cyrillic or half-transliterated ("Тест-questions", "пул реквест"). If an English \
        version reads as plain natural English for the same sounds, they spoke English; if the speech \
@@ -378,7 +389,9 @@ enum Hearing {
       start); match its style of punctuation — a chat message with no full stops gets none at the end.
     - A single short word or interjection ("Ура", "Да", "Ок", "Спасибо") is a real dictation, not noise.
     - A version from Apple's dictation is a different recogniser: Russian only, no probabilities, \
-      English comes out mangled in it, but where it agrees with a whisper version they're both right.
+      English comes out mangled in it, but where it agrees with a whisper version they're both right. \
+      Set to Russian, it writes English words only when English was spoken: Latin words in it are \
+      strong evidence the speech was English, and then a natural English version is what was said.
     - Answer an empty text only when the versions are plainly noise — recogniser phantoms that \
       disagree with each other. Words the versions agree on were said, even if they make little \
       sense to you or the context doesn't explain them: type them.
