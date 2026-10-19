@@ -240,14 +240,25 @@ final class HoldToTalk {
     }
 
     /// Only hijack Space while typing in a text field — elsewhere a Backspace could navigate.
+    /// Asked up to three times: Chrome builds its tree as it's asked, and the first answer for a
+    /// page's editor is nothing, or the page's group; the next one is the editor itself.
     private func focusIsTextInput() -> Bool {
-        guard let el = SelectionConverter.focusedElement(wait: false) else { return false }
-        var role: CFTypeRef?
-        AXUIElementCopyAttributeValue(el, kAXRoleAttribute as CFString, &role)
-        if ["AXTextArea", "AXTextField", "AXComboBox"].contains(role as? String ?? "") { return true }
-        // A page's own editor (contenteditable — ChatGPT's prompt): the browser names the editable
-        // element it sits in, whatever its role.
-        var editable: CFTypeRef?
-        return AXUIElementCopyAttributeValue(el, "AXEditableAncestor" as CFString, &editable) == .success && editable != nil
+        var seen = "no focused element"
+        for attempt in 0..<3 {
+            if attempt > 0 { usleep(40_000) }
+            guard let el = SelectionConverter.focusedElement(wait: false) else { continue }
+            var role: CFTypeRef?
+            AXUIElementCopyAttributeValue(el, kAXRoleAttribute as CFString, &role)
+            if ["AXTextArea", "AXTextField", "AXComboBox"].contains(role as? String ?? "") { return true }
+            // A page's own editor (contenteditable — ChatGPT's prompt): the browser names the
+            // editable element it sits in, whatever its role.
+            var editable: CFTypeRef?
+            if AXUIElementCopyAttributeValue(el, "AXEditableAncestor" as CFString, &editable) == .success, editable != nil { return true }
+            var subrole: CFTypeRef?
+            AXUIElementCopyAttributeValue(el, kAXSubroleAttribute as CFString, &subrole)
+            seen = "focused \(role as? String ?? "-")/\(subrole as? String ?? "-")"
+        }
+        log.info("hold-to-talk: not a text field — \(seen, privacy: .public)")
+        return false
     }
 }
