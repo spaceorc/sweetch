@@ -225,6 +225,7 @@ final class KeyboardModel {
         showStatus()
         lastWord = nil
         visibleSince = Date()
+        takeHeardOnPhone()
         deliverPending()
         startSession()
         wordTaps = []
@@ -1355,6 +1356,12 @@ final class KeyboardModel {
             if found == nil { found = await Server.answering(addresses) }
             guard let server = found else {
                 connected[mac] = nil
+                // The app on this phone not answering — suspended, perhaps, with what it heard
+                // left in the app group.
+                if mac == Server.thisPhone, UserDefaults.standard.object(forKey: Self.dictationOpenedKey) != nil {
+                    takeHeardOnPhone()
+                    deliverPending()
+                }
                 showStatus()
                 try? await Task.sleep(for: .seconds(caughtUp ? 5 : 3))
                 continue
@@ -1437,6 +1444,20 @@ final class KeyboardModel {
 
     /// Heard (servers number their texts by the millisecond) after the microphone opened the
     /// dictation, not long ago.
+    /// What the phone heard by itself, left in the app group: the dictation this keyboard opened,
+    /// pending as if the app's loopback server had answered — which it may no longer, suspended —
+    /// and that server's place moved past it, so it isn't typed twice.
+    private func takeHeardOnPhone() {
+        guard let heard = SharedState.takeHeard() else { return }
+        UserDefaults.standard.set(max(heard.seq, UserDefaults.standard.integer(forKey: "lastSeq-\(Server.thisPhone)")),
+                                  forKey: "lastSeq-\(Server.thisPhone)")
+        guard Self.dictationAwaited(heardAt: heard.seq) else { return }
+        UserDefaults.standard.removeObject(forKey: Self.dictationOpenedKey)
+        UserDefaults.standard.set(["text": heard.text, "at": Date().timeIntervalSince1970, "id": heard.id ?? "", "from": "iPhone"],
+                                  forKey: Self.pendingKey)
+        log("heard-pending", ["text": heard.text, "dictation": heard.id ?? "", "from": "iPhone", "via": "app-group"])
+    }
+
     private static func dictationAwaited(heardAt seq: Int) -> Bool {
         let opened = UserDefaults.standard.double(forKey: dictationOpenedKey)
         let heard = Double(seq) / 1000

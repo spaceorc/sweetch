@@ -30,8 +30,12 @@ final class PhoneServer: @unchecked Sendable {
     /// `id`: the dictation's folder in Documents/dictation, for the keyboard's log.
     func publish(_ text: String, id: String?) {
         guard !text.isEmpty else { return }
+        let seq = Int(Date().timeIntervalSince1970 * 1000)
+        // In the app group too: the keyboard takes it from there when it's back, whether or not
+        // this app is still awake to answer.
+        SharedState.publishHeard(text, id: id, seq: seq)
         heard.lock()
-        latest = (Int(Date().timeIntervalSince1970 * 1000), text, id)
+        latest = (seq, text, id)
         delivered = false
         heard.broadcast()
         heard.unlock()
