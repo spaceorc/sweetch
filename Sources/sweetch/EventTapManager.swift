@@ -23,6 +23,7 @@ final class EventTapManager {
     private let holdToTalk: HoldToTalk
     private let onRawKey: (Int64, CGEventFlags, Bool) -> Bool
     private let onKeyDown: (CGEvent) -> Void
+    private let onPress: (CGEvent) -> Bool
     private let onMouseDown: () -> Void
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
@@ -44,11 +45,13 @@ final class EventTapManager {
          holdToTalk: HoldToTalk,
          onRawKey: @escaping (Int64, CGEventFlags, Bool) -> Bool,
          onKeyDown: @escaping (CGEvent) -> Void,
+         onPress: @escaping (CGEvent) -> Bool,
          onMouseDown: @escaping () -> Void) {
         self.bindings = bindings
         self.holdToTalk = holdToTalk
         self.onRawKey = onRawKey
         self.onKeyDown = onKeyDown
+        self.onPress = onPress
         self.onMouseDown = onMouseDown
     }
 
@@ -172,6 +175,7 @@ final class EventTapManager {
         case .keyDown, .keyUp:
             TypingLog.shared.key(type, event)
             if holdToTalk.handle(type: type, event: event) { return nil }
+            if type == .keyDown, onPress(event) { return nil }
             let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
             let flags = event.flags.intersection(relevantFlagsMask)
             if onRawKey(keyCode, flags, type == .keyDown) { return nil }

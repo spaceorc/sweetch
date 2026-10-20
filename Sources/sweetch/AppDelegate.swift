@@ -83,7 +83,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self?.handleRawKey(keyCode: keyCode, flags: flags, isDown: isDown) ?? false
             },
             onKeyDown:   { [weak self] event in self?.handleKeyDown(event) },
-            onMouseDown: { [weak self] in self?.buffer.clear(reason: "mouse click"); self?.lastCorrection = nil }
+            onPress:     { [weak self] event in self?.dictation.takeMark(event) ?? false },
+            onMouseDown: { [weak self] in self?.buffer.clear(reason: "mouse click"); self?.lastCorrection = nil; self?.dictation.dropMark() }
         )
         do {
             try manager.start()

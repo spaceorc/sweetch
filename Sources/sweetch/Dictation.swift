@@ -319,6 +319,51 @@ final class Dictation {
         }
     }
 
+    /// A dictation just typed that ends with a period, until the next key or click.
+    private struct MarkAfter {
+        let dir: URL
+        let text: String
+        let pid: pid_t
+        let at: Date
+    }
+    private let markLock = NSLock()
+    private var _markAfter: MarkAfter?
+    /// Set off the main thread (after hearing), read on the tap's.
+    private var markAfter: MarkAfter? {
+        get { markLock.withLock { _markAfter } }
+        set { markLock.withLock { _markAfter = newValue } }
+    }
+
+    /// From the event tap, every real key press before anything else sees it. «?», «!» or «)» right
+    /// after a dictation that ended with a period — nothing pressed or clicked between — takes the
+    /// period's place: the period was a guess, and this is what the sentence ends with. Kept beside
+    /// the dictation (`mark.json`), to learn a question's intonation from. True: the key is eaten,
+    /// and the period and the mark are typed in its stead.
+    func takeMark(_ event: CGEvent) -> Bool {
+        guard let mark = markAfter else { return false }
+        markAfter = nil
+        guard Date().timeIntervalSince(mark.at) < 120,
+              event.flags.intersection([.maskCommand, .maskControl]).isEmpty,
+              event.getIntegerValueField(.keyboardEventAutorepeat) == 0 else { return false }
+        var length = 0
+        var chars: [UniChar] = [0, 0, 0, 0]
+        event.keyboardGetUnicodeString(maxStringLength: chars.count, actualStringLength: &length, unicodeString: &chars)
+        let typed = String(utf16CodeUnits: chars, count: length)
+        guard ["?", "!", ")"].contains(typed),
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == mark.pid else { return false }
+        DispatchQueue.global(qos: .userInteractive).async {
+            Replayer.replace(deleteCount: 1, with: typed)
+        }
+        DictationStore.write(["mark": typed, "heard": mark.text, "after_seconds": Date().timeIntervalSince(mark.at)],
+                             to: mark.dir.appendingPathComponent("mark.json"))
+        TypingLog.shared.note("heard-mark", ["mark": typed])
+        log.info("dictation: '\(typed, privacy: .public)' in place of the period")
+        return true
+    }
+
+    /// A click: the cursor may be anywhere now.
+    func dropMark() { markAfter = nil }
+
     private final class Box: @unchecked Sendable {
         private let lock = NSLock()
         private var stored: String?
@@ -345,6 +390,7 @@ final class Dictation {
         Replayer.waitForModifierRelease()
         Replayer.replace(deleteCount: 0, with: typed)
         if let field { followUp.start(dir: session.dir, element: field.element, pid: session.app.processIdentifier) }
+        markAfter = typed.hasSuffix(".") ? MarkAfter(dir: session.dir, text: text, pid: session.app.processIdentifier, at: Date()) : nil
         return ["inserted": typed, "inserted_at": DictationStore.stamp(Date())]
     }
 

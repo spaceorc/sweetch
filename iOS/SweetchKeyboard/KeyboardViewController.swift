@@ -324,6 +324,19 @@ final class KeyboardModel {
             if let tap { wordTaps.append(tap) } else { wordTapsHold = false }
         }
         if !(typed.first?.isLetter ?? true) { noteWordEnd(typed) }
+        // «?», «!» or «)» right after a dictation that ended with a period: the period was a guess,
+        // and this is what the sentence ends with — it takes the period's place. Logged as what the
+        // dictation should have ended with, to learn a question's intonation from.
+        if "?!)".contains(typed), let heard = lastHeard, heard.text.hasSuffix("."),
+           proxy?.documentContextBeforeInput?.hasSuffix(heard.text) == true {
+            spaceIsOurs = false
+            deleteBackward()
+            insert(typed)
+            log("heard-mark", ["mark": typed, "dictation": heard.id ?? "", "heard": heard.text])
+            if shift == .once { shift = .off }
+            afterTyping()
+            return
+        }
         if spaceIsOurs, ".,!?:;".contains(typed), proxy?.documentContextBeforeInput?.hasSuffix(" ") == true {
             spaceIsOurs = false
             deleteBackward()
