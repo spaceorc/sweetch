@@ -2,7 +2,8 @@ import Cocoa
 
 /// Every key pressed on this Mac, for learning how the user types — their slips, their speed, what
 /// they put right and how — as the iPhone keyboard's log does for the phone: each key's press and
-/// release (to the millisecond), its key code and character, the modifiers, the layout; the app in
+/// release (to the millisecond; a release carries how many times the key repeated while held), its
+/// key code and character, the modifiers, the layout; the app in
 /// front when it changes; clicks (the cursor moved); our own convert and correction hotkeys.
 /// typing/<day>-<host>.jsonl, synced with the Mac mini like the phone's.
 ///
@@ -20,6 +21,9 @@ final class TypingLog {
     private var privateSince: TimeInterval?
     private let host = (ProcessInfo.processInfo.hostName.split(separator: ".").first.map(String.init) ?? "mac").lowercased()
     private var timer: DispatchSourceTimer?
+    /// Autorepeats of a key held, counted rather than logged one by one: Space held to dictate
+    /// repeats ~30 times a second, and made 80% of the log (20 Oct). Its release carries the count.
+    private var repeats: [Int64: Int] = [:]
 
     private init() {
         let timer = DispatchSource.makeTimerSource(queue: queue)
@@ -60,9 +64,13 @@ final class TypingLog {
             var chars: [UniChar] = [0, 0, 0, 0]
             event.keyboardGetUnicodeString(maxStringLength: chars.count, actualStringLength: &length, unicodeString: &chars)
             if length > 0 { fields["c"] = String(utf16CodeUnits: chars, count: length) }
-            if event.getIntegerValueField(.keyboardEventAutorepeat) != 0 { fields["r"] = 1 }
+            if event.getIntegerValueField(.keyboardEventAutorepeat) != 0 {
+                queue.async { [self] in repeats[code, default: 0] += 1 }
+                return
+            }
             fields["l"] = Self.layout()
-        case .keyUp: fields["e"] = "u"
+        case .keyUp:
+            fields["e"] = "u"
         case .flagsChanged: fields["e"] = "f"
         default: return
         }
@@ -75,6 +83,7 @@ final class TypingLog {
         if !mods.isEmpty { fields["m"] = mods }
         let app = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "?"
         queue.async { [self] in
+            if type == .keyUp, let n = repeats.removeValue(forKey: code) { fields["r"] = n }
             guard privateSince == nil else { return }
             if app != lastApp {
                 lastApp = app
