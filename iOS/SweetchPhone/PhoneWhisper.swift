@@ -137,7 +137,7 @@ final class PhoneWhisper: ObservableObject {
             self.aneLoadSeconds = seconds
             let event: [String: Any] = ["e": "phone-whisper-ane-load", "t": Date().timeIntervalSince1970,
                                         "seconds": seconds, "loaded": loaded]
-            _ = await Server.reachable()?.keyboardLog([event], batch: UUID().uuidString)
+            await PhoneLog.note([event])
         }
     }
 
@@ -312,7 +312,7 @@ final class EngineBench: ObservableObject {
                                "wanted": engine.rawValue, "front": front, "seconds": heard?.seconds ?? -1, "audio_seconds": audio,
                                "text": heard?.segments.joined() ?? "", "recording": wav.deletingLastPathComponent().lastPathComponent])
             }
-            _ = await Server.reachable()?.keyboardLog(events, batch: UUID().uuidString)
+            await PhoneLog.note(events)
             await MainActor.run {
                 self.running = false
                 UIApplication.shared.endBackgroundTask(task)

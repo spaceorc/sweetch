@@ -3,8 +3,9 @@ import UIKit
 /// Everything that happens on the keyboard, for working out why typing on it isn't yet like typing
 /// on iOS's own: every touch (where, how big, how late iOS delivered it, which key it went to, how
 /// it ended), every action and what the field held after it, the main thread's stalls, and the
-/// keyboard's own life. Kept in memory and sent to a Mac in batches; the Mac keeps it in
-/// `keyboard/` beside the dictations, and the Macs sync it.
+/// keyboard's own life. Gathered in memory, put on the phone's disk every few seconds (KeyLogSpool,
+/// the app group) and sent from there to a Mac in batches, which the Mac keeps in `keyboard/`
+/// beside the dictations, and the Macs sync.
 @MainActor
 enum KeyLog {
     /// One run of the keyboard's process: a new one means iOS started it again.
@@ -43,9 +44,16 @@ enum KeyLog {
 
     /// Sends what's gathered; what no Mac took stays for the next time.
     static func flush() async {
-        guard let deliver, !sending else { return }
+        guard !sending else { return }
         sending = true
         defer { sending = false }
+        // To the disk first: from there it outlives the keyboard, and the app can send it too.
+        if !buffer.isEmpty, KeyLogSpool.add(buffer) { buffer.removeAll() }
+        if KeyLogSpool.dir != nil {
+            if let deliver { await KeyLogSpool.flush(deliver) }
+            return
+        }
+        guard let deliver else { return }
         while true {
             if unsent == nil {
                 guard !buffer.isEmpty else { return }

@@ -187,7 +187,7 @@ final class Dictation: ObservableObject {
                 Task {
                     let event: [String: Any] = ["e": "phone-whisper", "t": Date().timeIntervalSince1970, "run": "app",
                                                 "text": text, "seconds": seconds, "audio_seconds": audioSeconds]
-                    _ = await Server.reachable()?.keyboardLog([event], batch: UUID().uuidString)
+                    await PhoneLog.note([event])
                 }
             }
         }
@@ -258,6 +258,7 @@ final class Dictation: ObservableObject {
         localContext = nil
         localDir = nil
         keyboard = nil
+        Task { await PhoneLog.flush() }
         try? FileManager.default.removeItem(at: recording)
         self.recording = nil
         await endActivity(showing: .init(phase: problem == nil || last != nil ? .done : .failed,

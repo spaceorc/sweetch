@@ -2,11 +2,16 @@ import SwiftUI
 
 @main
 struct SweetchPhoneApp: App {
+    @Environment(\.scenePhase) private var scenePhase
+
     init() {
         LivePreview.prepare()
         Credentials.load()
         PhoneServer.shared.start()   // the keyboard hears from here what the phone heard itself
-        Task { if let mac = await Server.reachable() { await Credentials.refresh(from: mac) } }
+        Task {
+            if let mac = await Server.reachable() { await Credentials.refresh(from: mac) }
+            await PhoneLog.flush()   // the keyboard's log kept on the phone, if a Mac answers now
+        }
         _ = PhoneWhisper.shared   // knows from the start whether the app is in front
         // The folder shared with the keyboard, if the signing allows one: a file to show it works.
         if let shared = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.spaceorc.sweetch") {
@@ -29,6 +34,7 @@ struct SweetchPhoneApp: App {
 
     var body: some Scene {
         WindowGroup {
+            Group {
             if ProcessInfo.processInfo.arguments.contains("--keyboard-preview") {
                 KeyboardPreview()
             } else if ProcessInfo.processInfo.arguments.contains("--metrics") {
@@ -53,6 +59,11 @@ struct SweetchPhoneApp: App {
                         let arguments = ProcessInfo.processInfo.arguments
                         if arguments.contains("--dictation-screen") { DictationScreen.open(keyboard: nil, incognito: arguments.last == "incognito") }
                     }
+            }
+            }
+            // Each time the app comes up: the keyboard's log kept on the phone, to a Mac that answers.
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active { Task { await PhoneLog.flush() } }
             }
         }
     }
