@@ -266,6 +266,9 @@ final class Dictation {
     func finishShadow() {
         guard let (session, recorder, preview, target) = shadow else { return }
         shadow = nil
+        // What the app writes isn't known yet: whether it ends with a period is read off the field
+        // when the key comes.
+        markAfter = MarkAfter(dir: session.dir, text: nil, pid: session.app.processIdentifier, at: Date())
         let held = Date().timeIntervalSince(session.startedAt)
         var appleText: (TimeInterval) -> String? = { _ in nil }
         if #available(macOS 26.0, *), let live = preview as? LivePreview {
@@ -319,10 +322,11 @@ final class Dictation {
         }
     }
 
-    /// A dictation just typed that ends with a period, until the next key or click.
+    /// A dictation just typed that ends with a period — or one the app wrote itself (`text` nil) —
+    /// until the next key or click.
     private struct MarkAfter {
         let dir: URL
-        let text: String
+        let text: String?
         let pid: pid_t
         let at: Date
     }
@@ -351,14 +355,29 @@ final class Dictation {
         let typed = String(utf16CodeUnits: chars, count: length)
         guard ["?", "!", ")"].contains(typed),
               NSWorkspace.shared.frontmostApplication?.processIdentifier == mark.pid else { return false }
+        let heard = mark.text ?? Self.textBeforeCursor()
+        guard let heard, heard.hasSuffix(".") else { return false }
         DispatchQueue.global(qos: .userInteractive).async {
             Replayer.replace(deleteCount: 1, with: typed)
         }
-        DictationStore.write(["mark": typed, "heard": mark.text, "after_seconds": Date().timeIntervalSince(mark.at)],
+        DictationStore.write(["mark": typed, "heard": String(heard.suffix(300)), "theirs": mark.text == nil, "after_seconds": Date().timeIntervalSince(mark.at)],
                              to: mark.dir.appendingPathComponent("mark.json"))
         TypingLog.shared.note("heard-mark", ["mark": typed])
         log.info("dictation: '\(typed, privacy: .public)' in place of the period")
         return true
+    }
+
+    /// What's before the cursor in the focused field, read while the key waits — an app's own
+    /// dictation (Claude's) writes there without us. In Claude Code's terminal, its input box.
+    private static func textBeforeCursor() -> String? {
+        guard let element = AX.focusedElement() else { return nil }
+        AXUIElementSetMessagingTimeout(element, 0.15)
+        guard let value = AX.string(element, kAXValueAttribute) else { return nil }
+        if let box = Theirs.claudeCodeInput(value) { return box.trimmingCharacters(in: .whitespaces) }
+        let ns = value as NSString
+        guard let selection = AX.range(element, kAXSelectedTextRangeAttribute), selection.length == 0,
+              selection.location <= ns.length else { return nil }
+        return ns.substring(to: selection.location)
     }
 
     /// A click: the cursor may be anywhere now.
