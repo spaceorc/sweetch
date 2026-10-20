@@ -286,7 +286,7 @@ def adjacent_keys(rows):
 RU_NEAR, EN_NEAR = adjacent_keys(RU_ROWS), adjacent_keys(EN_ROWS)
 
 
-def typo(key, n, general):
+def typo(key, n, general, own={}):
     """A word the user only typed, taken for a typo: one slip (a letter wrong, missing, extra or
     swapped) from a common word of the general lists — "историб", "чот", "nthe". Their slang has no
     such neighbour ("фолбэк", "парсить", "скилл"). A letter wrong is a neighbouring key's
@@ -309,7 +309,30 @@ def typo(key, n, general):
                 near.add(a + x + b[1:])
             near.add(a + x + b)
     near.discard(key)
-    return any(general.get(word, 0) >= common for word in near)
+    if any(general.get(word, 0) >= common for word in near):
+        return True
+    # Or one slip from a word the user writes far more often themselves — «доьавить» next to their
+    # «добавить» (54 times), which the general lists rank below `common` (20 Oct). Only slips inside
+    # the word: an extra letter at its ends, or a changed ending, is another word or a form
+    # («jsonb», «rebased», «транскрипта»), and short ones are abbreviations («usr», «idx»).
+    return len(key) >= 4 and any(own.get(word, 0) >= max(5, 3 * n) for word in slips(key, nearby, letters))
+
+
+def slips(key, nearby, letters):
+    """Words one slip from `key` inside it: a neighbouring key, two letters swapped, a letter typed
+    extra (none of them in the first letter or the last two), or a letter missing (not first)."""
+    near, length = set(), len(key)
+    for i in range(1, length - 1):
+        a, b = key[:i], key[i:]
+        if i <= length - 3:
+            near.add(a + b[1:])
+            near.add(a + b[1] + b[0] + b[2:])
+            for x in nearby.get(b[0], ()):
+                near.add(a + x + b[1:])
+        for x in letters:
+            near.add(a + x + b)
+    near.discard(key)
+    return near
 
 
 # `SWEETCH_FORMS=1`: each of the user's Russian words brings all its forms ("клик" → "кликом",
@@ -360,7 +383,7 @@ def main():
         said = n - typed_counts[key]
         if (said < 1 and n < 2) or not WORD.match(key) or len(key) < 2:
             continue
-        if said < 1 and key not in entries and typo(key, n, general_frequency):
+        if said < 1 and key not in entries and typo(key, n, general_frequency, counts):
             dropped += 1
             continue
         written = spellings[key].most_common(1)[0][0]
