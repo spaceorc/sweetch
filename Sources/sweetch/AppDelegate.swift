@@ -585,7 +585,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard let range = autoLayout.range(in: keys, automatic: true) else { return }
             converting = true
             let words = autoLayout.words(in: Array(keys[range])).map { "\($0.own) → \($0.other)" }
-            TypingLog.shared.note("auto-layout", ["words": words.count])
+            TypingLog.shared.note("auto-layout", ["words": words])
             log.info("auto layout: \(shown(words.joined(separator: ", ")), privacy: .public)")
             DispatchQueue.global(qos: .userInteractive).async { [weak self] in
                 guard let self else { return }

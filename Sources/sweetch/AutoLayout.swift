@@ -4,10 +4,10 @@ import Foundation
 /// or on ⌥Space. Read off the keys, in each layout as the layouts themselves type them, and
 /// weighed against the keyboard's lexicon (iOS/SweetchKeyboard/Lexicon.bin, the same file): a word
 /// is in the wrong layout when its keys make no word in the layout it was typed in, or a far rarer
-/// one, and a common word in the other. The words typed just before it in one go (no pause, click
-/// or arrow — the buffer keeps them), in the same layout, go along when the other layout suits
-/// them no worse: «yt pyf» goes over whole once «pyf» shows it (Mac bench, `replay --layouts 100 2
-/// --margin 120`, 4 days: 120 of the user's 133 layout fixes, 1–3 real words of 5233 switched).
+/// one, and a common word in the other (Mac bench, `replay --layouts 100 2 --margin 120`, 4 days:
+/// 120 of the user's 133 layout fixes, 1–3 real words of 5233 switched). On ⌥Space the words typed
+/// just before it in one go (no pause, click or arrow — the buffer keeps them), in the same layout,
+/// go along when the other layout suits them no worse: «yt pyf» goes over whole.
 ///
 /// A switch taken back with ⌥Space is the word kept as typed from then on (UserDefaults).
 final class AutoLayout {
@@ -38,7 +38,10 @@ final class AutoLayout {
         let words = self.words(in: keys)
         guard let last = words.last else { return nil }
         if automatic {
+            // The word alone: the words before it in the same go switched along added two of the
+            // user's 204 wrong-layout words in 4 days, and broke one (`replay --layout-runs`).
             guard last.own.count >= 2, !kept.contains(last.own.lowercased()), plainlyWrong(last) else { return nil }
+            return last.range.lowerBound..<keys.count
         }
         var start = last.range.lowerBound
         for word in words.dropLast().reversed() {

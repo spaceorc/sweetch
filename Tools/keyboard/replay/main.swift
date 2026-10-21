@@ -13,6 +13,8 @@ struct Export: Decodable {
         let kind: String; let taps: [Tap]; let truth: String; let typed_is_word: Bool?
         let previous: String?; let sentence_start: Bool?
         let previous2: String?; let previous2_start: Bool?
+        /// The Mac's: when the word's first and last keys came, and its go of typing.
+        let t0: Double?; let t1: Double?; let session: Int?
         /// The word after it in the text as it ended up, and whether its taps came fast.
         let next: String?; let fast: Bool?
     }
@@ -368,6 +370,58 @@ if let i = args.firstIndex(of: "--layouts") {
     print("min frequency \(minFrequency), min letters \(minLetters):")
     for (kind, c) in counts.sorted(by: { $0.key < $1.key }) { print("  \(kind): \(c.n) — switched \(c.switched), to the word meant \(c.right)") }
     lines.forEach { print($0) }
+    exit(0)
+}
+
+// `--layout-runs [<min frequency> <min letters> <margin> <gap>]`: the Mac's switching of the layout
+// replayed in order, word by word as typed: a word plainly in the wrong layout switched as it ends
+// (as --layouts), and with it — rule B — the words of the same go just before it (keys no more than
+// `gap` seconds apart, the same layout, not switched already) that the other layout suits no
+// worse; rule A switches the word alone. Counted for both, as --layouts.
+if let i = args.firstIndex(of: "--layout-runs") {
+    let n = { (k: Int, d: Double) in i + k < args.count ? Double(args[i + k]) ?? d : d }
+    let minFrequency = Int(n(1, 100)), minLetters = Int(n(2, 2)), margin = Int(n(3, 120)), gap = n(4, 2)
+    struct Seen { let word: Export.Word; let typed: String; let converted: String; let own: Int; let other: Int; let layout: String }
+    func frequency(_ w: String) -> Int { lexicon.lookup(w).map { Int(lexicon.frequency($0)) } ?? 0 }
+    var seen: [Seen] = []
+    for word in export.words where word.taps.count >= 1 {
+        let own = word.taps[0].layout
+        guard let other = keys.keys.first(where: { $0 != own }), let otherKeys = keys[other] else { continue }
+        let mine = decoder.decode(word.taps.map { WordDecoder.Tap(point: CGPoint(x: $0.x, y: $0.y), keys: keys[own] ?? [], deliberate: false) })
+        let theirs = decoder.decode(word.taps.map { WordDecoder.Tap(point: CGPoint(x: $0.x, y: $0.y), keys: otherKeys, deliberate: false) })
+        let typed = mine.literal.lowercased(), converted = theirs.literal.lowercased()
+        seen.append(Seen(word: word, typed: typed, converted: converted, own: frequency(typed), other: frequency(converted), layout: own))
+    }
+    for rule in ["A", "B"] {
+        var switched = Set<Int>()
+        var extra: [String] = []
+        for (j, w) in seen.enumerated() {
+            let plainly = w.typed.count >= minLetters && w.other >= minFrequency && (w.own == 0 || w.own + margin <= w.other)
+            guard plainly else { continue }
+            switched.insert(j)
+            guard rule == "B" else { continue }
+            var k = j
+            while k > 0 {
+                let p = seen[k - 1], next = seen[k]
+                guard p.word.session == w.word.session, let t1 = p.word.t1, let t0 = next.word.t0, t0 - t1 <= gap,
+                      !switched.contains(k - 1), p.layout == w.layout, p.other > 0, p.other >= p.own else { break }
+                switched.insert(k - 1)
+                extra.append("  \(p.word.kind == "clean" && p.word.typed_is_word == true ? "BREAKS" : "      ") [\(p.word.kind)] \(p.typed) → \(p.converted) (before \(w.typed) → \(w.converted))")
+                k -= 1
+            }
+        }
+        var counts: [String: (n: Int, switched: Int, right: Int)] = [:]
+        for (j, w) in seen.enumerated() {
+            let kind = w.word.kind == "clean" ? (w.word.typed_is_word == true ? "clean, a word" : "clean, no word") : w.word.kind
+            var c = counts[kind] ?? (0, 0, 0)
+            c.n += 1
+            if switched.contains(j) { c.switched += 1; if w.converted == w.word.truth.lowercased() { c.right += 1 } }
+            counts[kind] = c
+        }
+        print("rule \(rule) (\(rule == "A" ? "the word alone" : "with the go before it")):")
+        for (kind, c) in counts.sorted(by: { $0.key < $1.key }) { print("  \(kind): \(c.n) — switched \(c.switched), to the word meant \(c.right)") }
+        if rule == "B", verbose { extra.forEach { print($0) } }
+    }
     exit(0)
 }
 

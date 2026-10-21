@@ -83,6 +83,8 @@ def letters_by_key(evs):
 
 def examples(evs, letters):
     buf = []            # (char, key code, layout)
+    times = []          # when each of buf was typed
+    session = 0         # one go of typing: a new one each time the place is lost
     finished = {}       # start index in buf → example, until the place is lost
     out = []
     pending = None      # a deletion under way: (the word's keys before it, its start)
@@ -106,11 +108,16 @@ def examples(evs, letters):
         out.extend(finished[k] for k in sorted(finished))
         finished = {}
 
+    def when(start, n):
+        """When the word at `start`, `n` keys long, began and ended, and its go."""
+        return {"t0": times[start], "t1": times[min(start + n, len(times)) - 1], "session": session}
+
     def lose_place():
-        nonlocal buf, pending
+        nonlocal buf, times, session, pending
         close()
         flush()
-        buf = []
+        buf, times = [], []
+        session += 1
 
     def finish():
         start = word_start()
@@ -118,13 +125,14 @@ def examples(evs, letters):
         if start in finished:
             return   # put right on the way: the attempt is the example
         if len(word) >= 2 and all(code in GEOMETRY for _, code, _ in word) and len({l for _, _, l in word}) == 1:
-            finished[start] = {"kind": "clean", "taps": [tap(*k) for k in word], "truth": "".join(c for c, _, _ in word), **context_of(start)}
+            finished[start] = {"kind": "clean", "taps": [tap(*k) for k in word], "truth": "".join(c for c, _, _ in word),
+                               **context_of(start), **when(start, len(word))}
 
     def close():
         nonlocal pending
         if pending is None:
             return
-        before, start = pending
+        before, start, before_times = pending
         pending = None
         after = buf[word_start():]
         if len(before) < 2 or not after or any(code not in GEOMETRY for _, code, _ in before):
@@ -141,7 +149,8 @@ def examples(evs, letters):
             kind = "fixed"
         else:
             return
-        finished[start] = {"kind": kind, "taps": [tap(*k) for k in before], "truth": wa, **context_of(start)}
+        finished[start] = {"kind": kind, "taps": [tap(*k) for k in before], "truth": wa, **context_of(start),
+                           "t0": before_times[0], "t1": before_times[-1], "session": session}
 
     def delete():
         """One letter deleted: a word it reaches is being put right (or rewritten), no longer as typed."""
@@ -155,13 +164,14 @@ def examples(evs, letters):
                 while end > 0 and not buf[end - 1][0].isalpha():
                     end -= 1
                 start = word_start(end)
-                pending = (list(buf[start:end]), start)
+                pending = (list(buf[start:end]), start, list(times[start:end]))
             else:
-                pending = (list(buf[start:]), start)
+                pending = (list(buf[start:]), start, list(times[start:]))
         at = len(buf) - 1
         for s in [s for s, ex in finished.items() if s + len(ex["taps"]) > at]:
             del finished[s]
         buf.pop()
+        times.pop()
 
     for e in evs:
         kind = e.get("e")
@@ -181,7 +191,8 @@ def examples(evs, letters):
                 converted = [(letters.get((code, other)), code, other) for _, code, _ in word]
                 if all(c for c, _, _ in converted):
                     truth = "".join(c.upper() if o.isupper() else c for (c, _, _), (o, _, _) in zip(converted, word))
-                    finished[start] = {"kind": "layout", "taps": [tap(*k) for k in word], "truth": truth, **context_of(start)}
+                    finished[start] = {"kind": "layout", "taps": [tap(*k) for k in word], "truth": truth,
+                                       **context_of(start), **when(start, len(word))}
             lose_place()
             continue
         if kind in ("app", "click", "private", "private-end"):
@@ -220,6 +231,7 @@ def examples(evs, letters):
             close()
             finish()
         buf.append((c, code, layout))
+        times.append(e["t"])
     lose_place()
     return out
 
