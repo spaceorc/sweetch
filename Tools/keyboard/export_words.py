@@ -55,9 +55,10 @@ def examples(events):
             i -= 1
         return i
 
-    def previous_word(start):
+    def previous_word(start, text=None):
         """The word before the one at `start`, and whether a sentence starts there."""
-        text = "".join(t["char"] if isinstance(t, dict) else t for t in buffer[:start])
+        if text is None:
+            text = "".join(t["char"] if isinstance(t, dict) else t for t in buffer[:start])
         i = len(text)
         while i > 0 and not (text[i - 1].isalpha() or text[i - 1].isdigit()):
             i -= 1
@@ -69,22 +70,35 @@ def examples(events):
             j -= 1
         return text[j:i], False
 
+    def context_of(start):
+        """The word before the one at `start`, whether a sentence starts there, and the word
+        before that (previous2_start: a sentence starts before the previous word)."""
+        text = "".join(t["char"] if isinstance(t, dict) else t for t in buffer[:start])
+        previous, sentence_start = previous_word(start, text)
+        previous2, previous2_start = None, False
+        if previous is not None:
+            i = len(text)
+            while i > 0 and not (text[i - 1].isalpha() or text[i - 1].isdigit()):
+                i -= 1
+            previous2, previous2_start = previous_word(start, text[:i - len(previous)])
+        return {"previous": previous, "sentence_start": sentence_start, "previous2": previous2, "previous2_start": previous2_start}
+
     def finish():
         start = word_start()
         letters = buffer[start:]
         if not letters:
             return
-        previous, sentence_start = previous_word(start)
+        ctx = context_of(start)
         truth = "".join(t["char"] for t in letters)
         taps = attempts.pop(start, None)
         if taps is None:
-            finished[start] = {"kind": "clean", "taps": letters, "truth": truth, "previous": previous, "sentence_start": sentence_start}
+            finished[start] = {"kind": "clean", "taps": letters, "truth": truth, **ctx}
         else:
             literal = "".join(t["char"] for t in taps)
             if literal.lower() == truth.lower():
-                finished[start] = {"kind": "clean", "taps": letters, "truth": truth, "previous": previous, "sentence_start": sentence_start}
+                finished[start] = {"kind": "clean", "taps": letters, "truth": truth, **ctx}
             elif damerau(literal.lower(), truth.lower()) <= 2:
-                finished[start] = {"kind": "fixed", "taps": taps, "truth": truth, "previous": previous, "sentence_start": sentence_start}
+                finished[start] = {"kind": "fixed", "taps": taps, "truth": truth, **ctx}
 
     def flush():
         finish()
@@ -180,8 +194,8 @@ def examples(events):
                     buffer.pop()
             taps = attempts.pop(start, None)
             if taps and damerau("".join(t["char"] for t in taps).lower(), e["suggestion"].lower()) <= 2:
-                previous, sentence_start = previous_word(start)
-                finished[start] = {"kind": "fixed", "taps": taps, "truth": e["suggestion"], "previous": previous, "sentence_start": sentence_start}
+                ctx = context_of(start)
+                finished[start] = {"kind": "fixed", "taps": taps, "truth": e["suggestion"], **ctx}
             buffer.extend(e.get("suggestion", "") + " ")
         elif kind in ("heard", "autofix"):
             finish()

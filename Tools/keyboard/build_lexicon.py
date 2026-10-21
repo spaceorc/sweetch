@@ -464,6 +464,10 @@ def main():
     bigram_path = output.with_name("Bigrams.bin")
     size = write_bigrams(weights, bigram_path)
     print(f"{bigram_path}: {len(weights)} word pairs, {size / 1e6:.1f} MB")
+    if not os.environ.get("SWEETCH_NO_NGRAMS"):
+        sys.path.insert(0, str(Path(__file__).resolve().parent))   # run with -I: its own folder isn't on the path
+        import ngrams
+        ngrams.write(ids, output.with_name("NextWords.bin"), personal_texts() + sent_messages())
     print(f"{output}: {len(entries)} words ({general} general, {boosted} of them yours, {added} only yours, {dropped} typed ones taken for typos), "
           f"{len(order)} nodes, {len(data) / 1e6:.1f} MB")
 

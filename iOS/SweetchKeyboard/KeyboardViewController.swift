@@ -980,6 +980,7 @@ final class KeyboardModel {
             if let url = Bundle.main.url(forResource: "Lexicon", withExtension: "bin"), let lexicon = Lexicon(url: url) {
                 let bigrams = Bundle.main.url(forResource: "Bigrams", withExtension: "bin").flatMap(Bigrams.init)
                 decoder = WordDecoder(lexicon: lexicon, bigrams: bigrams)
+                decoder?.nextWords = Bundle.main.url(forResource: "NextWords", withExtension: "bin").flatMap(NextWords.init)
             } else {
                 decoderFailed = true
                 DispatchQueue.main.async { KeyLog.note("decoder-missing") }
@@ -1481,9 +1482,14 @@ final class KeyboardModel {
         // Before a letter of the next word: the words likeliest after the last one.
         if word.isEmpty, !insideWord, before.last?.isWhitespace == true, !Self.decoderFailed, !before.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let capital = previous.sentenceStart && proxy?.autocapitalizationType != UITextAutocapitalizationType.none
+            // And the word before it: the next words come from the two.
+            let previous2 = previous.word.map { word -> (word: String?, sentenceStart: Bool) in
+                let rest = String(before.reversed().drop { !$0.isLetter && !$0.isNumber }.reversed())
+                return previousWord(before: String(rest.dropLast(word.count)) + " ")
+            }
             Self.decoderQueue.async { [weak self] in
                 guard let decoder = Self.loadDecoder() else { return }
-                let words = decoder.predictions(Self.context(previous, recent: recent, lexicon: decoder.lexicon))
+                let words = decoder.predictions(Self.context(previous, recent: recent, lexicon: decoder.lexicon, previous2: previous2))
                     .map { capital ? $0.prefix(1).uppercased() + $0.dropFirst() : $0 }
                 DispatchQueue.main.async {
                     guard let self, self.word.isEmpty else { return }
@@ -1556,9 +1562,12 @@ final class KeyboardModel {
 
     /// What the decoder is told of the text around the word: the word before, and the recent ones.
     private static func context(_ previous: (word: String?, sentenceStart: Bool), recent: [String],
-                                lexicon: Lexicon) -> WordDecoder.Context {
+                                lexicon: Lexicon, previous2: (word: String?, sentenceStart: Bool)? = nil) -> WordDecoder.Context {
         var context = WordDecoder.Context()
         if previous.sentenceStart { context.previous = 0 } else if let word = previous.word { context.previous = lexicon.lookup(word) }
+        if let previous2, !previous.sentenceStart {
+            if previous2.sentenceStart { context.previous2 = 0 } else if let word = previous2.word { context.previous2 = lexicon.lookup(word) }
+        }
         context.recent = Set(recent.compactMap { lexicon.lookup($0) })
         context.boosts = memory.boosts()
         return context

@@ -12,6 +12,7 @@ struct Export: Decodable {
     struct Word: Decodable {
         let kind: String; let taps: [Tap]; let truth: String; let typed_is_word: Bool?
         let previous: String?; let sentence_start: Bool?
+        let previous2: String?; let previous2_start: Bool?
         /// The word after it in the text as it ended up, and whether its taps came fast.
         let next: String?; let fast: Bool?
     }
@@ -48,6 +49,10 @@ let keys: [String: [WordDecoder.Key]] = export.layouts.mapValues { rows in
 }
 let bigrams = args.contains("--no-context") ? nil : Bigrams(url: URL(fileURLWithPath: args[1]).deletingLastPathComponent().appendingPathComponent("Bigrams.bin"))
 var decoder = WordDecoder(lexicon: lexicon, bigrams: bigrams)
+// The predictions from NextWords.bin beside the lexicon, unless `--no-next-words` (the bigrams').
+if !args.contains("--no-next-words") {
+    decoder.nextWords = NextWords(url: URL(fileURLWithPath: args[1]).deletingLastPathComponent().appendingPathComponent("NextWords.bin"))
+}
 if let i = args.firstIndex(of: "--threshold"), i + 1 < args.count, let t = Float(args[i + 1]) { decoder.threshold = t }
 if args.contains("--by-confidence") { decoder.byConfidence = true }
 if let i = args.firstIndex(of: "--language"), i + 1 < args.count, let l = Float(args[i + 1]) { decoder.costs.language = l }
@@ -88,6 +93,7 @@ if let i = args.firstIndex(of: "--bench"), i + 1 < args.count {
         var context = WordDecoder.Context()
         if word.sentence_start == true { context.previous = 0 } else if let previous = word.previous { context.previous = lexicon.lookup(previous.lowercased()) }
         if recentCount > 0 { context.recent = Set(typedSoFar.suffix(recentCount)) }
+        if word.previous2_start == true { context.previous2 = 0 } else if let p2 = word.previous2 { context.previous2 = lexicon.lookup(p2.lowercased()) }
         let truth = word.truth.lowercased(), typed = word.taps.map(\.char).joined().lowercased()
         let truthIsWord = lexicon.lookup(truth) != nil
         let result = decoder.decode(taps, context: context)
@@ -282,6 +288,38 @@ if let i = args.firstIndex(of: "--alternatives") {
     print("the meant word among all the candidates: \(found) of \(wrong.corrected + wrong.left); not in the lexicon: \(unknown); found with one tap taken out: \(droppedFinds)")
     print("the meant word's gap when among the two: \(gaps.sorted().map { String(format: "%.2f", $0) }.joined(separator: " "))")
     shownLines.forEach { print($0) }
+    exit(0)
+}
+
+// `--predict-texts <texts.json>`: the next-word predictions on sentences the user wrote (a JSON
+// list of texts) — before each word, from the one or two before it: how often it's first, and in
+// the three. On held-out texts (a lexicon built SWEETCH_UNTIL their day) it's the honest measure.
+if let i = args.firstIndex(of: "--predict-texts"), i + 1 < args.count {
+    let texts = try JSONDecoder().decode([String].self, from: Data(contentsOf: URL(fileURLWithPath: args[i + 1])))
+    let token = try NSRegularExpression(pattern: "[A-Za-zА-Яа-яЁё]+(?:[-'’][A-Za-zА-Яа-яЁё]+)*")
+    var n = 0, first = 0, three = 0
+    for text in texts {
+        for sentence in text.components(separatedBy: CharacterSet(charactersIn: ".!?…\n")) {
+            let ns = sentence as NSString
+            let words = token.matches(in: sentence, range: NSRange(location: 0, length: ns.length)).map { ns.substring(with: $0.range).lowercased() }
+            var previous2: Int?, previous: Int? = 0
+            for word in words {
+                let node = lexicon.lookup(word)
+                if let node, let p = previous {
+                    var context = WordDecoder.Context()
+                    context.previous = p
+                    context.previous2 = previous2
+                    let shown = decoder.predictions(context).map { $0.lowercased() }
+                    n += 1
+                    if shown.first == word { first += 1 }
+                    if shown.contains(word) { three += 1 }
+                }
+                previous2 = previous
+                previous = node
+            }
+        }
+    }
+    print("\(n) words: first \(first) (\(String(format: "%.1f", 100 * Double(first) / Double(max(n, 1))))%), in three \(three) (\(String(format: "%.1f", 100 * Double(three) / Double(max(n, 1))))%)")
     exit(0)
 }
 

@@ -67,6 +67,8 @@ final class WordDecoder {
     let lexicon: Lexicon
     /// Words likelier after others; without it, only how common each word is counts.
     let bigrams: Bigrams?
+    /// The next words after one word or two, for the predictions; nil: from the bigrams.
+    var nextWords: NextWords?
     /// How much a word used lately is lifted (0–15, as a word pair's): 12 on the bench's held-out
     /// day (18 Oct 2026) saved 19.4% of keystrokes against 18.6% at the old 4, broke nothing more;
     /// 15 began to spoil next-word predictions.
@@ -88,6 +90,8 @@ final class WordDecoder {
     /// lately (their nodes), which are likelier again.
     struct Context {
         var previous: Int?
+        /// The word before that (0: a sentence starts before `previous`); nil when unknown.
+        var previous2: Int?
         var recent: Set<Int> = []
         /// The words the user types on the phone (node → lift, 0–255).
         var boosts: [Int: Int] = [:]
@@ -107,6 +111,9 @@ final class WordDecoder {
 
     /// The likeliest next words before a letter is typed: those seen after the word before.
     func predictions(_ context: Context, limit: Int = 3) -> [String] {
+        if let nextWords, let previous = context.previous {
+            return nextWords.predict(after: context.previous2, previous, limit: limit).map { lexicon.word(at: $0.word) }
+        }
         guard let previous = context.previous, let bigrams else { return [] }
         let words = bigrams.next(after: previous, limit: 24).map(\.word)
         return Array(Set(words))

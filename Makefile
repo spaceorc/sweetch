@@ -213,7 +213,9 @@ sync-install:
 	@echo "syncing with the Mac mini every five minutes; log: ~/Library/Logs/sweetch-sync.log"
 
 # The iPhone keyboard's lexicon (Tools/keyboard/build_lexicon.py): general Russian and English word
-# lists plus the user's own words, into the file the keyboard memory-maps.
+# lists plus the user's own words, into the file the keyboard memory-maps; beside it the word pairs
+# and the next words after one word or two (Tools/keyboard/ngrams.py, from the Leipzig corpora —
+# ~500 MB downloaded once into ~/Library/Caches/sweetch/corpora — and the user's texts).
 LEXICON = iOS/SweetchKeyboard/Lexicon.bin
 
 lexicon:
