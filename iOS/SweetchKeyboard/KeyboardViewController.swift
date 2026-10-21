@@ -1283,7 +1283,8 @@ final class KeyboardModel {
         let start = String(before.dropLast(around?.before ?? 0))
         let previous = previousWord(before: start)
         let recent = recentWords
-        let remembered = tapsByWord.last { $0.word == target && $0.taps.count == target.filter(\.isLetter).count }?.taps
+        // A word put right keeps the taps of what was typed, however many.
+        let remembered = tapsByWord.last { $0.word == target }?.taps
         let layout: Layout = target.unicodeScalars.contains { (0x0400...0x04FF).contains($0.value) } ? .russian : .english
         let keys = (controller as? KeyboardViewController)?.letterKeys(for: layout) ?? []
         let asked = target
@@ -1294,7 +1295,7 @@ final class KeyboardModel {
             let taps = remembered ?? lower.compactMap { letter in
                 keys.first { $0.letter == letter }.map { WordDecoder.Tap(point: CGPoint(x: $0.frame.midX, y: $0.frame.midY), keys: keys, deliberate: false) }
             }
-            guard taps.count == lower.count, taps.count >= 2 else { return }
+            guard remembered != nil || taps.count == lower.count, taps.count >= 2 else { return }
             let context = Self.context(previous, recent: recent, lexicon: decoder.lexicon)
             let capital = asked.first?.isUppercase == true
             var found: [String] = []
@@ -1453,6 +1454,10 @@ final class KeyboardModel {
         let insideWord = proxy?.documentContextAfterInput?.first?.isLetter == true
         let previous = previousWord(before: before)
         let recent = recentWords
+        // A word gone back to, or selected (the text before a selection ends with a space, as
+        // before the next word: ahead of the predictions).
+        wordFix = nil
+        if offerFixes(before: before, insideWord: insideWord) { return }
         // Before a letter of the next word: the words likeliest after the last one.
         if word.isEmpty, !insideWord, before.last?.isWhitespace == true, !Self.decoderFailed, !before.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let capital = previous.sentenceStart && proxy?.autocapitalizationType != UITextAutocapitalizationType.none
@@ -1468,8 +1473,6 @@ final class KeyboardModel {
             }
             return
         }
-        wordFix = nil
-        if offerFixes(before: before, insideWord: insideWord) { return }
         guard !word.isEmpty, !insideWord else {
             suggestions = []
             return
