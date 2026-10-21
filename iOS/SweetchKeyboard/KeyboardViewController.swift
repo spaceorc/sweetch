@@ -1025,12 +1025,12 @@ final class KeyboardModel {
     /// word meant for 12 of the 139 that went in wrong, an offer after 1.4% of those that went in
     /// right). Once the word has ended: a decode for each of its taps is too much on every letter.
     private func offerWithOneTapOut(word: String, typed: String, taps: [WordDecoder.Tap], boundary: String, before: String) {
-        let previous = previousWord(before: String(before.dropLast(typed.count)))
+        let (previous, previous2) = previousWords(before: String(before.dropLast(typed.count)))
         let recent = recentWords
         let fixed = autoFixed != nil
         Self.decoderQueue.async { [weak self] in
             guard let decoder = Self.loadDecoder() else { return }
-            let context = Self.context(previous, recent: recent, lexicon: decoder.lexicon)
+            let context = Self.context(previous, recent: recent, lexicon: decoder.lexicon, previous2: previous2)
             guard let best = decoder.decode(taps, context: context).candidates.first?.cost else { return }
             var found: (word: String, cost: Float)?
             for drop in taps.indices {
@@ -1060,11 +1060,11 @@ final class KeyboardModel {
     /// A word ended before its correction was worked out — fast typing, a short word: worked out
     /// now, and put in — also when the next word has been begun meanwhile, which stays as typed.
     private func correctLate(_ word: String, taps: [WordDecoder.Tap], boundary: String, before: String) {
-        let previous = previousWord(before: String(before.dropLast(word.count)))
+        let (previous, previous2) = previousWords(before: String(before.dropLast(word.count)))
         let recent = recentWords, keep = keepAsTyped
         Self.decoderQueue.async { [weak self] in
             guard let decoder = Self.loadDecoder() else { return }
-            let context = Self.context(previous, recent: recent, lexicon: decoder.lexicon)
+            let context = Self.context(previous, recent: recent, lexicon: decoder.lexicon, previous2: previous2)
             let (fixed, confidence, alternatives) = Self.correction(of: word, taps: taps, decoder: decoder, context: context, keep: keep)
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -1148,12 +1148,12 @@ final class KeyboardModel {
     }
 
     private func shadowDecode(_ word: String, taps: [WordDecoder.Tap]) {
-        let previous = previousWord(before: proxy?.documentContextBeforeInput ?? "")
+        let (previous, previous2) = previousWords(before: proxy?.documentContextBeforeInput ?? "")
         let recent = recentWords
         Self.decoderQueue.async {
             guard let decoder = Self.loadDecoder() else { return }
             let started = Date()
-            let result = decoder.decode(taps, context: Self.context(previous, recent: recent, lexicon: decoder.lexicon))
+            let result = decoder.decode(taps, context: Self.context(previous, recent: recent, lexicon: decoder.lexicon, previous2: previous2))
             let ms = Int(Date().timeIntervalSince(started) * 1000)
             DispatchQueue.main.async {
                 KeyLog.note("decoder", [
@@ -1290,7 +1290,7 @@ final class KeyboardModel {
         target = target.trimmingCharacters(in: CharacterSet(charactersIn: "-'’"))
         guard target.count >= 2 else { return false }
         let start = String(before.dropLast(around?.before ?? 0))
-        let previous = previousWord(before: start)
+        let (previous, previous2) = previousWords(before: start)
         let recent = recentWords
         // A word put right keeps the taps of what was typed, however many.
         let remembered = tapsByWord.last { $0.word == target }?.taps
@@ -1305,7 +1305,7 @@ final class KeyboardModel {
                 keys.first { $0.letter == letter }.map { WordDecoder.Tap(point: CGPoint(x: $0.frame.midX, y: $0.frame.midY), keys: keys, deliberate: false) }
             }
             guard remembered != nil || taps.count == lower.count, taps.count >= 2 else { return }
-            let context = Self.context(previous, recent: recent, lexicon: decoder.lexicon)
+            let context = Self.context(previous, recent: recent, lexicon: decoder.lexicon, previous2: previous2)
             let capital = asked.first?.isUppercase == true
             var found: [String] = []
             func add(_ word: String) {
@@ -1461,7 +1461,7 @@ final class KeyboardModel {
         let before = proxy?.documentContextBeforeInput ?? ""
         word = String(before.reversed().prefix { $0.isLetter || $0 == "'" || $0 == "’" }.reversed())
         let insideWord = proxy?.documentContextAfterInput?.first?.isLetter == true
-        let previous = previousWord(before: before)
+        let (previous, previous2) = previousWords(before: before)
         let recent = recentWords
         // A smiley typed as text: the emoji for it, to put in its place.
         if word.isEmpty, !insideWord, let smiley = Emoji.smiley(endOf: before) {
@@ -1482,11 +1482,6 @@ final class KeyboardModel {
         // Before a letter of the next word: the words likeliest after the last one.
         if word.isEmpty, !insideWord, before.last?.isWhitespace == true, !Self.decoderFailed, !before.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let capital = previous.sentenceStart && proxy?.autocapitalizationType != UITextAutocapitalizationType.none
-            // And the word before it: the next words come from the two.
-            let previous2 = previous.word.map { word -> (word: String?, sentenceStart: Bool) in
-                let rest = String(before.reversed().drop { !$0.isLetter && !$0.isNumber }.reversed())
-                return previousWord(before: String(rest.dropLast(word.count)) + " ")
-            }
             Self.decoderQueue.async { [weak self] in
                 guard let decoder = Self.loadDecoder() else { return }
                 let words = decoder.predictions(Self.context(previous, recent: recent, lexicon: decoder.lexicon, previous2: previous2))
@@ -1510,7 +1505,7 @@ final class KeyboardModel {
             let capital = word.first?.isUppercase == true
             Self.decoderQueue.async { [weak self] in
                 guard let decoder = Self.loadDecoder() else { return }
-                let context = Self.context(previous, recent: recent, lexicon: decoder.lexicon)
+                let context = Self.context(previous, recent: recent, lexicon: decoder.lexicon, previous2: previous2)
                 let result = decoder.decode(taps, complete: true, context: context)
                 // What a space would put right, worked out now so the space doesn't wait: the decoder's
                 // correction, unless the word as typed is one the system knows or the user kept.
@@ -1548,6 +1543,17 @@ final class KeyboardModel {
         }
     }
     private static var recent = UserDefaults.standard.stringArray(forKey: "recentWords") ?? []
+
+    /// The word before the one being typed and the word before that (the next words come from
+    /// the two); the second nil when the first is unknown or starts the sentence.
+    private func previousWords(before text: String) -> (previous: (word: String?, sentenceStart: Bool), previous2: (word: String?, sentenceStart: Bool)?) {
+        let previous = previousWord(before: text)
+        guard let word = previous.word else { return (previous, nil) }
+        var rest = Substring(text)
+        while let last = rest.last, last.isLetter || last == "'" || last == "’" || last == "-" { rest = rest.dropLast() }
+        rest = rest.dropLast(rest.reversed().prefix { !$0.isLetter && !$0.isNumber }.count)
+        return (previous, previousWord(before: String(rest.dropLast(word.count)) + " "))
+    }
 
     /// The word before the one being typed, from the text before it — nil at a sentence's start.
     private func previousWord(before text: String) -> (word: String?, sentenceStart: Bool) {

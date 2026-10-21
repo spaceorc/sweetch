@@ -73,6 +73,13 @@ final class WordDecoder {
     /// day (18 Oct 2026) saved 19.4% of keystrokes against 18.6% at the old 4, broke nothing more;
     /// 15 began to spoil next-word predictions.
     var recentLift = 12
+    /// How far a word likely after the two before it is lifted: to 255 + this × log₂ of its
+    /// probability there, when that's above its own frequency. 0: not at all.
+    /// On the bench (21 Oct): 8 put the word first among the suggestions earlier for 10 more words
+    /// and two more of the user's fixes right, nothing broken; 16–32 the same or a little less.
+    var nextWordScale: Float = 8
+    /// How many of the likeliest next words are lifted.
+    var nextWordLimit = 8
     var costs = Costs()
     /// LatinIME's "modest" autocorrection threshold on its normalised score.
     var threshold: Float = 0.185
@@ -92,6 +99,8 @@ final class WordDecoder {
         var previous: Int?
         /// The word before that (0: a sentence starts before `previous`); nil when unknown.
         var previous2: Int?
+        /// The next words likeliest after those two (node → probability), filled in by `decode`.
+        var next: [Int: Float]?
         var recent: Set<Int> = []
         /// The words the user types on the phone (node → lift, 0–255).
         var boosts: [Int: Int] = [:]
@@ -105,8 +114,9 @@ final class WordDecoder {
         var lift = 0
         if let previous = context.previous, let bigrams { lift = bigrams.weight(of: node, after: previous) }
         if context.recent.contains(node) { lift = max(lift, recentLift) }
-        guard lift > 0 else { return frequency }
-        return frequency + Float(lift + 1) * (255 - frequency) / 16.5
+        let lifted = lift > 0 ? frequency + Float(lift + 1) * (255 - frequency) / 16.5 : frequency
+        guard nextWordScale > 0, let p = context.next?[node] else { return lifted }
+        return max(lifted, min(255, 255 + nextWordScale * log2(p)))
     }
 
     /// The likeliest next words before a letter is typed: those seen after the word before.
@@ -204,6 +214,10 @@ final class WordDecoder {
 
     /// `complete`: also words the taps so far begin — for suggestions while the word is typed.
     func decode(_ taps: [Tap], complete: Bool = false, context: Context = Context()) -> Result {
+        var context = context
+        if nextWordScale > 0, context.next == nil, let nextWords, let previous = context.previous {
+            context.next = Dictionary(nextWords.predict(after: context.previous2, previous, limit: nextWordLimit).map { ($0.word, $0.p) }) { a, _ in a }
+        }
         let spreads = taps.map(spread)
         let literal = String(spreads.map(\.landed))
         let literalNode = lexicon.lookup(literal)

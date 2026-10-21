@@ -58,6 +58,8 @@ if args.contains("--by-confidence") { decoder.byConfidence = true }
 if let i = args.firstIndex(of: "--language"), i + 1 < args.count, let l = Float(args[i + 1]) { decoder.costs.language = l }
 if let i = args.firstIndex(of: "--substitution"), i + 1 < args.count, let v = Float(args[i + 1]) { decoder.costs.substitution = v }
 if let i = args.firstIndex(of: "--distance"), i + 1 < args.count, let v = Float(args[i + 1]) { decoder.costs.distance = v }
+if let i = args.firstIndex(of: "--next-word-limit"), i + 1 < args.count, let v = Int(args[i + 1]) { decoder.nextWordLimit = v }
+if let i = args.firstIndex(of: "--next-word-scale"), i + 1 < args.count, let v = Float(args[i + 1]) { decoder.nextWordScale = v }
 if let i = args.firstIndex(of: "--beam"), i + 1 < args.count, let v = Int(args[i + 1]) { decoder.costs.beam = v }
 
 // `--bench <name>`: the bench — every measure at once, on the user's own typing, saved as
@@ -298,6 +300,9 @@ if let i = args.firstIndex(of: "--predict-texts"), i + 1 < args.count {
     let texts = try JSONDecoder().decode([String].self, from: Data(contentsOf: URL(fileURLWithPath: args[i + 1])))
     let token = try NSRegularExpression(pattern: "[A-Za-zА-Яа-яЁё]+(?:[-'’][A-Za-zА-Яа-яЁё]+)*")
     var n = 0, first = 0, three = 0
+    // `--dump <file.json>`: each word with the one before and the three shown, for a closer look.
+    let dumpPath = args.firstIndex(of: "--dump").flatMap { j in j + 1 < args.count ? args[j + 1] : nil }
+    var dump: [[String: Any]]? = dumpPath == nil ? nil : []
     for text in texts {
         for sentence in text.components(separatedBy: CharacterSet(charactersIn: ".!?…\n")) {
             let ns = sentence as NSString
@@ -310,6 +315,7 @@ if let i = args.firstIndex(of: "--predict-texts"), i + 1 < args.count {
                     context.previous = p
                     context.previous2 = previous2
                     let shown = decoder.predictions(context).map { $0.lowercased() }
+                    if dump != nil { dump!.append(["previous": lexicon.word(at: p).lowercased(), "word": word, "shown": shown]) }
                     n += 1
                     if shown.first == word { first += 1 }
                     if shown.contains(word) { three += 1 }
@@ -319,6 +325,7 @@ if let i = args.firstIndex(of: "--predict-texts"), i + 1 < args.count {
             }
         }
     }
+    if let dumpPath, let dump { try JSONSerialization.data(withJSONObject: dump).write(to: URL(fileURLWithPath: dumpPath)) }
     print("\(n) words: first \(first) (\(String(format: "%.1f", 100 * Double(first) / Double(max(n, 1))))%), in three \(three) (\(String(format: "%.1f", 100 * Double(three) / Double(max(n, 1))))%)")
     exit(0)
 }
