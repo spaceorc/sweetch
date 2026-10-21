@@ -12,12 +12,14 @@ enum LayoutTranslator {
     private static let cacheLock = NSLock()
     private static var cachedMaps: Maps?
     private static var cachedReverse: [String: [Character: (keyCode: CGKeyCode, shift: Bool)]] = [:]
+    private static var cachedKeyChars: (primary: [Int: Character], secondary: [Int: Character])?
 
     /// Build the caches ahead of time, on the main thread, at startup.
     static func prewarm() {
         _ = buildMaps()
         _ = reverseKeyMap(forIDs: InputSourceSwitcher.primaryIDs)
         _ = reverseKeyMap(forIDs: InputSourceSwitcher.secondaryIDs)
+        _ = keyChars()
         DistributedNotificationCenter.default().addObserver(
             forName: NSNotification.Name(kTISNotifyEnabledKeyboardInputSourcesChanged as String),
             object: nil, queue: .main
@@ -25,6 +27,7 @@ enum LayoutTranslator {
             cacheLock.lock()
             cachedMaps = nil
             cachedReverse.removeAll()
+            cachedKeyChars = nil
             cacheLock.unlock()
             log.info("layout maps invalidated: installed input sources changed")
         }
@@ -116,6 +119,23 @@ enum LayoutTranslator {
         }
         cacheLock.lock()
         cachedReverse[cacheKey] = built
+        cacheLock.unlock()
+        return built
+    }
+
+    /// What each key types in each layout (key code, | 0x100 with Shift) — read from the layouts
+    /// themselves: the character in a key event can be the previous layout's (TypingLog).
+    static func keyChars() -> (primary: [Int: Character], secondary: [Int: Character]) {
+        cacheLock.lock()
+        let cached = cachedKeyChars
+        cacheLock.unlock()
+        if let cached { return cached }
+        let built: (primary: [Int: Character], secondary: [Int: Character]) = MainQueue.sync {
+            (findSource(ids: InputSourceSwitcher.primaryIDs).map(keyCodeToChar) ?? [:],
+             findSource(ids: InputSourceSwitcher.secondaryIDs).map(keyCodeToChar) ?? [:])
+        }
+        cacheLock.lock()
+        cachedKeyChars = built
         cacheLock.unlock()
         return built
     }

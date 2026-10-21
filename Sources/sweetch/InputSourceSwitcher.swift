@@ -26,6 +26,14 @@ enum InputSourceSwitcher {
         }
     }
 
+    /// The layout among `ids` selected, whatever is selected now.
+    static func select(_ ids: [String]) {
+        MainQueue.sync {
+            guard let target = installedKeyboardSources().first(where: { ids.contains(sourceID(of: $0)) }) else { return }
+            TISSelectInputSource(target)
+        }
+    }
+
     static func toggle() {
         MainQueue.sync {
             let sources = installedKeyboardSources()

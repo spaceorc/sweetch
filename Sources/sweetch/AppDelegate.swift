@@ -13,6 +13,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private static let serverEnabledKey = "dictationServerEnabled"
     private let server = DictationServer()
     private var converting = false
+    private let autoLayout = AutoLayout()
+    /// The last switch to the other layout made on its own, and when — ⌥Space right after takes it back.
+    private var lastAutoLayout: (range: Range<Int>, at: Date)?
     private var llmCorrecting = false
     /// The last correction we applied (what we typed, and what was there before), for undo.
     /// Valid only until the user's next keystroke / click / window switch.
@@ -170,10 +173,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 case .converted:
                     self.buffer.clear(reason: "after selection convert")
                 case .noSelection, .autocompleteDismissed:
-                    Replayer.convertLastWord(buffer: self.buffer)
+                    self.convertTyped()
                 }
             }
         }
+    }
+
+    /// ⌥Space with nothing selected. Right after a switch made on its own: taken back, and its
+    /// words kept as typed from then on. Otherwise the last word goes to the other layout, with
+    /// those of the same go before it that suit it no worse.
+    private func convertTyped() {
+        let keys = buffer.snapshot()
+        if let last = lastAutoLayout, Date().timeIntervalSince(last.at) < 30, last.range.upperBound == keys.count {
+            lastAutoLayout = nil
+            autoLayout.keep(keys, range: last.range)
+            TypingLog.shared.note("auto-layout-undone")
+            Replayer.convert(range: last.range, buffer: buffer)
+            return
+        }
+        lastAutoLayout = nil
+        guard let range = autoLayout.range(in: keys, automatic: false) ?? buffer.lastWordRange() else {
+            log.info("convert: buffer empty, nothing to convert")
+            return
+        }
+        Replayer.convert(range: range, buffer: buffer)
     }
 
     private enum LLMTarget {
@@ -554,6 +577,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             sourceID: sourceID,
             timestamp: Date()
         ))
+        // A plain space after a word typed in the wrong layout: the word, and those of the same go
+        // that suit the other layout too, typed again in it.
+        if keyCode == 49, flags.intersection([.maskShift, .maskAlternate]).isEmpty, !converting,
+           Privacy.check(NSWorkspace.shared.frontmostApplication) == nil {
+            let keys = buffer.snapshot()
+            guard let range = autoLayout.range(in: keys, automatic: true) else { return }
+            converting = true
+            let words = autoLayout.words(in: Array(keys[range])).map { "\($0.own) → \($0.other)" }
+            TypingLog.shared.note("auto-layout", ["words": words.count])
+            log.info("auto layout: \(shown(words.joined(separator: ", ")), privacy: .public)")
+            DispatchQueue.global(qos: .userInteractive).async { [weak self] in
+                guard let self else { return }
+                Replayer.convert(range: range, buffer: self.buffer)
+                DispatchQueue.main.async {
+                    self.lastAutoLayout = (range, Date())
+                    self.converting = false
+                }
+            }
+        }
     }
 
     private func observeAppActivation() {

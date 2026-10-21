@@ -14,51 +14,34 @@ enum Replayer {
         return src
     }()
 
-    static func convertLastWord(buffer: KeystrokeBuffer) {
-        guard let range = buffer.lastWordRange() else {
-            log.info("convert: buffer empty, nothing to convert")
-            return
-        }
+    /// The keystrokes in `range` — words and the spaces between and after them — typed again in the
+    /// other layout than the one they were typed in, which stays on for what comes next (⌥Space,
+    /// and AutoLayout on its own). Each key carries the character it makes there, from the layout
+    /// itself — not the event's, which can be the previous layout's (TypingLog) — so the receiver
+    /// needn't have caught up with the switch («ыafari» in Spotlight). Returns the layout now on.
+    @discardableResult
+    static func convert(range: Range<Int>, buffer: KeystrokeBuffer) -> String? {
         let snapshot = buffer.snapshot()
-        let word = Array(snapshot[range])
-        let count = word.count
-        let typed = word.map { $0.chars }.joined()
-        log.info("convert: replaying \(count, privacy: .public) keystrokes (was: '\(shown(typed), privacy: .public)')")
-
-        // 1. Backspaces, flags=[] to avoid Cmd+Backspace if user still holds the hotkey.
-        for _ in 0..<count {
-            postKey(keyCode: 51, flags: [], down: true)
-            postKey(keyCode: 51, flags: [], down: false)
-        }
-
-        // 2. Switch input source — for what's typed next.
-        InputSourceSwitcher.toggle()
+        guard range.lowerBound >= 0, range.upperBound <= snapshot.count, !range.isEmpty else { return nil }
+        let keys = Array(snapshot[range])
+        let wasSecondary = InputSourceSwitcher.secondaryIDs.contains(keys[0].sourceID)
+        let targetIDs = wasSecondary ? InputSourceSwitcher.primaryIDs : InputSourceSwitcher.secondaryIDs
+        let chars = LayoutTranslator.keyChars()
+        let target = wasSecondary ? chars.primary : chars.secondary
+        // Backspaces with no modifiers: the hotkey's may still be held.
+        for _ in keys { postKeyPair(keyCode: 51, flags: []) }
+        InputSourceSwitcher.select(targetIDs)
         usleep(20_000)
-
-        // 3. Replay each keystroke with the character it makes in the other layout carried in
-        //    the event. The receiver picks a layout change up when it gets to it — Spotlight
-        //    later than 20 ms — and a bare keyCode would come out in the old layout ("ыafari");
-        //    the character in the event doesn't wait for it (nor mind a modifier still held).
-        let (toSecondary, toPrimary) = LayoutTranslator.buildMaps()
-        for k in word {
+        for k in keys {
+            let shift = k.flags.contains(.maskShift)
+            let text = k.keyCode == 49 ? nil : target[Int(k.keyCode) | (shift ? 0x100 : 0)].map(String.init)
             let flags = k.flags.intersection(.maskShift)
-            let map = InputSourceSwitcher.secondaryIDs.contains(k.sourceID) ? toPrimary : toSecondary
-            let text = k.chars.count == 1 ? other(Character(k.chars), in: map) : nil
             postKey(keyCode: k.keyCode, flags: flags, down: true, text: text)
             postKey(keyCode: k.keyCode, flags: flags, down: false, text: text)
         }
-
-        // 4. Remember new layout on the same buffer entries so another press toggles back.
-        let newSourceID = InputSourceSwitcher.currentSourceID()
-        buffer.relabel(range: range, sourceID: newSourceID)
-    }
-
-    /// `c` in the other layout; a capital through its small letter (the maps are built unshifted).
-    private static func other(_ c: Character, in map: [Character: Character]) -> String? {
-        if let o = map[c] { return String(o) }
-        let lower = Character(c.lowercased())
-        guard lower != c, let o = map[lower] else { return nil }
-        return o.uppercased()
+        let now = InputSourceSwitcher.currentSourceID()
+        buffer.relabel(range: range, sourceID: now)
+        return now
     }
 
     static func postKeyPair(keyCode: Int64, flags: CGEventFlags) {

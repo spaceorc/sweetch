@@ -99,6 +99,7 @@ app: build setup-signing $(ICON_ICNS)
 	@cp .build/release/$(APP_NAME) $(APP_BUNDLE)/Contents/MacOS/$(APP_NAME)
 	@cp $(PLIST_SRC) $(APP_BUNDLE)/Contents/Info.plist
 	@cp $(ICON_ICNS) $(ICON_DIR)/Assets.car $(APP_BUNDLE)/Contents/Resources/
+	@cp $(LEXICON) $(APP_BUNDLE)/Contents/Resources/ 2>/dev/null || echo "warning: no lexicon (make lexicon) — no switching of the layout"
 	@cp .env $(APP_BUNDLE)/Contents/Resources/sweetch.env 2>/dev/null || echo "warning: .env missing — LLM correction disabled"
 	@codesign --force --sign "$(SIGN_ID)" $(APP_BUNDLE)
 	@touch $(APP_BUNDLE)
@@ -115,6 +116,7 @@ debug: setup-signing $(ICON_ICNS)
 	@cp .build/debug/$(APP_NAME) $(APP_BUNDLE)/Contents/MacOS/$(APP_NAME)
 	@cp $(PLIST_SRC) $(APP_BUNDLE)/Contents/Info.plist
 	@cp $(ICON_ICNS) $(ICON_DIR)/Assets.car $(APP_BUNDLE)/Contents/Resources/
+	@cp $(LEXICON) $(APP_BUNDLE)/Contents/Resources/ 2>/dev/null || echo "warning: no lexicon (make lexicon) — no switching of the layout"
 	@cp .env $(APP_BUNDLE)/Contents/Resources/sweetch.env 2>/dev/null || echo "warning: .env missing — LLM correction disabled"
 	@codesign --force --sign "$(SIGN_ID)" $(APP_BUNDLE)
 	@$(MAKE) --no-print-directory start
