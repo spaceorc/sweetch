@@ -374,6 +374,31 @@ def add_forms(key, own, entries):
     return n
 
 
+# The other forms of a word the user uses, lifted to this far below it (SWEETCH_LEMMA_LIFT; 0: off):
+# their own count goes to the forms they happened to use — «заголовках» at 200, «заголовка» left
+# at the general lists' 91 — and a typo of the other form became the one used («щаголовка», 21 Oct).
+# On the bench, 60: 10 more typos left in put right, one more of the user's fixes and one more
+# wrong, the word first among the suggestions earlier for 9 more; 30 made more wrong, 90 fixed less.
+LEMMA_LIFT = int(__import__("os").environ.get("SWEETCH_LEMMA_LIFT", "60"))
+
+
+def lift_forms(key, own, entries):
+    """The other forms of the user's word the general lists have, lifted to `LEMMA_LIFT` below it."""
+    if MORPH is None or not re.search("[а-яё]", key):
+        return
+    parses = MORPH.parse(key)
+    if not parses or not MORPH.word_is_known(key):
+        return
+    for form in parses[0].lexeme:
+        word = form.word.replace("ё", "е") if "ё" not in key else form.word
+        if word == key or word not in entries:
+            continue
+        frequency, flags = entries[word]
+        if flags & 8:
+            continue   # the user's own: its own count says
+        entries[word] = (max(frequency, own - LEMMA_LIFT), flags)
+
+
 def main():
     output = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parents[2] / "iOS/SweetchKeyboard/Lexicon.bin"
     entries, written_as = {}, {}
@@ -416,6 +441,8 @@ def main():
             added += 1
         if FORMS:
             forms_added += add_forms(key, own, entries)
+        if LEMMA_LIFT:
+            lift_forms(key, own, entries)
 
     if FORMS:
         print(f"forms of the user's words: {forms_added} added")
