@@ -44,11 +44,29 @@ enum Emoji {
             ("🚀 🎉", ["релиз", "задеплоил", "выкатил", "release", "shipped", "launch"]),
             ("🐛 😬", ["баг", "bug"]),
             ("✅ 👍", ["готово", "сделал", "сделала", "done"]),
+            // Smileys typed as text: the emoji they stand for, in their place.
+            ("🙂 😊", [":)", ":-)", "(:"]),
+            ("😄 😂", [":d", ":-d"]),
+            ("🙁 😔", [":(", ":-("]),
+            ("😢 😭", [":'("]),
+            ("😉", [";)", ";-)"]),
+            ("😛 😜", [":p", ":-p"]),
+            ("😘", [":*", ":-*"]),
+            ("😮", [":o", ":-o"]),
+            ("😐", [":|", ":-|"]),
+            ("❤️", ["<3"]),
         ]
         var map: [String: String] = [:]
         for (emoji, words) in groups { for word in words { map[word] = emoji } }
         return map
     }()
+
+    /// The text smiley the text ends with — «:)», «;-)», «<3» — after a space or at the start.
+    static func smiley(endOf text: String) -> String? {
+        let last = String(text.reversed().prefix { !$0.isWhitespace }.reversed())
+        guard last.count >= 2, !last.allSatisfy(\.isLetter), byWord[last.lowercased()] != nil else { return nil }
+        return last
+    }
 
     /// The emoji that come with `word`, as they came, likeliest first.
     static func defaults(_ word: String) -> [String] {

@@ -32,6 +32,7 @@ Usage: Tools/keyboard/build_lexicon.py [output path]
 import collections
 import json
 import math
+import os
 import re
 import struct
 import sys
@@ -286,6 +287,11 @@ def adjacent_keys(rows):
 RU_NEAR, EN_NEAR = adjacent_keys(RU_ROWS), adjacent_keys(EN_ROWS)
 
 
+# How common a form of a known Russian word must be in the general lists for a typed word one slip
+# from it to be taken for its typo (SWEETCH_FORM_COMMON to try others).
+FORM_COMMON = int(os.environ.get("SWEETCH_FORM_COMMON", "60"))
+
+
 def typo(key, n, general, own={}):
     """A word the user only typed, taken for a typo: one slip (a letter wrong, missing, extra or
     swapped) from a common word of the general lists — "историб", "чот", "nthe". Their slang has no
@@ -311,6 +317,16 @@ def typo(key, n, general, own={}):
     near.discard(key)
     if any(general.get(word, 0) >= common for word in near):
         return True
+    # Or one slip from a form of a Russian word less common than that, but a word all the same
+    # (pymorphy3 knows it, not the typed one): the general lists rank each form apart, and a form
+    # of a common word may be rare — «щаголовка», typed twice, by «заголовка» at 91 (21 Oct).
+    # Only a letter swapped for its neighbour's, inside a word long enough not to be slang or a
+    # name (six letters still had «таптик», «реплей», «пинить»): an extra or a missing letter makes
+    # another word as often («креды», «джоба», «слак»).
+    if cyrillic and len(key) >= 7:
+        swapped = {key[:i] + x + key[i + 1:] for i in range(len(key)) for x in nearby.get(key[i], ())}
+        if any(general.get(word, 0) >= FORM_COMMON and real_word(word) for word in swapped):
+            return True
     # Or one slip from a word the user writes far more often themselves — «доьавить» next to their
     # «добавить» (54 times), which the general lists rank below `common` (20 Oct). Only slips inside
     # the word: an extra letter at its ends, or a changed ending, is another word or a form

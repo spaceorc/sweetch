@@ -804,7 +804,7 @@ final class KeyboardModel {
     /// after it already (a word fixed in the middle of the text), where a space would be a second.
     /// What a tap on the emoji suggestion does: while a word is typed it takes the word's place;
     /// after the word is done (a space typed) it's added at the end.
-    private enum EmojiUse { case replace, append }
+    private enum EmojiUse: Equatable { case replace, append, smiley(String) }
     private var emojiUse: EmojiUse?
     /// The word the strip's emoji are for (what a pick is remembered under, what «not for this
     /// word» hides them for).
@@ -859,8 +859,12 @@ final class KeyboardModel {
                 wordTapsHold = true
                 for _ in word { deleteBackward() }
             }
+            if case .smiley(let typed) = use, (proxy?.documentContextBeforeInput ?? "").hasSuffix(typed) {
+                for _ in typed { deleteBackward() }
+            }
             insert(suggestion + " ")
-            log("choose", ["word": word, "suggestion": suggestion, "emoji": use == .replace ? "replace" : "append", "from": suggestionsFrom])
+            let how = switch use { case .replace: "replace"; case .append: "append"; case .smiley: "smiley" }
+            log("choose", ["word": emojiWord ?? word, "suggestion": suggestion, "emoji": how, "from": suggestionsFrom])
             spaceIsOurs = true
             lastSpaceAt = Date()
             afterTyping()
@@ -1207,6 +1211,10 @@ final class KeyboardModel {
         guard before.hasSuffix(fix.fixed + fix.boundary) else { return }
         for _ in 0..<(fix.fixed.count + fix.boundary.count) { deleteBackward() }
         insert(fix.typed + fix.boundary)
+        // The runners-up stay on offer, now in place of the word as typed.
+        if let offer = offered, offer.word == fix.fixed {
+            offered = Offered(word: fix.typed, typed: fix.typed, boundary: offer.boundary, fixed: false, alternatives: offer.alternatives)
+        }
         log("autofix-undone", ["typed": fix.typed, "fixed": fix.fixed, "by": "button"])
         keep(fix.typed)
         afterTyping()
@@ -1454,6 +1462,18 @@ final class KeyboardModel {
         let insideWord = proxy?.documentContextAfterInput?.first?.isLetter == true
         let previous = previousWord(before: before)
         let recent = recentWords
+        // A smiley typed as text: the emoji for it, to put in its place.
+        if word.isEmpty, !insideWord, let smiley = Emoji.smiley(endOf: before) {
+            let emoji = Emoji.ranked(for: smiley)
+            if !emoji.isEmpty {
+                wordFix = nil
+                suggestionsFrom = "smiley"
+                suggestions = [emoji.joined(separator: " ")]
+                emojiUse = .smiley(smiley)
+                emojiWord = smiley
+                return
+            }
+        }
         // A word gone back to, or selected (the text before a selection ends with a space, as
         // before the next word: ahead of the predictions).
         wordFix = nil
