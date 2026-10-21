@@ -149,9 +149,41 @@ enum SelectionConverter {
         let element = AXUIElementCreateApplication(app.processIdentifier)
         AXUIElementSetMessagingTimeout(element, 0.2)
         var own: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXFocusedUIElementAttribute as CFString, &own) == .success,
-              let own, CFGetTypeID(own) == AXUIElementGetTypeID() else { return nil }
-        return (own as! AXUIElement)
+        if AXUIElementCopyAttributeValue(element, kAXFocusedUIElementAttribute as CFString, &own) == .success,
+           let own, CFGetTypeID(own) == AXUIElementGetTypeID() {
+            return (own as! AXUIElement)
+        }
+        return focusedInWindow(of: element)
+    }
+
+    /// The element marked focused in the app's focused window, looked for down its tree: Chrome
+    /// answers "no value" to which element has the focus — a GitHub comment box, 22 Oct, Space held
+    /// there twice and passed through — while the box itself says it's focused. A field is found
+    /// in some 1,500 elements; the search stops at 6,000 or 150 ms.
+    private static func focusedInWindow(of app: AXUIElement) -> AXUIElement? {
+        var window: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &window) == .success,
+              let window, CFGetTypeID(window) == AXUIElementGetTypeID() else { return nil }
+        let started = Date()
+        var queue = [window as! AXUIElement]
+        var head = 0
+        while head < queue.count, head < 6000, Date().timeIntervalSince(started) < 0.15 {
+            let element = queue[head]
+            head += 1
+            var focused: CFTypeRef?
+            if AXUIElementCopyAttributeValue(element, kAXFocusedAttribute as CFString, &focused) == .success,
+               (focused as? Bool) == true, head > 1 {
+                var role: CFTypeRef?
+                AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role)
+                if ["AXTextArea", "AXTextField", "AXComboBox", "AXSearchField"].contains(role as? String ?? "") { return element }
+            }
+            var children: CFTypeRef?
+            if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &children) == .success,
+               let list = children as? [AXUIElement] {
+                queue.append(contentsOf: list)
+            }
+        }
+        return nil
     }
 
     /// Electron apps (Claude, sometimes Slack) build no Accessibility tree until an assistive
