@@ -21,6 +21,8 @@ struct KeyboardPreview: UIViewControllerRepresentable {
         case "english": keyboard.model.switchLanguage()
         case "digits": keyboard.model.switchDigits()
         case "undo": keyboard.model.previewCorrection(typed: "Егт", fixed: "Его")
+        case "alternatives": keyboard.model.previewAlternatives(typed: "сделае", fixed: "сделан", alternatives: ["сделаем", "сделает"])
+        case "alternatives-left": keyboard.model.previewAlternatives(typed: "модно", fixed: nil, alternatives: ["можно", "мощно"])
         case "symbols":
             keyboard.model.switchDigits()
             keyboard.model.switchSymbols()

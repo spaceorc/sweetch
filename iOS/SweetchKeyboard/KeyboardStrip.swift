@@ -71,23 +71,33 @@ final class KeyboardStrip: UIView {
         guard let model else { return }
         showIncognito(model.incognito)
         // Just after a correction: first, the word as typed, to take it back.
+        // Then the decoder's runners-up for it (green), and the suggestions in what room is left.
         let undo = model.revertOffer
-        let words = (undo.map { [$0] } ?? []) + model.suggestions.prefix(undo == nil ? 3 : 2)
+        let forward = Array(model.alternativesOffer.prefix(undo == nil ? 3 : 2))
+        let lead = (undo.map { [$0] } ?? []) + forward
+        let words = lead + model.suggestions.filter { !forward.contains($0) }.prefix(3 - lead.count)
+        func kind(_ index: Int) -> SuggestionView.Kind {
+            undo != nil && index == 0 ? .undo : index < lead.count ? .forward : .word
+        }
         suggestions.isHidden = words.isEmpty
         note.isHidden = !words.isEmpty
         insert.isHidden = !words.isEmpty || model.last == nil
         note.text = model.incognito ? model.status : model.last ?? model.status
         note.textColor = model.last == nil ? .secondaryLabel : .label
 
-        let shown = suggestions.arrangedSubviews.compactMap { ($0 as? SuggestionView).map { $0.undo ? "↶" + $0.word : $0.word } }
-        guard shown != words.enumerated().map({ $0.offset == 0 && undo != nil ? "↶" + $0.element : $0.element }) else { return }
+        let shown = suggestions.arrangedSubviews.compactMap { ($0 as? SuggestionView).map { "\($0.kind)" + $0.word } }
+        guard shown != words.enumerated().map({ "\(kind($0.offset))" + $0.element }) else { return }
         suggestions.arrangedSubviews.forEach { $0.removeFromSuperview() }
         for (index, word) in words.enumerated() {
-            let isUndo = index == 0 && undo != nil
-            suggestions.addArrangedSubview(SuggestionView(word: word, divided: index > 0 && !(index == 1 && undo != nil),
-                                                          undo: isUndo, model: model) { [weak model] picked in
+            let k = kind(index)
+            suggestions.addArrangedSubview(SuggestionView(word: word, divided: index > 0 && kind(index) == .word && kind(index - 1) == .word,
+                                                          kind: k, model: model) { [weak model] picked in
                 UIDevice.current.playInputClick()
-                if isUndo { model?.revertAutoFix() } else { model?.choose(suggestion: picked) }
+                switch k {
+                case .undo: model?.revertAutoFix()
+                case .forward: model?.chooseAlternative(picked)
+                case .word: model?.choose(suggestion: picked)
+                }
             })
         }
     }
@@ -104,15 +114,18 @@ final class KeyboardStrip: UIView {
 }
 
 /// One suggestion: the word, and a hairline between it and the one before. `undo`: the word as
-/// typed, to take a correction back — a button that looks like one, not another word.
+/// typed, to take a correction back — a red capsule, a button that looks like one, not another
+/// word. `forward`: a word the decoder nearly put in instead of the one just ended — a green one.
 private final class SuggestionView: UIView {
+    enum Kind { case word, undo, forward }
     let word: String
-    let undo: Bool
+    let kind: Kind
+    var undo: Bool { kind == .undo }
 
     /// `chosen`: what was tapped — the word, or one of the emoji of an emoji group.
-    init(word: String, divided: Bool, undo: Bool = false, model: KeyboardModel? = nil, chosen: @escaping (String) -> Void) {
+    init(word: String, divided: Bool, kind: Kind = .word, model: KeyboardModel? = nil, chosen: @escaping (String) -> Void) {
         self.word = word
-        self.undo = undo
+        self.kind = kind
         super.init(frame: .zero)
         let button: UIView
         if Emoji.isEmoji(word) {
@@ -130,21 +143,16 @@ private final class SuggestionView: UIView {
                 group.addArrangedSubview(one)
             }
             button = group
-        } else if undo {
-            var look = UIButton.Configuration.gray()
+        } else if undo || kind == .forward {
+            var look = UIButton.Configuration.filled()
             look.cornerStyle = .capsule
-            look.image = UIImage(systemName: "arrow.uturn.backward",
-                                 withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .semibold))
-            look.imagePadding = 6
-            look.baseForegroundColor = .label
-            look.contentInsets = NSDirectionalEdgeInsets(top: 5, leading: 12, bottom: 5, trailing: 14)
-            look.attributedTitle = AttributedString("«\(word)»", attributes: AttributeContainer([.font: UIFont.systemFont(ofSize: 16, weight: .medium)]))
+            look.baseBackgroundColor = undo ? .label : .clear
+            look.baseForegroundColor = undo ? .systemBackground : .label
+            look.contentInsets = NSDirectionalEdgeInsets(top: 5, leading: 10, bottom: 5, trailing: 10)
+            look.attributedTitle = AttributedString(word, attributes: AttributeContainer([.font: UIFont.systemFont(ofSize: 16, weight: .medium)]))
             look.titleLineBreakMode = .byTruncatingMiddle
-            let capsule = UIButton(configuration: look)
-            capsule.layer.borderColor = UIColor.separator.cgColor
-            capsule.layer.borderWidth = 1 / UIScreen.main.scale
-            capsule.layer.cornerRadius = 16
-            capsule.accessibilityLabel = "Undo correction, keep \(word)"
+            let capsule = undo ? UIButton(configuration: look) : DashedCapsule(configuration: look)
+            capsule.accessibilityLabel = undo ? "Undo correction, keep \(word)" : "Replace with \(word)"
             capsule.addAction(UIAction { _ in chosen(word) }, for: .touchUpInside)
             button = capsule
         } else {
@@ -158,7 +166,7 @@ private final class SuggestionView: UIView {
         }
         button.translatesAutoresizingMaskIntoConstraints = false
         addSubview(button)
-        if undo {
+        if kind != .word {
             NSLayoutConstraint.activate([
                 button.centerXAnchor.constraint(equalTo: centerXAnchor),
                 button.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -210,5 +218,21 @@ private final class SuggestionView: UIView {
         })
         items.append(UIMenu(options: .displayInline, children: hide))
         return UIMenu(title: emoji, children: items)
+    }
+}
+
+/// A capsule drawn with a dashed outline: a word that could go in, not one that's there.
+private final class DashedCapsule: UIButton {
+    private let outline = CAShapeLayer()
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        if outline.superlayer == nil { layer.addSublayer(outline) }
+        outline.frame = bounds
+        outline.path = UIBezierPath(roundedRect: bounds.insetBy(dx: 0.75, dy: 0.75), cornerRadius: bounds.height / 2).cgPath
+        outline.fillColor = nil
+        outline.strokeColor = UIColor.label.withAlphaComponent(0.55).resolvedColor(with: traitCollection).cgColor
+        outline.lineWidth = 1.5
+        outline.lineDashPattern = [4, 3]
     }
 }

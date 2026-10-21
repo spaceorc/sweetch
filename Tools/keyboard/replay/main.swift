@@ -223,7 +223,7 @@ if let i = args.firstIndex(of: "--alternatives") {
     var wrong = (corrected: 0, correctedHelped: 0, left: 0, leftHelped: 0, broke: 0)
     var right = (words: 0, shown: 0)
     var gaps: [Float] = []
-    var found = 0, unknown = 0
+    var found = 0, unknown = 0, droppedFinds = 0
     var shownLines: [String] = []
     for word in export.words where word.taps.count >= 2 {
         let taps = word.taps.map { WordDecoder.Tap(point: CGPoint(x: $0.x, y: $0.y), keys: keys[$0.layout] ?? [], deliberate: $0.deliberate) }
@@ -252,7 +252,17 @@ if let i = args.firstIndex(of: "--alternatives") {
             if verbose { shownLines.append("  BROKE \(typed) → \(live) [\(word.kind)]") }
             continue   // the undo covers it
         }
-        if result.candidates.contains(where: { $0.word.lowercased() == truth }) { found += 1 } else if lexicon.lookup(truth) == nil { unknown += 1 }
+        if result.candidates.contains(where: { $0.word.lowercased() == truth }) { found += 1 } else if lexicon.lookup(truth) == nil { unknown += 1 } else if taps.count >= 3 {
+            // Not found: would it be, with one tap taken out (struck by accident)?
+            var best: (String, Float)?
+            for drop in taps.indices {
+                var fewer = taps
+                fewer.remove(at: drop)
+                if let c = decoder.decode(fewer, context: context).candidates.first, best == nil || c.cost < best!.1 { best = (c.word.lowercased(), c.cost) }
+            }
+            if best?.0 == truth { droppedFinds += 1 }
+            if verbose { shownLines.append("  DROP  \(typed), meant \(truth): one tap out gives \(best?.0 ?? "-")") }
+        }
         let at = alternatives.first { $0.0 == truth }
         if let at { gaps.append(at.1) }
         let helped = near.contains { $0.0 == truth }
@@ -269,9 +279,49 @@ if let i = args.firstIndex(of: "--alternatives") {
     }
     print("gap \(gap): words that went in right \(right.words), runners-up shown on \(right.shown) (\(100 * right.shown / max(right.words, 1))%)")
     print("went in wrong: corrected wrongly \(wrong.corrected) — the word offered for \(wrong.correctedHelped); typo left \(wrong.left) — offered for \(wrong.leftHelped); a real word corrected away \(wrong.broke) (the undo)")
-    print("the meant word among all the candidates: \(found) of \(wrong.corrected + wrong.left); not in the lexicon: \(unknown)")
+    print("the meant word among all the candidates: \(found) of \(wrong.corrected + wrong.left); not in the lexicon: \(unknown); found with one tap taken out: \(droppedFinds)")
     print("the meant word's gap when among the two: \(gaps.sorted().map { String(format: "%.2f", $0) }.joined(separator: " "))")
     shownLines.forEach { print($0) }
+    exit(0)
+}
+
+// `--drop-one <penalty> [<gap>]`: the word decoded again with each tap taken out in turn (one
+// struck by accident), its best offered when within `gap` of the decoder's best once `penalty` is
+// added. Counted: the word meant offered where what went in was wrong, and offers on words that
+// went in right.
+if let i = args.firstIndex(of: "--drop-one"), i + 1 < args.count, let penalty = Float(args[i + 1]) {
+    let gap = i + 2 < args.count ? Float(args[i + 2]) ?? 0.1 : 0.1
+    var helped = 0, wrongs = 0, noise = 0, rights = 0
+    var lines: [String] = []
+    for word in export.words where word.taps.count >= 3 {
+        let taps = word.taps.map { WordDecoder.Tap(point: CGPoint(x: $0.x, y: $0.y), keys: keys[$0.layout] ?? [], deliberate: $0.deliberate) }
+        var context = WordDecoder.Context()
+        if word.sentence_start == true { context.previous = 0 } else if let previous = word.previous { context.previous = lexicon.lookup(previous.lowercased()) }
+        let result = decoder.decode(taps, context: context)
+        let truth = word.truth.lowercased(), typed = word.taps.map(\.char).joined().lowercased()
+        let live = (result.correction ?? result.literal).lowercased()
+        guard let best = result.candidates.first?.cost else { continue }
+        var offer: (String, Float)?
+        for drop in taps.indices {
+            var fewer = taps
+            fewer.remove(at: drop)
+            for c in decoder.decode(fewer, context: context).candidates.prefix(1) {
+                let w = c.word.lowercased()
+                guard w != live, w != typed, c.cost + penalty - best <= gap else { continue }
+                if offer == nil || c.cost < offer!.1 { offer = (w, c.cost) }
+            }
+        }
+        let wentRight = live == truth || (word.kind == "clean" && result.correction != nil && !(word.typed_is_word ?? true))
+        if wentRight {
+            rights += 1
+            if let offer { noise += 1; if verbose { lines.append("  NOISE \(typed) → \(live); offers \(offer.0)") } }
+        } else if !(result.correction != nil && typed == truth) {
+            wrongs += 1
+            if offer?.0 == truth { helped += 1; lines.append("  HELPS \(typed) → \(live), meant \(truth)") }
+        }
+    }
+    print("penalty \(penalty) gap \(gap): the word meant offered for \(helped) of \(wrongs) gone in wrong; offers on \(noise) of \(rights) gone in right")
+    lines.forEach { print($0) }
     exit(0)
 }
 

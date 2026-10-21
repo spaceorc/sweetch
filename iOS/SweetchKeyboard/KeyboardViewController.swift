@@ -319,6 +319,7 @@ final class KeyboardModel {
 
     func typeCharacter(_ key: String, tap: WordDecoder.Tap? = nil) {
         autoFixed = nil
+        offered = nil
         let typed = display(key)
         if typed.first?.isLetter == true {
             if let tap { wordTaps.append(tap) } else { wordTapsHold = false }
@@ -368,6 +369,7 @@ final class KeyboardModel {
     /// the sentence — not three spaces in a row.
     func space() {
         autoFixed = nil
+        offered = nil
         noteWordEnd(" ")
         let before = proxy?.documentContextBeforeInput ?? ""
         if spaceIsOurs, before.hasSuffix(" ") {
@@ -395,6 +397,7 @@ final class KeyboardModel {
 
     func newline() {
         autoFixed = nil
+        offered = nil
         spaceIsOurs = false
         guard returnKey.enabled else {
             log("return-disabled")
@@ -407,6 +410,7 @@ final class KeyboardModel {
     }
 
     func backspace() {
+        offered = nil
         lastWord = nil
         if wordTaps.isEmpty { wordTapsHold = false } else { wordTaps.removeLast() }
         spaceIsOurs = false
@@ -834,6 +838,7 @@ final class KeyboardModel {
     }
 
     func choose(suggestion: String) {
+        offered = nil
         if Emoji.isEmoji(suggestion), let use = emojiUse {
             emojiUse = nil
             if !incognito, let emojiWord { EmojiMemory.shared.pick(Emoji.base(of: suggestion), for: emojiWord) }
@@ -871,6 +876,7 @@ final class KeyboardModel {
         let before = proxy?.documentContextBeforeInput ?? ""
         var word = String(before.reversed().prefix { $0.isLetter || $0 == "'" || $0 == "’" || $0 == "-" }.reversed())
         let taps = wordTaps, hold = wordTapsHold, times = wordTapTimes
+        let typed = word
         wordTaps = []
         wordTapsHold = true
         guard !word.isEmpty else {
@@ -910,8 +916,15 @@ final class KeyboardModel {
             autoFixed = AutoFix(typed: word, fixed: fixed, boundary: boundary)
             word = fixed
         }
+        if tapped, let pending, pending.word == typed, contraction == nil,
+           autoFixed == nil || (autoFixed?.typed == typed && autoFixed?.fixed == pending.fixed) {
+            offer(pending.alternatives, for: word, typed: typed, boundary: boundary, fixed: autoFixed != nil)
+        }
+        if tapped, contraction == nil, taps.count >= 3, (offered?.alternatives.count ?? 0) < 2 {
+            offerWithOneTapOut(word: word, typed: typed, taps: taps, boundary: boundary, before: before)
+        }
         // The word before, looked at again now that this one follows it.
-        if tapped, autoFixed == nil, let last = lastWord { lookAgain(at: last, next: word, boundary: boundary, before: before) }
+        if tapped, autoFixed == nil, offered == nil, let last = lastWord { lookAgain(at: last, next: word, boundary: boundary, before: before) }
         lastWord = nil
         if tapped {
             let gaps = zip(times, times.dropFirst()).map { $1.timeIntervalSince($0) }.sorted()
@@ -962,7 +975,7 @@ final class KeyboardModel {
     /// What a word's taps put right, if anything: the decoder's correction, unless the word as typed
     /// is one the system knows or the user kept. On `decoderQueue`.
     private static func correction(of asked: String, taps: [WordDecoder.Tap], decoder: WordDecoder,
-                                   context: WordDecoder.Context, keep: [String: Double]) -> (String?, Float) {
+                                   context: WordDecoder.Context, keep: [String: Double]) -> (String?, Float, [String]) {
         let exact = decoder.decode(taps, context: context)
         var fixed = exact.correction
         // A word the user took corrections back from needs a surer one: each take-back raises the
@@ -970,7 +983,61 @@ final class KeyboardModel {
         let bar = decoder.threshold + 0.12 * Float(keep[asked.lowercased()] ?? 0)
         if fixed != nil, exact.confidence < bar || systemKnows(asked) { fixed = nil }
         if let word = fixed, asked.first?.isUppercase == true { fixed = word.prefix(1).uppercased() + word.dropFirst() }
-        return (fixed, exact.confidence)
+        // The runners-up: near enough the best to have been it (the replay's `--alternatives`: of
+        // the typos the user put right by hand, a third were among them, while they'd show after
+        // 7% of the words that went in right).
+        var alternatives: [String] = []
+        if let best = exact.candidates.first?.cost {
+            for c in exact.candidates where c.cost - best <= alternativeGap {
+                let w = asked.first?.isUppercase == true ? c.word.prefix(1).uppercased() + c.word.dropFirst() : c.word
+                guard w.lowercased() != asked.lowercased(), w.lowercased() != fixed?.lowercased(),
+                      !alternatives.contains(where: { $0.lowercased() == w.lowercased() }) else { continue }
+                alternatives.append(w)
+                if alternatives.count == 2 { break }
+            }
+        }
+        return (fixed, exact.confidence, alternatives)
+    }
+
+    /// How near the best a candidate must be to be offered after the word ends.
+    static let alternativeGap: Float = 0.1
+
+    /// The word decoded again with each tap taken out in turn — one struck by accident, which the
+    /// search itself lets go («грюлубже», «сдлюелал», «кюесли»): the best of them offered too, when
+    /// near the decoder's best with an extra tap's cost added (the replay's `--drop-one 0.72`: the
+    /// word meant for 12 of the 139 that went in wrong, an offer after 1.4% of those that went in
+    /// right). Once the word has ended: a decode for each of its taps is too much on every letter.
+    private func offerWithOneTapOut(word: String, typed: String, taps: [WordDecoder.Tap], boundary: String, before: String) {
+        let previous = previousWord(before: String(before.dropLast(typed.count)))
+        let recent = recentWords
+        let fixed = autoFixed != nil
+        Self.decoderQueue.async { [weak self] in
+            guard let decoder = Self.loadDecoder() else { return }
+            let context = Self.context(previous, recent: recent, lexicon: decoder.lexicon)
+            guard let best = decoder.decode(taps, context: context).candidates.first?.cost else { return }
+            var found: (word: String, cost: Float)?
+            for drop in taps.indices {
+                var fewer = taps
+                fewer.remove(at: drop)
+                guard let c = decoder.decode(fewer, context: context).candidates.first,
+                      c.cost + decoder.costs.insertion - best <= Self.alternativeGap,
+                      found == nil || c.cost < found!.cost else { continue }
+                found = (c.word, c.cost)
+            }
+            guard var alternative = found?.word else { return }
+            if typed.first?.isUppercase == true { alternative = alternative.prefix(1).uppercased() + alternative.dropFirst() }
+            DispatchQueue.main.async {
+                guard let self, alternative.lowercased() != word.lowercased(), alternative.lowercased() != typed.lowercased(),
+                      (self.proxy?.documentContextBeforeInput ?? "").hasSuffix(word + boundary) else { return }
+                if let offered = self.offered {
+                    guard offered.word == word, !offered.alternatives.contains(where: { $0.lowercased() == alternative.lowercased() }) else { return }
+                    self.offer(offered.alternatives + [alternative], for: word, typed: typed, boundary: boundary, fixed: offered.fixed)
+                } else {
+                    guard self.word.isEmpty else { return }
+                    self.offer([alternative], for: word, typed: typed, boundary: boundary, fixed: fixed)
+                }
+            }
+        }
     }
 
     /// A word ended before its correction was worked out — fast typing, a short word: worked out
@@ -981,9 +1048,17 @@ final class KeyboardModel {
         Self.decoderQueue.async { [weak self] in
             guard let decoder = Self.loadDecoder() else { return }
             let context = Self.context(previous, recent: recent, lexicon: decoder.lexicon)
-            let (fixed, confidence) = Self.correction(of: word, taps: taps, decoder: decoder, context: context, keep: keep)
+            let (fixed, confidence, alternatives) = Self.correction(of: word, taps: taps, decoder: decoder, context: context, keep: keep)
             DispatchQueue.main.async {
-                guard let self, let fixed, fixed != word else { return }
+                guard let self else { return }
+                if fixed == nil || fixed == word {
+                    // Nothing put right: the runners-up, while the word is still the last thing typed.
+                    if !alternatives.isEmpty, (self.proxy?.documentContextBeforeInput ?? "").hasSuffix(word + boundary) {
+                        self.offer(alternatives, for: word, typed: word, boundary: boundary, fixed: false)
+                    }
+                    return
+                }
+                guard let fixed else { return }
                 // What was typed after: letters of the next word at most.
                 let now = self.proxy?.documentContextBeforeInput ?? ""
                 let next = String(now.reversed().prefix { $0.isLetter }.reversed())
@@ -992,6 +1067,7 @@ final class KeyboardModel {
                 self.insert(fixed + boundary + next)
                 self.log("autocorrect", ["typed": word, "fixed": fixed, "confidence": Double(confidence), "late": true])
                 self.autoFixed = AutoFix(typed: word, fixed: fixed, boundary: boundary, taps: taps)
+                if next.isEmpty { self.offer(alternatives, for: fixed, typed: word, boundary: boundary, fixed: true) }
             }
         }
     }
@@ -1127,8 +1203,50 @@ final class KeyboardModel {
     /// What the strip offers to take back: the word as it was typed.
     var revertOffer: String? { autoFixed?.typed }
 
+    /// The decoder's runners-up for the word just ended, offered on the strip («→ word») until the
+    /// next key: the word as it stands, as typed, the boundary after it, and whether it was put right.
+    private struct Offered {
+        let word: String
+        let typed: String
+        let boundary: String
+        let fixed: Bool
+        let alternatives: [String]
+    }
+    private var offered: Offered? { didSet { changed() } }
+
+    /// What the strip offers instead of the word just ended.
+    var alternativesOffer: [String] { offered?.alternatives ?? [] }
+
+    private func offer(_ alternatives: [String], for word: String, typed: String, boundary: String, fixed: Bool) {
+        guard !alternatives.isEmpty else { return }
+        offered = Offered(word: word, typed: typed, boundary: boundary, fixed: fixed, alternatives: alternatives)
+        log("alternatives", ["typed": typed, "word": word, "offered": alternatives, "fixed": fixed])
+    }
+
+    /// The strip's «→ word»: it takes the place of the word just ended, the boundary after it kept.
+    func chooseAlternative(_ alternative: String) {
+        guard let offer = offered else { return }
+        offered = nil
+        autoFixed = nil
+        let before = proxy?.documentContextBeforeInput ?? ""
+        guard before.hasSuffix(offer.word + offer.boundary) else { return }
+        for _ in 0..<(offer.word.count + offer.boundary.count) { deleteBackward() }
+        insert(alternative + offer.boundary)
+        log("alternative-chosen", ["typed": offer.typed, "word": offer.word, "chosen": alternative,
+                                   "rank": offer.alternatives.firstIndex(of: alternative) ?? -1, "fixed": offer.fixed])
+        KeyLog.note("word", ["word": alternative, "boundary": "alternative", "session": fieldSession])
+        wordSeen(alternative)
+        afterTyping()
+    }
+
     /// For the app's keyboard preview: the strip just after a correction.
     func previewCorrection(typed: String, fixed: String) { autoFixed = AutoFix(typed: typed, fixed: fixed, boundary: " ") }
+
+    /// For the app's keyboard preview: the strip with the runners-up offered, after a correction or not.
+    func previewAlternatives(typed: String, fixed: String?, alternatives: [String]) {
+        if let fixed { autoFixed = AutoFix(typed: typed, fixed: fixed, boundary: " ") }
+        offered = Offered(word: fixed ?? typed, typed: typed, boundary: " ", fixed: fixed != nil, alternatives: alternatives)
+    }
 
     /// How often the user took a correction of each word back, fading by half every two weeks:
     /// [weight, when last] — it raises how sure a correction of that word must be.
@@ -1154,7 +1272,7 @@ final class KeyboardModel {
     }
 
     /// The correction for the word being typed, if a space came now.
-    private var pendingCorrection: (word: String, fixed: String?, confidence: Float)?
+    private var pendingCorrection: (word: String, fixed: String?, confidence: Float, alternatives: [String])?
 
     /// Whether iOS's own dictionary knows the word, in the language of its letters — a word it
     /// knows isn't a typo, whatever the lexicon lacks («распознай»). Call on `decoderQueue`.
@@ -1238,7 +1356,7 @@ final class KeyboardModel {
                 let result = decoder.decode(taps, complete: true, context: context)
                 // What a space would put right, worked out now so the space doesn't wait: the decoder's
                 // correction, unless the word as typed is one the system knows or the user kept.
-                let (fixed, confidence) = Self.correction(of: asked, taps: taps, decoder: decoder, context: context, keep: keep)
+                let (fixed, confidence, alternatives) = Self.correction(of: asked, taps: taps, decoder: decoder, context: context, keep: keep)
                 let words = result.candidates.map { capital ? $0.word.prefix(1).uppercased() + $0.word.dropFirst() : $0.word }
                 var picked: [String] = []
                 for candidate in words where !picked.contains(where: { $0.lowercased() == candidate.lowercased() }) {
@@ -1247,7 +1365,7 @@ final class KeyboardModel {
                 }
                 DispatchQueue.main.async {
                     guard let self, self.word == asked else { return }
-                    self.pendingCorrection = (asked, fixed, confidence)
+                    self.pendingCorrection = (asked, fixed, confidence, alternatives)
                     self.suggestionsFrom = "decoder"
                     self.suggestions = self.withEmoji(picked.filter { $0.lowercased() != asked.lowercased() }.count > 0 ? picked : [], for: asked)
                 }
