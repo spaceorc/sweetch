@@ -285,6 +285,41 @@ if let i = args.firstIndex(of: "--alternatives") {
     exit(0)
 }
 
+// `--fixes`: a word gone back to and put right — the decoder's first three for it (and the best
+// with a tap taken out, when short of three), from the taps that typed it and from taps made up in
+// the middle of each letter's key, as the keyboard does when it doesn't remember them.
+if args.contains("--fixes") {
+    var n = 0, real = 0, made = 0
+    for word in export.words where word.taps.count >= 2 && word.kind != "clean" {
+        let truth = word.truth.lowercased(), typed = word.taps.map(\.char).joined().lowercased()
+        guard typed != truth else { continue }
+        let layout = word.taps[0].layout
+        let lk = keys[layout] ?? []
+        let realTaps = word.taps.map { WordDecoder.Tap(point: CGPoint(x: $0.x, y: $0.y), keys: lk, deliberate: $0.deliberate) }
+        let madeTaps = typed.compactMap { ch in lk.first { $0.letter == ch }.map { WordDecoder.Tap(point: CGPoint(x: $0.frame.midX, y: $0.frame.midY), keys: lk, deliberate: false) } }
+        guard madeTaps.count == realTaps.count else { continue }
+        var context = WordDecoder.Context()
+        if word.sentence_start == true { context.previous = 0 } else if let previous = word.previous { context.previous = lexicon.lookup(previous.lowercased()) }
+        func offered(_ taps: [WordDecoder.Tap]) -> [String] {
+            var found: [String] = []
+            for c in decoder.decode(taps, context: context).candidates where c.word.lowercased() != typed && !found.contains(c.word.lowercased()) && found.count < 3 { found.append(c.word.lowercased()) }
+            if found.count < 3, taps.count >= 3 {
+                var best: (String, Float)?
+                for d in taps.indices { var f = taps; f.remove(at: d); if let c = decoder.decode(f, context: context).candidates.first, best == nil || c.cost < best!.1 { best = (c.word.lowercased(), c.cost) } }
+                if let best, !found.contains(best.0), best.0 != typed { found.append(best.0) }
+            }
+            return found
+        }
+        n += 1
+        let r = offered(realTaps), m = offered(madeTaps)
+        if r.contains(truth) { real += 1 }
+        if m.contains(truth) { made += 1 }
+        if verbose { print("  \(typed) meant \(truth): taps \(r.contains(truth) ? "+" : "-") \(r)  made-up \(m.contains(truth) ? "+" : "-") \(m)") }
+    }
+    print("words put right by hand: \(n) — the word among the three from the taps \(real), from made-up taps \(made)")
+    exit(0)
+}
+
 // `--drop-one <penalty> [<gap>]`: the word decoded again with each tap taken out in turn (one
 // struck by accident), its best offered when within `gap` of the decoder's best once `penalty` is
 // added. Counted: the word meant offered where what went in was wrong, and offers on words that

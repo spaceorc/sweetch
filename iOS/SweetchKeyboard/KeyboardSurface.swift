@@ -78,9 +78,7 @@ final class KeyboardSurface: UIView {
             keys = Self.layOut(model.layout, width: width, globe: showsGlobe)
             keyViews.forEach { $0.removeFromSuperview() }
             keyViews = keys.map { KeyView(spec: $0) }
-            letterKeys = keys.compactMap { key in
-                key.character.flatMap { $0.first?.isLetter == true ? WordDecoder.Key(letter: Character($0.lowercased()), frame: key.frame) : nil }
-            }
+            letterKeys = Self.letterKeys(model.layout, width: width, globe: showsGlobe)
             keyViews.forEach(addSubview)
             built = (model.layout, width, showsGlobe)
             // Where every key is: a touch can be measured against any of them later, not only the
@@ -97,6 +95,13 @@ final class KeyboardSurface: UIView {
     }
 
     // MARK: Layout
+
+    /// The letter keys of a layout as the decoder sees them.
+    static func letterKeys(_ layout: KeyboardModel.Layout, width: CGFloat, globe: Bool) -> [WordDecoder.Key] {
+        layOut(layout, width: width, globe: globe).compactMap { key in
+            key.character.flatMap { $0.first?.isLetter == true ? WordDecoder.Key(letter: Character($0.lowercased()), frame: key.frame) : nil }
+        }
+    }
 
     static func layOut(_ layout: KeyboardModel.Layout, width: CGFloat, globe: Bool) -> [KeySpec] {
         let inner = width - 2 * side

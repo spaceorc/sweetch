@@ -101,6 +101,11 @@ final class KeyboardViewController: UIInputViewController {
         model.hostChanged()
     }
 
+    /// The letter keys of `layout` as they'd be drawn now — for taps made up where none are known.
+    func letterKeys(for layout: KeyboardModel.Layout) -> [WordDecoder.Key] {
+        KeyboardSurface.letterKeys(layout, width: surface.bounds.width > 0 ? surface.bounds.width : view.bounds.width, globe: surface.showsGlobe)
+    }
+
     override func selectionDidChange(_ textInput: UITextInput?) {
         super.selectionDidChange(textInput)
         model.observeField()
@@ -536,12 +541,18 @@ final class KeyboardModel {
     private func insert(_ text: String) {
         proxy?.insertText(text)
         field.insert(text)
+        ownCursor = proxy?.documentContextBeforeInput
     }
 
     private func deleteBackward() {
         proxy?.deleteBackward()
         field.deleteBackward()
+        ownCursor = proxy?.documentContextBeforeInput
     }
+
+    /// The text before the cursor as the keyboard's own last edit left it: anything else there now
+    /// means the user put the cursor somewhere.
+    private var ownCursor: String?
 
     private func shiftCursor(by offset: Int) {
         proxy?.adjustTextPosition(byCharacterOffset: offset)
@@ -934,6 +945,7 @@ final class KeyboardModel {
         }
         KeyLog.note("word", ["word": word, "boundary": boundary, "session": fieldSession])
         wordSeen(word)
+        if tapped { rememberTaps(taps, of: word) }
         if !incognito {
             recentWords.append(word)
             if recentWords.count > 100 { recentWords.removeFirst(recentWords.count - 100) }
@@ -1214,8 +1226,121 @@ final class KeyboardModel {
     }
     private var offered: Offered? { didSet { changed() } }
 
+    // MARK: A word put right later
+
+    /// The taps of the words typed lately (newest last), so a word gone back to later is decoded as
+    /// it was typed. Not kept while incognito.
+    private var tapsByWord: [(word: String, taps: [WordDecoder.Tap])] = []
+
+    private func rememberTaps(_ taps: [WordDecoder.Tap], of word: String) {
+        guard !incognito, !taps.isEmpty else { return }
+        tapsByWord.append((word, taps))
+        if tapsByWord.count > 50 { tapsByWord.removeFirst(tapsByWord.count - 50) }
+    }
+
+    /// A word replaced keeps the taps that typed it.
+    private func moveTaps(from old: String, to new: String) {
+        guard let i = tapsByWord.lastIndex(where: { $0.word == old }) else { return }
+        tapsByWord[i] = (new, tapsByWord[i].taps)
+    }
+
+    /// The word the cursor was put in or beside — or selected — and what it could be instead.
+    private struct WordFix {
+        let word: String
+        /// Letters of it before the cursor and after (the whole word is replaced); nil when selected.
+        let around: (before: Int, after: Int)?
+        /// "remembered": the taps that typed it; "synthesized": the middle of each letter's key,
+        /// made up here — not how the user typed it.
+        let taps: String
+        let alternatives: [String]
+    }
+    private var wordFix: WordFix? { didSet { changed() } }
+
+    /// The user put the cursor in a word, or beside one in the middle of the text, or selected one:
+    /// what the decoder makes of it, on the strip in place of the suggestions — from the taps that
+    /// typed it when they're remembered, otherwise from taps made up in the middle of each key.
+    /// True when it's that, not the word being typed.
+    private func offerFixes(before: String, insideWord: Bool) -> Bool {
+        guard !Self.decoderFailed, before != ownCursor else { return false }
+        let isWordLetter: (Character) -> Bool = { $0.isLetter || $0 == "'" || $0 == "’" || $0 == "-" }
+        let selected = proxy?.selectedText ?? ""
+        let after = proxy?.documentContextAfterInput ?? ""
+        var target: String
+        var around: (before: Int, after: Int)?
+        if !selected.isEmpty {
+            guard selected.count >= 2, selected.allSatisfy(isWordLetter) else { return false }
+            target = selected
+        } else {
+            let head = String(before.reversed().prefix(while: isWordLetter).reversed())
+            let tail = String(after.prefix(while: isWordLetter))
+            // At the very end of the text it's where typing goes on, not a word gone back to.
+            guard head.count + tail.count >= 2, insideWord || (!head.isEmpty && !after.isEmpty) else { return false }
+            target = head + tail
+            around = (head.count, tail.count)
+        }
+        target = target.trimmingCharacters(in: CharacterSet(charactersIn: "-'’"))
+        guard target.count >= 2 else { return false }
+        let start = String(before.dropLast(around?.before ?? 0))
+        let previous = previousWord(before: start)
+        let recent = recentWords
+        let remembered = tapsByWord.last { $0.word == target && $0.taps.count == target.filter(\.isLetter).count }?.taps
+        let layout: Layout = target.unicodeScalars.contains { (0x0400...0x04FF).contains($0.value) } ? .russian : .english
+        let keys = (controller as? KeyboardViewController)?.letterKeys(for: layout) ?? []
+        let asked = target
+        suggestions = []
+        Self.decoderQueue.async { [weak self] in
+            guard let decoder = Self.loadDecoder() else { return }
+            let lower = Array(asked.lowercased().filter(\.isLetter))
+            let taps = remembered ?? lower.compactMap { letter in
+                keys.first { $0.letter == letter }.map { WordDecoder.Tap(point: CGPoint(x: $0.frame.midX, y: $0.frame.midY), keys: keys, deliberate: false) }
+            }
+            guard taps.count == lower.count, taps.count >= 2 else { return }
+            let context = Self.context(previous, recent: recent, lexicon: decoder.lexicon)
+            let capital = asked.first?.isUppercase == true
+            var found: [String] = []
+            func add(_ word: String) {
+                let w = capital ? word.prefix(1).uppercased() + word.dropFirst() : word
+                guard w.lowercased() != asked.lowercased(), !found.contains(where: { $0.lowercased() == w.lowercased() }), found.count < 3 else { return }
+                found.append(w)
+            }
+            decoder.decode(taps, context: context).candidates.forEach { add($0.word) }
+            if found.count < 3, taps.count >= 3 {
+                var best: (word: String, cost: Float)?
+                for drop in taps.indices {
+                    var fewer = taps
+                    fewer.remove(at: drop)
+                    if let c = decoder.decode(fewer, context: context).candidates.first, best == nil || c.cost < best!.cost { best = (c.word, c.cost) }
+                }
+                if let best { add(best.word) }
+            }
+            DispatchQueue.main.async {
+                guard let self, !found.isEmpty, (self.proxy?.documentContextBeforeInput ?? "") == before else { return }
+                let source = remembered == nil ? "synthesized" : "remembered"
+                self.wordFix = WordFix(word: asked, around: around, taps: source, alternatives: found)
+                self.log("word-fixes", ["word": asked, "offered": found, "taps": source, "selected": around == nil])
+            }
+        }
+        return true
+    }
+
+    /// One of them tapped: the whole word replaced, the cursor after it.
+    private func chooseFix(_ alternative: String) {
+        guard let fix = wordFix else { return }
+        wordFix = nil
+        if let around = fix.around {
+            if around.after > 0 { shiftCursor(by: around.after) }
+            for _ in 0..<(around.before + around.after) { deleteBackward() }
+        }
+        insert(alternative)   // over the selection, when it was selected
+        moveTaps(from: fix.word, to: alternative)
+        // Not a «word» event: with made-up taps it says nothing of how the user types.
+        log("word-fix-chosen", ["word": fix.word, "chosen": alternative, "taps": fix.taps,
+                                "rank": fix.alternatives.firstIndex(of: alternative) ?? -1])
+        afterTyping()
+    }
+
     /// What the strip offers instead of the word just ended.
-    var alternativesOffer: [String] { offered?.alternatives ?? [] }
+    var alternativesOffer: [String] { offered?.alternatives ?? wordFix?.alternatives ?? [] }
 
     private func offer(_ alternatives: [String], for word: String, typed: String, boundary: String, fixed: Bool) {
         guard !alternatives.isEmpty else { return }
@@ -1225,6 +1350,7 @@ final class KeyboardModel {
 
     /// The strip's «→ word»: it takes the place of the word just ended, the boundary after it kept.
     func chooseAlternative(_ alternative: String) {
+        if wordFix != nil { return chooseFix(alternative) }
         guard let offer = offered else { return }
         offered = nil
         autoFixed = nil
@@ -1232,6 +1358,7 @@ final class KeyboardModel {
         guard before.hasSuffix(offer.word + offer.boundary) else { return }
         for _ in 0..<(offer.word.count + offer.boundary.count) { deleteBackward() }
         insert(alternative + offer.boundary)
+        moveTaps(from: offer.word, to: alternative)
         log("alternative-chosen", ["typed": offer.typed, "word": offer.word, "chosen": alternative,
                                    "rank": offer.alternatives.firstIndex(of: alternative) ?? -1, "fixed": offer.fixed])
         KeyLog.note("word", ["word": alternative, "boundary": "alternative", "session": fieldSession])
@@ -1341,6 +1468,8 @@ final class KeyboardModel {
             }
             return
         }
+        wordFix = nil
+        if offerFixes(before: before, insideWord: insideWord) { return }
         guard !word.isEmpty, !insideWord else {
             suggestions = []
             return
