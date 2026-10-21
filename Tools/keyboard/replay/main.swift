@@ -53,6 +53,7 @@ if args.contains("--by-confidence") { decoder.byConfidence = true }
 if let i = args.firstIndex(of: "--language"), i + 1 < args.count, let l = Float(args[i + 1]) { decoder.costs.language = l }
 if let i = args.firstIndex(of: "--substitution"), i + 1 < args.count, let v = Float(args[i + 1]) { decoder.costs.substitution = v }
 if let i = args.firstIndex(of: "--distance"), i + 1 < args.count, let v = Float(args[i + 1]) { decoder.costs.distance = v }
+if let i = args.firstIndex(of: "--beam"), i + 1 < args.count, let v = Int(args[i + 1]) { decoder.costs.beam = v }
 
 // `--bench <name>`: the bench — every measure at once, on the user's own typing, saved as
 // build/bench/<name>.json for comparing variants (Tools/keyboard/bench_compare.py):
@@ -209,6 +210,68 @@ if let i = args.firstIndex(of: "--at-letters"), i + 1 < args.count, let k = Int(
         if shown.contains(truth) { three += 1 }
     }
     print("decoder with \(k) letters: \(n) words, first \(first) (\(100 * first / max(n, 1))%), in three \(three) (\(100 * three / max(n, 1))%)")
+    exit(0)
+}
+
+// `--alternatives [<gap>]`: after a word ends, the strip could offer the decoder's runners-up — the
+// candidates within `gap` of the best's cost, other than what went in and what was typed, two at
+// most. Counted: words that went in wrong (a correction the user undid or a typo they put right
+// themselves) whose word was among them; and how often any were shown on a word that went in right
+// (where the next-word predictions would have been).
+if let i = args.firstIndex(of: "--alternatives") {
+    let gap = i + 1 < args.count ? Float(args[i + 1]) ?? 0.3 : 0.3
+    var wrong = (corrected: 0, correctedHelped: 0, left: 0, leftHelped: 0, broke: 0)
+    var right = (words: 0, shown: 0)
+    var gaps: [Float] = []
+    var found = 0, unknown = 0
+    var shownLines: [String] = []
+    for word in export.words where word.taps.count >= 2 {
+        let taps = word.taps.map { WordDecoder.Tap(point: CGPoint(x: $0.x, y: $0.y), keys: keys[$0.layout] ?? [], deliberate: $0.deliberate) }
+        var context = WordDecoder.Context()
+        if word.sentence_start == true { context.previous = 0 } else if let previous = word.previous { context.previous = lexicon.lookup(previous.lowercased()) }
+        let result = decoder.decode(taps, context: context)
+        let truth = word.truth.lowercased(), typed = word.taps.map(\.char).joined().lowercased()
+        let live = (result.correction ?? result.literal).lowercased()
+        guard let best = result.candidates.first?.cost else { continue }
+        var alternatives: [(String, Float)] = []
+        for c in result.candidates {
+            let w = c.word.lowercased()
+            guard w != live, w != typed, !alternatives.contains(where: { $0.0 == w }) else { continue }
+            alternatives.append((w, c.cost - best))
+            if alternatives.count == 2 { break }
+        }
+        let near = alternatives.filter { $0.1 <= gap }
+        // A typo the user left in, put right: as good as right.
+        if live == truth || (word.kind == "clean" && result.correction != nil && !(word.typed_is_word ?? true)) {
+            right.words += 1
+            if !near.isEmpty { right.shown += 1 }
+            continue
+        }
+        if result.correction != nil, typed == truth {
+            wrong.broke += 1
+            if verbose { shownLines.append("  BROKE \(typed) → \(live) [\(word.kind)]") }
+            continue   // the undo covers it
+        }
+        if result.candidates.contains(where: { $0.word.lowercased() == truth }) { found += 1 } else if lexicon.lookup(truth) == nil { unknown += 1 }
+        let at = alternatives.first { $0.0 == truth }
+        if let at { gaps.append(at.1) }
+        let helped = near.contains { $0.0 == truth }
+        if result.correction != nil {
+            wrong.corrected += 1
+            if helped { wrong.correctedHelped += 1 }
+        } else {
+            wrong.left += 1
+            if helped { wrong.leftHelped += 1 }
+        }
+        if helped || verbose {
+            shownLines.append("  \(helped ? "HELPS" : "     ") \(typed) → \(live), meant \(truth); offered \(alternatives.map { "\($0.0) +\(String(format: "%.2f", $0.1))" }.joined(separator: ", "))")
+        }
+    }
+    print("gap \(gap): words that went in right \(right.words), runners-up shown on \(right.shown) (\(100 * right.shown / max(right.words, 1))%)")
+    print("went in wrong: corrected wrongly \(wrong.corrected) — the word offered for \(wrong.correctedHelped); typo left \(wrong.left) — offered for \(wrong.leftHelped); a real word corrected away \(wrong.broke) (the undo)")
+    print("the meant word among all the candidates: \(found) of \(wrong.corrected + wrong.left); not in the lexicon: \(unknown)")
+    print("the meant word's gap when among the two: \(gaps.sorted().map { String(format: "%.2f", $0) }.joined(separator: " "))")
+    shownLines.forEach { print($0) }
     exit(0)
 }
 
