@@ -292,6 +292,22 @@ RU_NEAR, EN_NEAR = adjacent_keys(RU_ROWS), adjacent_keys(EN_ROWS)
 FORM_COMMON = int(os.environ.get("SWEETCH_FORM_COMMON", "60"))
 
 
+# The same keys in the two layouts (ЙЦУКЕН on QWERTY, Apple's Russian – PC).
+LAYOUT_PAIRS = dict(zip("qwertyuiop[]asdfghjkl;'zxcvbnm,.`", "йцукенгшщзхъфывапролджэячсмитьбюё"))
+
+
+def wrong_layout(key, general, own):
+    """A word only typed whose keys make a common word in the other layout — «lfdfq» for «давай»,
+    «tckb» for «если»: typed in the wrong layout and sent so (in messages to Claude Code), and in
+    the lexicon it kept the Mac's layout switch from seeing it (21 Oct)."""
+    other = {**LAYOUT_PAIRS, **{v: k for k, v in LAYOUT_PAIRS.items()}}
+    converted = "".join(other.get(c, "") for c in key)
+    if len(converted) != len(key) or converted == key or general.get(key, 0) >= 100:
+        return False
+    # Common in the general lists, or a word the user uses far more («давай»: 86 in the lists).
+    return general.get(converted, 0) >= 120 or own.get(converted, 0) >= max(5, 3 * own.get(key, 0))
+
+
 def typo(key, n, general, own={}):
     """A word the user only typed, taken for a typo: one slip (a letter wrong, missing, extra or
     swapped) from a common word of the general lists — "историб", "чот", "nthe". Their slang has no
@@ -425,6 +441,9 @@ def main():
         if (said < 1 and n < 2) or not WORD.match(key) or len(key) < 2:
             continue
         if said < 1 and key not in entries and typo(key, n, general_frequency, counts):
+            dropped += 1
+            continue
+        if said < 1 and wrong_layout(key, general_frequency, counts):
             dropped += 1
             continue
         written = spellings[key].most_common(1)[0][0]

@@ -90,7 +90,7 @@ if let i = args.firstIndex(of: "--bench"), i + 1 < args.count {
     func band(_ n: Int) -> String { n <= 3 ? "2-3" : n <= 6 ? "4-6" : "7+" }
     for word in export.words {
         defer { if let node = lexicon.lookup(word.truth.lowercased()) { typedSoFar.append(node) } }
-        guard word.taps.count >= 2 else { continue }
+        guard word.taps.count >= 2, !word.kind.hasPrefix("layout") else { continue }   // the Mac's: see --layouts
         let taps = word.taps.map { WordDecoder.Tap(point: CGPoint(x: $0.x, y: $0.y), keys: keys[$0.layout] ?? [], deliberate: $0.deliberate) }
         var context = WordDecoder.Context()
         if word.sentence_start == true { context.previous = 0 } else if let previous = word.previous { context.previous = lexicon.lookup(previous.lowercased()) }
@@ -327,6 +327,47 @@ if let i = args.firstIndex(of: "--predict-texts"), i + 1 < args.count {
     }
     if let dumpPath, let dump { try JSONSerialization.data(withJSONObject: dump).write(to: URL(fileURLWithPath: dumpPath)) }
     print("\(n) words: first \(first) (\(String(format: "%.1f", 100 * Double(first) / Double(max(n, 1))))%), in three \(three) (\(String(format: "%.1f", 100 * Double(three) / Double(max(n, 1))))%)")
+    exit(0)
+}
+
+// `--layouts [<min frequency>] [<min letters>]`: a word typed in the wrong layout (the Mac's export,
+// export_mac_words.py), switched as it ends: when the keys make no word in the layout they were typed
+// in, and in the other they make one at least that common, that long. Counted: the wrong-layout
+// words it puts right (the user's own fixes, and those left as typed), and the real words it breaks.
+if let i = args.firstIndex(of: "--layouts") {
+    let minFrequency = i + 1 < args.count ? Int(args[i + 1]) ?? 0 : 0
+    let minLetters = i + 2 < args.count ? Int(args[i + 2]) ?? 2 : 2
+    // `--margin <m>`: switched too when the keys make a word in both, the other's that much commoner.
+    let margin = args.firstIndex(of: "--margin").flatMap { j in j + 1 < args.count ? Int(args[j + 1]) : nil } ?? 1000
+    var counts: [String: (n: Int, switched: Int, right: Int)] = [:]
+    var lines: [String] = []
+    for word in export.words where word.taps.count >= 2 {
+        let own = word.taps[0].layout
+        guard let other = keys.keys.first(where: { $0 != own }), let otherKeys = keys[other] else { continue }
+        let mine = word.taps.map { WordDecoder.Tap(point: CGPoint(x: $0.x, y: $0.y), keys: keys[own] ?? [], deliberate: $0.deliberate) }
+        let theirs = word.taps.map { WordDecoder.Tap(point: CGPoint(x: $0.x, y: $0.y), keys: otherKeys, deliberate: $0.deliberate) }
+        let typed = word.taps.map(\.char).joined().lowercased(), truth = word.truth.lowercased()
+        let mineResult = decoder.decode(mine), theirsResult = decoder.decode(theirs)
+        let converted = theirsResult.literal.lowercased()
+        let frequency = lexicon.lookup(converted).map { Int(lexicon.frequency($0)) } ?? 0
+        let mineFrequency = lexicon.lookup(mineResult.literal.lowercased()).map { Int(lexicon.frequency($0)) } ?? 0
+        let switched = typed.count >= minLetters && (!mineResult.literalIsWord || mineFrequency + margin <= frequency)
+            && theirsResult.literalIsWord && frequency >= minFrequency
+        let kind = word.kind == "clean" ? (word.typed_is_word == true ? "clean, a word" : "clean, no word") : word.kind
+        var c = counts[kind] ?? (0, 0, 0)
+        c.n += 1
+        if switched {
+            c.switched += 1
+            if converted == truth { c.right += 1 }
+            if kind == "clean, a word" || verbose { lines.append("  \(kind == "clean, a word" ? "BREAKS" : "      ") [\(kind)] \(typed) → \(converted) (\(frequency))") }
+        } else if kind.hasPrefix("layout"), verbose {
+            lines.append("  misses [\(kind)] \(typed) (meant \(truth); \(converted) \(frequency), mine a word: \(mineResult.literalIsWord))")
+        }
+        counts[kind] = c
+    }
+    print("min frequency \(minFrequency), min letters \(minLetters):")
+    for (kind, c) in counts.sorted(by: { $0.key < $1.key }) { print("  \(kind): \(c.n) — switched \(c.switched), to the word meant \(c.right)") }
+    lines.forEach { print($0) }
     exit(0)
 }
 

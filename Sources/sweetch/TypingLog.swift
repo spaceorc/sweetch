@@ -68,7 +68,20 @@ final class TypingLog {
                 queue.async { [self] in repeats[code, default: 0] += 1 }
                 return
             }
-            fields["l"] = Self.layout()
+            let layout = Self.layout()
+            fields["l"] = layout
+            // The event's character is sometimes the layout's before the last switch — «ckjvfkfcm»
+            // logged where «сломалась» was typed (19 Oct; 45% of the Russian letters): a letter of
+            // the other script is put through the other layout, the event's kept as "cx".
+            if let c = fields["c"] as? String, c.count == 1, let letter = c.first, letter.isLetter {
+                let cyrillic = letter.unicodeScalars.allSatisfy { (0x0400...0x04FF).contains($0.value) }
+                let maps = LayoutTranslator.buildMaps()
+                let flipped = layout == "ru" && !cyrillic ? maps.primaryToSecondary[letter] : layout == "en" && cyrillic ? maps.secondaryToPrimary[letter] : nil
+                if let flipped {
+                    fields["cx"] = c
+                    fields["c"] = String(flipped)
+                }
+            }
         case .keyUp:
             fields["e"] = "u"
         case .flagsChanged: fields["e"] = "f"

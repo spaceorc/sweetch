@@ -29,7 +29,7 @@ ICON_SRC   = Resources/icon/AppIcon.icon
 ICON_DIR   = $(BUILD_DIR)/icon
 ICON_ICNS  = $(ICON_DIR)/AppIcon.icns
 
-.PHONY: all build app run debug clean setup-signing tcc-reset icon stop start trace phone serve-app mini sync sync-install lexicon decoder-eval whisper-framework
+.PHONY: all build app run debug clean setup-signing tcc-reset icon stop start trace phone serve-app mini sync sync-install lexicon decoder-eval mac-bench whisper-framework
 
 all: app
 
@@ -244,6 +244,15 @@ bench:
 	@$$( [ -x $(DECODER_VENV) ] && echo $(DECODER_VENV) || echo python3 ) -I Tools/keyboard/export_words.py $(BUILD_DIR)/keyboard-words.json
 	@mkdir -p $(BUILD_DIR) && swiftc -O -o $(BUILD_DIR)/replay Tools/keyboard/replay/main.swift iOS/SweetchKeyboard/Decoder/*.swift
 	@SWIFT_DETERMINISTIC_HASHING=1 $(BUILD_DIR)/replay $(LEXICON) $(BUILD_DIR)/keyboard-words.json --bench $(NAME) $(ARGS)
+
+# The Mac's bench: the words typed on the Mac (its typing log, Tools/keyboard/export_mac_words.py)
+# through the same decoder — `make mac-bench` for autocorrect, ARGS="--layouts 100 2 --margin 120"
+# for switching a word typed in the wrong layout.
+mac-bench:
+	@test -f $(LEXICON) || $(MAKE) --no-print-directory lexicon
+	@$$( [ -x $(DECODER_VENV) ] && echo $(DECODER_VENV) || echo python3 ) -I Tools/keyboard/export_mac_words.py $(BUILD_DIR)/mac-words.json
+	@mkdir -p $(BUILD_DIR) && swiftc -O -o $(BUILD_DIR)/replay Tools/keyboard/replay/main.swift iOS/SweetchKeyboard/Decoder/*.swift
+	@$(BUILD_DIR)/replay $(LEXICON) $(BUILD_DIR)/mac-words.json $(ARGS)
 
 bench-compare:
 	@python3 -I Tools/keyboard/bench_compare.py $(RUNS)
