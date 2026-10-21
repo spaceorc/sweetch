@@ -343,10 +343,14 @@ final class KeyboardModel {
             afterTyping()
             return
         }
-        if spaceIsOurs, ".,!?:;".contains(typed), proxy?.documentContextBeforeInput?.hasSuffix(" ") == true {
-            spaceIsOurs = false
+        // A mark after a space the keyboard put in (after a picked word, or after a mark) takes its
+        // place, the space going after it — «)» too: «(never )», «у тебя )», «украдут: )» on the
+        // phone, 4 of 5 «)» after a space (22 Oct); a space the user typed stays («512 )»). The
+        // space after is the keyboard's again, so «:» then «)» makes «:)».
+        if spaceIsOurs, ".,!?:;)".contains(typed), proxy?.documentContextBeforeInput?.hasSuffix(" ") == true {
             deleteBackward()
             insert(typed + " ")
+            spaceIsOurs = true
             log("type", ["char": typed, "before_our_space": true])
             if !layout.isLetters { layout = letters }
             afterTyping()
