@@ -130,11 +130,12 @@ final class Dictation {
         overlay.show(caption: "listening…", spinning: false, symbol: "mic.fill")
         log.info("dictation: listening in \(app.bundleIdentifier ?? "?", privacy: .public) → \(dir.lastPathComponent, privacy: .public)")
 
-        microphone.async {
+        microphone.async { [overlay] in
             do {
                 try recorder.start(to: dir.appendingPathComponent("recording.caf"))
             } catch {
                 log.error("dictation: recording failed to start: \(String(describing: error), privacy: .public)")
+                Self.restartIfMicrophoneLost(error, overlay: overlay)
             }
         }
         return true
@@ -231,6 +232,23 @@ final class Dictation {
                 }
                 log.info("dictation: heard '\(shown(heard.text), privacy: .public)' from \(shown(heard.versions.map(\.text)), privacy: .public)")
                 record.merge(self?.insert(heard.text, session: session) ?? [:]) { $1 }
+            }
+        }
+    }
+
+    /// The microphone there but this process unable to use it ('!dev', canPerformIO false): on
+    /// 21 Oct every hold failed so for two hours after the audio devices changed (the iPhone's
+    /// microphone came in reach), while a new process recorded at once — a fresh engine per hold
+    /// didn't help. Under the watchdog, the app starts again (a failing exit brings it back).
+    private static func restartIfMicrophoneLost(_ error: Error, overlay: LoaderOverlay) {
+        guard (error as NSError).code == 560227702, Watchdog.isInstalled else { return }
+        log.error("dictation: microphone lost to this process — restarting")
+        DispatchQueue.main.async {
+            overlay.flash("microphone lost — restarting", detail: "hold again in a moment", symbol: "mic.slash")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                TypingLog.shared.flushNow()
+                CrashWatch.markCleanExit()
+                exit(1)
             }
         }
     }
