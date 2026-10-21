@@ -188,6 +188,10 @@ final class KeyboardModel {
     /// The space after the word was the keyboard's (a suggestion picked), not the user's: a
     /// punctuation mark typed next goes before it, as on iOS.
     private var spaceIsOurs = false
+    /// The space just typed ended a word: a mark typed next takes its place too («Привет !», put
+    /// right by hand, 21 Oct) — the space was only how the word ended. Not `spaceIsOurs`: a second
+    /// space after it still ends the sentence.
+    private var spaceEndedWord = false
     private var lastShiftAt = Date.distantPast
     private var word = ""
     private let lastSeqKey = "lastSeq"
@@ -309,7 +313,7 @@ final class KeyboardModel {
             noteExternal(from: previous, to: now)
         }
         rememberField(now: false)
-        if !(proxy?.documentContextBeforeInput?.hasSuffix(" ") ?? false) { spaceIsOurs = false }
+        if !(proxy?.documentContextBeforeInput?.hasSuffix(" ") ?? false) { spaceIsOurs = false; spaceEndedWord = false }
         log("host-change")
         autoCapitalise()
         fieldChanged()
@@ -347,7 +351,8 @@ final class KeyboardModel {
         // place, the space going after it — «)» too: «(never )», «у тебя )», «украдут: )» on the
         // phone, 4 of 5 «)» after a space (22 Oct); a space the user typed stays («512 )»). The
         // space after is the keyboard's again, so «:» then «)» makes «:)».
-        if spaceIsOurs, ".,!?:;)".contains(typed), proxy?.documentContextBeforeInput?.hasSuffix(" ") == true {
+        if spaceIsOurs || spaceEndedWord, ".,!?:;)".contains(typed), proxy?.documentContextBeforeInput?.hasSuffix(" ") == true {
+            spaceEndedWord = false
             deleteBackward()
             insert(typed + " ")
             spaceIsOurs = true
@@ -357,6 +362,7 @@ final class KeyboardModel {
             return
         }
         spaceIsOurs = false
+        spaceEndedWord = false
         insert(typed)
         log("type", ["char": typed])
         if shift == .once { shift = .off }
@@ -379,6 +385,7 @@ final class KeyboardModel {
     func space() {
         autoFixed = nil
         offered = nil
+        spaceEndedWord = false
         noteWordEnd(" ")
         let before = proxy?.documentContextBeforeInput ?? ""
         if spaceIsOurs, before.hasSuffix(" ") {
@@ -398,6 +405,7 @@ final class KeyboardModel {
         } else {
             insert(" ")
             lastSpaceAt = Date()
+            spaceEndedWord = before.last.map { $0.isLetter || $0.isNumber } ?? false
             log("space")
         }
         if !layout.isLetters { layout = letters }
@@ -408,6 +416,7 @@ final class KeyboardModel {
         autoFixed = nil
         offered = nil
         spaceIsOurs = false
+        spaceEndedWord = false
         guard returnKey.enabled else {
             log("return-disabled")
             return
@@ -423,6 +432,7 @@ final class KeyboardModel {
         lastWord = nil
         if wordTaps.isEmpty { wordTapsHold = false } else { wordTaps.removeLast() }
         spaceIsOurs = false
+        spaceEndedWord = false
         if undoAutoFix() {
             afterTyping()
             return
@@ -885,6 +895,7 @@ final class KeyboardModel {
         KeyLog.note("word", ["word": suggestion, "boundary": "suggestion", "session": fieldSession])
         wordSeen(suggestion)
         spaceIsOurs = spaced
+        spaceEndedWord = false
         lastSpaceAt = Date()
         afterTyping()
     }
