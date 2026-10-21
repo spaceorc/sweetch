@@ -1617,7 +1617,27 @@ final class KeyboardModel {
     /// The dictionary loaded before the first key is touched.
     func warmUp() {
         Suggester.shared.warmUp()
-        Self.decoderQueue.async { _ = Self.loadDecoder() }   // the lexicon mapped before the first word
+        // The lexicon mapped, and its pages read in by a word decoded in each layout, before the first
+        // word: the first decode after the keyboard came up took 62 ms (median; 197 at p90) against 32
+        // for the rest — the trie's pages read from flash on the way (21 Oct).
+        let keyboard = controller as? KeyboardViewController
+        let samples = [("привет", keyboard?.letterKeys(for: .russian) ?? []), ("hello", keyboard?.letterKeys(for: .english) ?? [])]
+        Self.decoderQueue.async {
+            guard let decoder = Self.loadDecoder() else { return }
+            let started = Date()
+            for (word, keys) in samples where !keys.isEmpty {
+                let taps = word.compactMap { letter in
+                    keys.first { $0.letter == letter }.map { WordDecoder.Tap(point: CGPoint(x: $0.frame.midX, y: $0.frame.midY), keys: keys, deliberate: false) }
+                }
+                var context = WordDecoder.Context()
+                context.previous = 0
+                _ = decoder.decode(taps, context: context)
+                _ = decoder.decode(Array(taps.prefix(2)), complete: true, context: context)
+                _ = decoder.predictions(context)
+            }
+            let ms = Int(Date().timeIntervalSince(started) * 1000)
+            DispatchQueue.main.async { KeyLog.note("decoder-warm", ["ms": ms]) }
+        }
     }
 
     // MARK: Dictation
