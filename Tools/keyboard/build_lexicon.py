@@ -137,12 +137,22 @@ def personal_words():
     sent to Claude Code are typed too — on the phone as well, typos and all."""
     texts, typed = personal_texts(), sent_messages()
     for path in dated(SUPPORT.glob("keyboard/*.jsonl"), lambda p: p.name):
+        # A word picked from the strip and deleted into straight away was picked for being nearly
+        # right: not the user's word (the keyboard no longer logs it so since 22 Oct).
+        picked = None
         for line in path.open(encoding="utf-8"):
-            if '"e":"word"' in line:
+            if '"e":"delete' in line and picked is not None:
+                typed.pop(picked)
+                picked = None
+            elif '"e":"word"' in line:
                 try:
-                    typed.append(json.loads(line).get("word") or "")
+                    event = json.loads(line)
                 except ValueError:
-                    pass
+                    continue
+                typed.append(event.get("word") or "")
+                picked = len(typed) - 1 if event.get("boundary") == "suggestion" else None
+            elif '"e":"type"' in line or '"e":"space"' in line or '"e":"return"' in line:
+                picked = None
     counts, spellings, typed_counts = collections.Counter(), collections.defaultdict(collections.Counter), collections.Counter()
     for source, is_typed in ((texts, False), (typed, True)):
         for text in source:

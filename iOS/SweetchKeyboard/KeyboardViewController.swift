@@ -273,6 +273,7 @@ final class KeyboardModel {
     }
 
     func disappeared() {
+        creditPick()
         visibleSince = nil
         rememberField(now: true)
         // Gone a while with dictations in the field: as they stand. (Gone to the app's dictation
@@ -327,6 +328,7 @@ final class KeyboardModel {
     }
 
     func typeCharacter(_ key: String, tap: WordDecoder.Tap? = nil) {
+        creditPick()
         autoFixed = nil
         offered = nil
         let typed = display(key)
@@ -383,6 +385,7 @@ final class KeyboardModel {
     /// space is already there: the user's first space only stands for it, and their second ends
     /// the sentence — not three spaces in a row.
     func space() {
+        creditPick()
         autoFixed = nil
         offered = nil
         spaceEndedWord = false
@@ -413,6 +416,7 @@ final class KeyboardModel {
     }
 
     func newline() {
+        creditPick()
         autoFixed = nil
         offered = nil
         spaceIsOurs = false
@@ -428,6 +432,10 @@ final class KeyboardModel {
     }
 
     func backspace() {
+        if let picked = pendingPick {
+            pendingPick = nil
+            log("suggestion-edited", ["suggestion": picked])
+        }
         offered = nil
         lastWord = nil
         if wordTaps.isEmpty { wordTapsHold = false } else { wordTaps.removeLast() }
@@ -863,6 +871,7 @@ final class KeyboardModel {
     }
 
     func choose(suggestion: String) {
+        creditPick()
         offered = nil
         if Emoji.isEmoji(suggestion), let use = emojiUse {
             emojiUse = nil
@@ -892,12 +901,25 @@ final class KeyboardModel {
         let spaced = next == nil || !(next!.isWhitespace || next!.isPunctuation)
         insert(spaced ? suggestion + " " : suggestion)
         log("choose", ["word": word, "suggestion": suggestion, "spaced": spaced, "from": suggestionsFrom])
-        KeyLog.note("word", ["word": suggestion, "boundary": "suggestion", "session": fieldSession])
-        wordSeen(suggestion)
+        pendingPick = suggestion
         spaceIsOurs = spaced
         spaceEndedWord = false
         lastSpaceAt = Date()
         afterTyping()
+    }
+
+    /// A word picked from the strip, not yet counted as the user's: a word picked for being nearly
+    /// right gets its ending changed (15 of 286 picks, 21 Oct: «синтетически» → «синтетические»),
+    /// and the form picked isn't theirs. Counted once they move on — the next word begun, a mark,
+    /// a new line, the keyboard gone; anything deleted first and it isn't (`suggestion-edited`),
+    /// the word as it ends up counting instead.
+    private var pendingPick: String?
+
+    private func creditPick() {
+        guard let word = pendingPick else { return }
+        pendingPick = nil
+        KeyLog.note("word", ["word": word, "boundary": "suggestion", "session": fieldSession])
+        wordSeen(word)
     }
 
     /// The word just finished, as it ended up — what the user's taps were meant to make, unless

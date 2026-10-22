@@ -140,8 +140,15 @@ def examples(events):
                 example = finished.pop(start)
                 attempts.setdefault(start, example["taps"] if example["kind"] == "clean" else example["taps"])
 
+    picked = None        # the start of a word just picked from the strip, while nothing else was done
     for e in events:
         kind = e["e"]
+        # A picked word deleted into straight away was picked for being nearly right («синтетически»
+        # → «синтетические»): it isn't what the taps meant — the word as it ends up is.
+        if kind in ("delete", "delete-word", "suggestion-edited") and picked is not None:
+            finished.pop(picked, None)
+        if kind not in ("choose", "word", "suggestions", "decoder", "shadow", "raw", "gesture", "up", "down", "keys", "status"):
+            picked = None
         if kind == "appear":
             flush()
         elif kind == "down":
@@ -196,6 +203,7 @@ def examples(events):
             if taps and damerau("".join(t["char"] for t in taps).lower(), e["suggestion"].lower()) <= 2:
                 ctx = context_of(start)
                 finished[start] = {"kind": "fixed", "taps": taps, "truth": e["suggestion"], **ctx}
+            picked = start
             buffer.extend(e.get("suggestion", "") + " ")
         elif kind in ("heard", "autofix"):
             finish()
