@@ -192,6 +192,12 @@ final class KeyboardModel {
     /// right by hand, 21 Oct) — the space was only how the word ended. Not `spaceIsOurs`: a second
     /// space after it still ends the sentence.
     private var spaceEndedWord = false
+    /// A mark just put in a space's place (and the space after it): ⌫ next takes that back, and a
+    /// smiley made of it gets its space back — «information :)», which the user fought for three
+    /// times on 22 Oct.
+    private var attachedMark: String?
+    /// The space the user asked back with ⌫: the next mark goes after it, as typed.
+    private var keepSpace = false
     private var lastShiftAt = Date.distantPast
     private var word = ""
     private let lastSeqKey = "lastSeq"
@@ -353,11 +359,24 @@ final class KeyboardModel {
         // place, the space going after it — «)» too: «(never )», «у тебя )», «украдут: )» on the
         // phone, 4 of 5 «)» after a space (22 Oct); a space the user typed stays («512 )»). The
         // space after is the keyboard's again, so «:» then «)» makes «:)».
-        if spaceIsOurs || spaceEndedWord, ".,!?:;)".contains(typed), proxy?.documentContextBeforeInput?.hasSuffix(" ") == true {
+        // A smiley out of the mark just put in place of the space: the space back before it.
+        if let mark = attachedMark, ":;".contains(mark), "()DPdp".contains(typed),
+           proxy?.documentContextBeforeInput?.hasSuffix(mark + " ") == true {
+            attachedMark = nil
+            deleteBackward(); deleteBackward()
+            insert(" " + mark + typed + " ")
+            spaceIsOurs = true
+            log("type", ["char": typed, "smiley": mark + typed])
+            afterTyping()
+            return
+        }
+        attachedMark = nil
+        if spaceIsOurs || spaceEndedWord, !keepSpace, ".,!?:;)".contains(typed), proxy?.documentContextBeforeInput?.hasSuffix(" ") == true {
             spaceEndedWord = false
             deleteBackward()
             insert(typed + " ")
             spaceIsOurs = true
+            attachedMark = typed
             log("type", ["char": typed, "before_our_space": true])
             if !layout.isLetters { layout = letters }
             afterTyping()
@@ -365,6 +384,7 @@ final class KeyboardModel {
         }
         spaceIsOurs = false
         spaceEndedWord = false
+        keepSpace = false
         insert(typed)
         log("type", ["char": typed])
         if shift == .once { shift = .off }
@@ -386,6 +406,8 @@ final class KeyboardModel {
     /// the sentence — not three spaces in a row.
     func space() {
         creditPick()
+        attachedMark = nil
+        keepSpace = false
         autoFixed = nil
         offered = nil
         spaceEndedWord = false
@@ -417,6 +439,8 @@ final class KeyboardModel {
 
     func newline() {
         creditPick()
+        attachedMark = nil
+        keepSpace = false
         autoFixed = nil
         offered = nil
         spaceIsOurs = false
@@ -432,6 +456,21 @@ final class KeyboardModel {
     }
 
     func backspace() {
+        // Right after a mark took a space's place: the space back, the mark gone — the next mark
+        // stays after the space.
+        if let mark = attachedMark, proxy?.documentContextBeforeInput?.hasSuffix(mark + " ") == true {
+            attachedMark = nil
+            deleteBackward(); deleteBackward()
+            insert(" ")
+            spaceIsOurs = false
+            spaceEndedWord = false
+            keepSpace = true
+            log("mark-attach-undone", ["mark": mark])
+            afterTyping()
+            return
+        }
+        attachedMark = nil
+        keepSpace = false
         if let picked = pendingPick {
             pendingPick = nil
             log("suggestion-edited", ["suggestion": picked])
@@ -872,6 +911,8 @@ final class KeyboardModel {
 
     func choose(suggestion: String) {
         creditPick()
+        attachedMark = nil
+        keepSpace = false
         offered = nil
         if Emoji.isEmoji(suggestion), let use = emojiUse {
             emojiUse = nil
