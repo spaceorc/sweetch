@@ -14,6 +14,9 @@ enum PhoneLog {
 
     /// What waits on the disk, to a Mac if one answers.
     static func flush() async {
+        if let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+            KeyLogSpool.mirror(to: documents.appendingPathComponent("keylog-out"))
+        }
         guard KeyLogSpool.waiting > 0, let mac = await Server.reachable() else { return }
         await KeyLogSpool.flush { events, batch in await mac.keyboardLog(events, batch: batch) }
     }

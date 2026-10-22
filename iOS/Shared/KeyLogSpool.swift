@@ -51,6 +51,17 @@ enum KeyLogSpool {
         }
     }
 
+    /// The batches waiting, copied to `dir` (emptied first) — the app's own Documents, which a Mac
+    /// can read over the cable or the network with `devicectl` (`make phone-logs`) when no Mac is
+    /// reachable to send them to: the app group's folder it can't read.
+    static func mirror(to target: URL) {
+        guard let dir else { return }
+        let fm = FileManager.default
+        try? fm.removeItem(at: target)
+        try? fm.createDirectory(at: target, withIntermediateDirectories: true)
+        for file in batches(in: dir) { try? fm.copyItem(at: file, to: target.appendingPathComponent(file.lastPathComponent)) }
+    }
+
     /// How many events wait to be sent — for the status line.
     static var waiting: Int {
         guard let dir else { return 0 }

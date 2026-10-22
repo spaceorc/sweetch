@@ -29,7 +29,7 @@ ICON_SRC   = Resources/icon/AppIcon.icon
 ICON_DIR   = $(BUILD_DIR)/icon
 ICON_ICNS  = $(ICON_DIR)/AppIcon.icns
 
-.PHONY: all build app run debug clean setup-signing tcc-reset icon stop start trace phone serve-app mini sync sync-install lexicon decoder-eval mac-bench whisper-framework
+.PHONY: all build app run debug clean setup-signing tcc-reset icon stop start trace phone serve-app mini sync sync-install lexicon decoder-eval mac-bench phone-logs whisper-framework
 
 all: app
 
@@ -246,6 +246,10 @@ bench:
 	@$$( [ -x $(DECODER_VENV) ] && echo $(DECODER_VENV) || echo python3 ) -I Tools/keyboard/export_words.py $(BUILD_DIR)/keyboard-words.json
 	@mkdir -p $(BUILD_DIR) && swiftc -O -o $(BUILD_DIR)/replay Tools/keyboard/replay/main.swift iOS/SweetchKeyboard/Decoder/*.swift
 	@SWIFT_DETERMINISTIC_HASHING=1 $(BUILD_DIR)/replay $(LEXICON) $(BUILD_DIR)/keyboard-words.json --bench $(NAME) $(ARGS)
+
+# The iPhone keyboard's log pulled off the phone when it reaches no Mac by itself (Tools/phone-logs.sh).
+phone-logs:
+	@PHONE_ID=$(PHONE_ID) XCODE_DEV=$(XCODE_DEV) Tools/phone-logs.sh
 
 # The Mac's bench: the words typed on the Mac (its typing log, Tools/keyboard/export_mac_words.py)
 # through the same decoder — `make mac-bench` for autocorrect, ARGS="--layouts 100 2 --margin 120"

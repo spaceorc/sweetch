@@ -51,8 +51,11 @@ final class DictationServer {
     /// Dictations being heard, and when the last one was: an update waits for a quiet moment
     /// (`/ping` tells it, see Tools/mini/update.sh).
     private var hearing = 0
-    /// The keyboard log's batches already kept.
-    private var keyboardBatches: [String] = []
+    /// The keyboard log's batches already kept — on disk too (`keyboard/.batches`): a batch can come
+    /// twice a day apart, pulled off the phone with `make phone-logs` and later sent by the phone.
+    private lazy var keyboardBatches: Set<String> = Set(((try? String(contentsOf: Self.batchesFile, encoding: .utf8)) ?? "")
+        .split(separator: "\n").map(String.init))
+    private static var batchesFile: URL { AppSupport.dir.appendingPathComponent("keyboard/.batches") }
     private var lastDictation = Date.distantPast
     /// The field the keyboard last saw, for the next context.
     private var field: (text: String, at: Date)?
@@ -325,8 +328,13 @@ final class DictationServer {
         if let batch = (json as? [String: Any])?["batch"] as? String {
             let seen = lock.withLock {
                 if keyboardBatches.contains(batch) { return true }
-                keyboardBatches.append(batch)
-                if keyboardBatches.count > 2000 { keyboardBatches.removeFirst(1000) }
+                keyboardBatches.insert(batch)
+                try? FileManager.default.createDirectory(at: Self.batchesFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+                if let handle = try? FileHandle(forWritingTo: Self.batchesFile) {
+                    handle.seekToEndOfFile(); handle.write(Data((batch + "\n").utf8)); try? handle.close()
+                } else {
+                    try? Data((batch + "\n").utf8).write(to: Self.batchesFile)
+                }
                 return false
             }
             if seen { return (200, ["ok": true, "kept": 0, "duplicate": true]) }
@@ -350,6 +358,7 @@ final class DictationServer {
                 try? lines.write(to: url)
             }
         }
+        log.info("keyboard log: \(events.count, privacy: .public) events kept")
         return (200, ["ok": true, "kept": events.count])
     }
 }
