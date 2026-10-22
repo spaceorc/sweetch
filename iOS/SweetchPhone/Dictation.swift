@@ -60,7 +60,10 @@ final class Dictation: ObservableObject {
 
     /// Starts when not listening, stops when listening. Nil when it started; what was heard when it
     /// stopped (empty when nothing was). `waitingForScreenshot`: a Shortcut is about to attach one.
-    func toggle(waitingForScreenshot: Bool = true) async throws -> String? {
+    /// `source`: what asked — for the log: a second recording no one meant to start came after a
+    /// dictation twice on 22 Oct, and which of the ways in started it wasn't known.
+    func toggle(waitingForScreenshot: Bool = true, source: String) async throws -> String? {
+        noteAction(phase == .idle ? "start" : "stop", source: source)
         switch phase {
         case .idle:
             do {
@@ -173,7 +176,18 @@ final class Dictation: ObservableObject {
         localContext = Task.detached { PhonePipeline.context(screenshot: shot, keyboard: keyboard, dir: dir) }
     }
 
-    func stop() async {
+    /// What started or stopped a recording, and how long after the last one ended — to the Mac's log.
+    func noteAction(_ action: String, source: String) {
+        guard !incognito else { return }
+        let event: [String: Any] = ["e": "phone-dictation", "t": Date().timeIntervalSince1970, "run": "app", "action": action,
+                                    "source": source, "phase": "\(phase)", "since_last_end": lastEnded.map { Date().timeIntervalSince($0) } ?? -1]
+        Task { await PhoneLog.note([event]) }
+    }
+    private var lastEnded: Date?
+
+    func stop(reason: String? = nil) async {
+        if let reason, phase == .listening { noteAction("stop", source: reason) }
+        if phase == .listening { lastEnded = Date() }
         last = nil
         guard phase == .listening, let recording else { return }
         tap.end()   // closes the WAV: only then are its samples and sizes written

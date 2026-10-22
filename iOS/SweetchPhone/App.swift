@@ -119,7 +119,7 @@ struct ContentView: View {
                 }
                 Section("Try") {
                     Button(dictation.phase == .listening ? "Stop" : "Dictate") {
-                        Task { _ = try? await dictation.toggle(waitingForScreenshot: false) }
+                        Task { _ = try? await dictation.toggle(waitingForScreenshot: false, source: "app-button") }
                     }
                     .disabled(dictation.phase == .recognizing)
                     if dictation.phase == .listening { Text(dictation.preview.isEmpty ? "…" : dictation.preview).foregroundStyle(.secondary) }

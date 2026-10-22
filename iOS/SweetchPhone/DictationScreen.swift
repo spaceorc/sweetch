@@ -15,7 +15,7 @@ struct DictationScreen: View {
             dictation.keyboard = incognito ? nil : keyboard
             dictation.incognito = incognito
         }
-        if dictation.phase == .idle { Task { _ = try? await dictation.toggle(waitingForScreenshot: false) } }
+        if dictation.phase == .idle { Task { _ = try? await dictation.toggle(waitingForScreenshot: false, source: "keyboard") } }
     }
 
     var body: some View {
@@ -99,7 +99,7 @@ struct DictationScreen: View {
                 ZStack {
                     Circle().fill(.red.opacity(0.18)).frame(width: 96 + 70 * level, height: 96 + 70 * level)
                         .animation(.easeOut(duration: 0.08), value: level)
-                    Button { Task { await dictation.stop() } } label: {
+                    Button { Task { await dictation.stop(reason: "screen-stop") } } label: {
                         RoundedRectangle(cornerRadius: 8).fill(.white).frame(width: 30, height: 30)
                             .frame(width: 88, height: 88).background(.red, in: Circle())
                     }
@@ -109,7 +109,7 @@ struct DictationScreen: View {
         case .recognizing:
             ProgressView().controlSize(.large).tint(.white).frame(width: 170, height: 170)
         case .idle:
-            Button { Task { _ = try? await dictation.toggle(waitingForScreenshot: false) } } label: {
+            Button { Task { _ = try? await dictation.toggle(waitingForScreenshot: false, source: "screen-mic") } } label: {
                 Image(systemName: "mic.fill").font(.system(size: 34, weight: .semibold)).foregroundStyle(.white)
                     .frame(width: 88, height: 88).background(.white.opacity(0.14), in: Circle())
             }
@@ -122,7 +122,7 @@ struct DictationScreen: View {
         var task = UIBackgroundTaskIdentifier.invalid
         task = UIApplication.shared.beginBackgroundTask { UIApplication.shared.endBackgroundTask(task) }
         Task { @MainActor in
-            await Dictation.shared.stop()
+            await Dictation.shared.stop(reason: "back-to-app")
             Dictation.shared.screen = false
             UIApplication.shared.endBackgroundTask(task)
         }
