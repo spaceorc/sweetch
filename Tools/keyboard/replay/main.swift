@@ -146,13 +146,12 @@ if let i = args.firstIndex(of: "--bench"), i + 1 < args.count {
         }
         var first3: Int?, first1: Int?
         if word.kind == "clean" {
-            for k in 2..<n {
-                let r = decoder.decode(Array(taps.prefix(k)), complete: true, context: context)
-                var shown: [String] = []
-                for c in r.candidates where !shown.contains(c.word.lowercased()) {
-                    shown.append(c.word.lowercased())
-                    if shown.count == 3 { break }
-                }
+            // `--from-two`: as before 22 Oct — the decoder's own, from the second letter.
+            let fromTwo = args.contains("--from-two")
+            for k in (fromTwo ? 2 : 1)..<n {
+                let shown = fromTwo
+                    ? Array(decoder.decode(Array(taps.prefix(k)), complete: true, context: context).candidates.map { $0.word.lowercased() }.reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }.prefix(3))
+                    : decoder.completions(Array(taps.prefix(k)), context: context).map { $0.lowercased() }
                 if first3 == nil, shown.contains(truth) { first3 = n - k }
                 if shown.first == truth { first1 = n - k; break }
             }
@@ -209,12 +208,9 @@ if let i = args.firstIndex(of: "--at-letters"), i + 1 < args.count, let k = Int(
         let taps = word.taps.prefix(k).map { WordDecoder.Tap(point: CGPoint(x: $0.x, y: $0.y), keys: keys[$0.layout] ?? [], deliberate: $0.deliberate) }
         var context = WordDecoder.Context()
         if word.sentence_start == true { context.previous = 0 } else if let previous = word.previous { context.previous = lexicon.lookup(previous.lowercased()) }
+        if word.previous2_start == true { context.previous2 = 0 } else if let p2 = word.previous2 { context.previous2 = lexicon.lookup(p2.lowercased()) }
         if recentCount > 0 { context.recent = Set(typed.suffix(recentCount)) }
-        var shown: [String] = []
-        for c in decoder.decode(Array(taps), complete: true, context: context).candidates where !shown.contains(c.word.lowercased()) {
-            shown.append(c.word.lowercased())
-            if shown.count == 3 { break }
-        }
+        let shown = decoder.completions(Array(taps), context: context).map { $0.lowercased() }
         n += 1
         if shown.first == truth { first += 1 }
         if shown.contains(truth) { three += 1 }

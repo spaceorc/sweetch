@@ -32,7 +32,10 @@ NONE = 0xFFFFFFFF
 PERSONAL = float(os.environ.get("SWEETCH_NGRAM_PERSONAL", "200"))
 DISCOUNT = 0.75
 # Kept: next words per pair's context, per triple's; a triple's context seen at least this often.
-PAIR_WORDS, TRIPLE_WORDS, TRIPLE_SEEN = (int(x) for x in os.environ.get("SWEETCH_NGRAM_KEEP", "4,3,20").split(","))
+# Deep enough that the letters typed still leave some to offer (WordDecoder.completions): 24 after a
+# word put the word among three after one letter for 15% of held-out words against 4% with 4; the
+# triples' depth and how often they were seen hardly mattered — 18 MB.
+PAIR_WORDS, TRIPLE_WORDS, TRIPLE_SEEN = (int(x) for x in os.environ.get("SWEETCH_NGRAM_KEEP", "24,12,20").split(","))
 
 
 def corpus(name):

@@ -119,6 +119,28 @@ final class WordDecoder {
         return max(lifted, min(255, 255 + nextWordScale * log2(p)))
     }
 
+    /// What the strip offers while a word is typed: the words likeliest after the two before it
+    /// that the letters typed begin, then the decoder's own (its words for the taps, and the words
+    /// they begin). From the first letter on: on the held-out words of 21–22 Oct the word was among
+    /// the three after one letter 15% of the time (1% from the decoder alone), after two 41% (30%).
+    func completions(_ taps: [Tap], context: Context, limit: Int = 3) -> [String] {
+        var shown: [String] = []
+        func add(_ word: String) {
+            guard shown.count < limit, !shown.contains(where: { $0.lowercased() == word.lowercased() }) else { return }
+            shown.append(word)
+        }
+        let result = decode(taps, complete: true, context: context)
+        if let nextWords, let previous = context.previous, !taps.isEmpty {
+            let prefix = result.literal.lowercased()
+            for (node, _) in nextWords.predict(after: context.previous2, previous, limit: 36) {
+                let word = lexicon.word(at: node)
+                if word.lowercased().hasPrefix(prefix) { add(word) }
+            }
+        }
+        for candidate in result.candidates { add(candidate.word) }
+        return shown
+    }
+
     /// The likeliest next words before a letter is typed: those seen after the word before.
     func predictions(_ context: Context, limit: Int = 3) -> [String] {
         if let nextWords, let previous = context.previous {

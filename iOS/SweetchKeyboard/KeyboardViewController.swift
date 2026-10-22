@@ -1516,21 +1516,18 @@ final class KeyboardModel {
         let asked = word
         let taps = wordTaps
         let keep = keepAsTyped
-        if wordTapsHold, taps.count >= 2, taps.count == word.filter(\.isLetter).count, !Self.decoderFailed {
+        // From the first letter: the words likeliest after the two before that it begins
+        // (WordDecoder.completions) — before 22 Oct the decoder waited for a second letter.
+        if wordTapsHold, taps.count >= 1, taps.count == word.filter(\.isLetter).count, !Self.decoderFailed {
             let capital = word.first?.isUppercase == true
             Self.decoderQueue.async { [weak self] in
                 guard let decoder = Self.loadDecoder() else { return }
                 let context = Self.context(previous, recent: recent, lexicon: decoder.lexicon, previous2: previous2)
-                let result = decoder.decode(taps, complete: true, context: context)
                 // What a space would put right, worked out now so the space doesn't wait: the decoder's
                 // correction, unless the word as typed is one the system knows or the user kept.
-                let (fixed, confidence, alternatives) = Self.correction(of: asked, taps: taps, decoder: decoder, context: context, keep: keep)
-                let words = result.candidates.map { capital ? $0.word.prefix(1).uppercased() + $0.word.dropFirst() : $0.word }
-                var picked: [String] = []
-                for candidate in words where !picked.contains(where: { $0.lowercased() == candidate.lowercased() }) {
-                    picked.append(candidate)
-                    if picked.count == 3 { break }
-                }
+                let (fixed, confidence, alternatives) = taps.count >= 2
+                    ? Self.correction(of: asked, taps: taps, decoder: decoder, context: context, keep: keep) : (nil, 0, [])
+                let picked = decoder.completions(taps, context: context).map { capital ? $0.prefix(1).uppercased() + $0.dropFirst() : $0 }
                 DispatchQueue.main.async {
                     guard let self, self.word == asked else { return }
                     self.pendingCorrection = (asked, fixed, confidence, alternatives)
