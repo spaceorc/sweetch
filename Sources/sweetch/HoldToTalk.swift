@@ -41,6 +41,14 @@ final class HoldToTalk {
     private var handoff: (app: NSRunningApplication, to: String, at: Date)?
     /// We're hearing that hold too, silently, to compare with what the app writes.
     private var shadowing = false
+    /// When Claude's dictation was turned on, and whether turning it off is still to come.
+    private var claudeOnAt: Date?
+    private var claudeOffPending = false
+    /// The least time between turning Claude's dictation on and off: sooner, Claude — still opening
+    /// the microphone — takes no notice of the second ⌘D and goes on listening until turned off by
+    /// hand (a 0.43 s hold on 21 Oct, and Claude wrote a whole sentence after; 23 holds under 1.2 s
+    /// since 19 Oct, the shortest that ended cleanly 0.88 s).
+    private static let claudeMinimumOn: TimeInterval = 1.2
     private let dictation: Dictation
     private let isDictationEnabled: () -> Bool
     /// Space was taken over: the keystroke buffer no longer matches the document.
@@ -110,8 +118,19 @@ final class HoldToTalk {
         // the next real press anywhere arrives as an autorepeat — which Claude Code in a terminal
         // doesn't take for the start of a hold. A release on its own types nothing.
         case (.keyUp, .claudeRecording):
-            Replayer.postKeyPair(keyCode: Self.dictationKeyCode, flags: .maskCommand)
-            log.info("hold-to-talk: Claude dictation off")
+            let wait = max(0, Self.claudeMinimumOn - Date().timeIntervalSince(claudeOnAt ?? .distantPast))
+            claudeOffPending = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
+                // ⌘D elsewhere is something else (a bookmark in a browser): only to Claude.
+                if wait > 0, NSWorkspace.shared.frontmostApplication?.bundleIdentifier != Self.claudeBundleID {
+                    self?.claudeOffPending = false
+                    log.error("hold-to-talk: Claude no longer in front — its dictation left on")
+                    return
+                }
+                Replayer.postKeyPair(keyCode: Self.dictationKeyCode, flags: .maskCommand)
+                self?.claudeOffPending = false
+                log.info("hold-to-talk: Claude dictation off\(wait > 0 ? String(format: " (%.2f s later)", wait) : "")")
+            }
             state = .idle
             recordHandoff()
             return false
@@ -149,8 +168,11 @@ final class HoldToTalk {
         switch app.bundleIdentifier {
         case Self.claudeBundleID:
             guard focusIsTextInput() else { return passThrough("Space held outside Claude's prompt") }
+            // Its dictation still to be turned off from the hold before: this one is just Space.
+            guard !claudeOffPending else { return passThrough("Claude's dictation still being turned off") }
             eraseTypedSpace()
             Replayer.postKeyPair(keyCode: Self.dictationKeyCode, flags: .maskCommand)
+            claudeOnAt = Date()
             log.info("hold-to-talk: Claude dictation on")
             state = .claudeRecording
             handOff(app, to: "Claude desktop")
