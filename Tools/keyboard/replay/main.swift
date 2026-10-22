@@ -301,7 +301,12 @@ if let i = args.firstIndex(of: "--predict-texts"), i + 1 < args.count {
     // `--dump <file.json>`: each word with the one before and the three shown, for a closer look.
     let dumpPath = args.firstIndex(of: "--dump").flatMap { j in j + 1 < args.count ? args[j + 1] : nil }
     var dump: [[String: Any]]? = dumpPath == nil ? nil : []
+    // `--same-script`: at a sentence's start, the words in the script of the sentence before.
+    let sameScript = args.contains("--same-script")
+    func cyrillic(_ w: String) -> Bool { w.unicodeScalars.contains { (0x0400...0x04FF).contains($0.value) } }
+    var sentenceStarts = (n: 0, three: 0)
     for text in texts {
+        var lastWord: String?
         for sentence in text.components(separatedBy: CharacterSet(charactersIn: ".!?…\n")) {
             let ns = sentence as NSString
             let words = token.matches(in: sentence, range: NSRange(location: 0, length: ns.length)).map { ns.substring(with: $0.range).lowercased() }
@@ -312,7 +317,11 @@ if let i = args.firstIndex(of: "--predict-texts"), i + 1 < args.count {
                     var context = WordDecoder.Context()
                     context.previous = p
                     context.previous2 = previous2
-                    let shown = decoder.predictions(context).map { $0.lowercased() }
+                    var shown = decoder.predictions(context).map { $0.lowercased() }
+                    if sameScript, p == 0, let lastWord {
+                        shown = Array(decoder.predictions(context, limit: 40).map { $0.lowercased() }.filter { cyrillic($0) == cyrillic(lastWord) }.prefix(3))
+                    }
+                    if p == 0 { sentenceStarts.n += 1; if shown.contains(word) { sentenceStarts.three += 1 } }
                     if dump != nil { dump!.append(["previous": lexicon.word(at: p).lowercased(), "word": word, "shown": shown]) }
                     n += 1
                     if shown.first == word { first += 1 }
@@ -320,9 +329,11 @@ if let i = args.firstIndex(of: "--predict-texts"), i + 1 < args.count {
                 }
                 previous2 = previous
                 previous = node
+                lastWord = word
             }
         }
     }
+    print("at a sentence's start: \(sentenceStarts.n) words, in three \(sentenceStarts.three)")
     if let dumpPath, let dump { try JSONSerialization.data(withJSONObject: dump).write(to: URL(fileURLWithPath: dumpPath)) }
     print("\(n) words: first \(first) (\(String(format: "%.1f", 100 * Double(first) / Double(max(n, 1))))%), in three \(three) (\(String(format: "%.1f", 100 * Double(three) / Double(max(n, 1))))%)")
     exit(0)
