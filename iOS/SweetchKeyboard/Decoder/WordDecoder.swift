@@ -99,6 +99,9 @@ final class WordDecoder {
         var previous: Int?
         /// The word before that (0: a sentence starts before `previous`); nil when unknown.
         var previous2: Int?
+        /// The language the text was in just before (true: Cyrillic) — at a sentence's start
+        /// (`previous` 0), what sentences in it begin with; nil: any sentence's.
+        var cyrillic: Bool?
         /// The next words likeliest after those two (node → probability), filled in by `decode`.
         var next: [Int: Float]?
         var recent: Set<Int> = []
@@ -119,6 +122,14 @@ final class WordDecoder {
         return max(lifted, min(255, 255 + nextWordScale * log2(p)))
     }
 
+    /// The word the next words come after: at a sentence's start, the start in the language the
+    /// text was in.
+    private func nextWordsContext(_ context: Context) -> (Int?, Int)? {
+        guard let previous = context.previous else { return nil }
+        if previous == 0, let cyrillic = context.cyrillic { return (nil, NextWords.sentenceStart(cyrillic: cyrillic)) }
+        return (context.previous2, previous)
+    }
+
     /// What the strip offers while a word is typed: the words likeliest after the two before it
     /// that the letters typed begin, then the decoder's own (its words for the taps, and the words
     /// they begin). From the first letter on: on the held-out words of 21–22 Oct the word was among
@@ -130,9 +141,9 @@ final class WordDecoder {
             shown.append(word)
         }
         let result = decode(taps, complete: true, context: context)
-        if let nextWords, let previous = context.previous, !taps.isEmpty {
+        if let nextWords, let (first, second) = nextWordsContext(context), !taps.isEmpty {
             let prefix = result.literal.lowercased()
-            for (node, _) in nextWords.predict(after: context.previous2, previous, limit: 36) {
+            for (node, _) in nextWords.predict(after: first, second, limit: 36) {
                 let word = lexicon.word(at: node)
                 if word.lowercased().hasPrefix(prefix) { add(word) }
             }
@@ -143,8 +154,8 @@ final class WordDecoder {
 
     /// The likeliest next words before a letter is typed: those seen after the word before.
     func predictions(_ context: Context, limit: Int = 3) -> [String] {
-        if let nextWords, let previous = context.previous {
-            return nextWords.predict(after: context.previous2, previous, limit: limit).map { lexicon.word(at: $0.word) }
+        if let nextWords, let (first, second) = nextWordsContext(context) {
+            return nextWords.predict(after: first, second, limit: limit).map { lexicon.word(at: $0.word) }
         }
         guard let previous = context.previous, let bigrams else { return [] }
         let words = bigrams.next(after: previous, limit: 24).map(\.word)
@@ -237,8 +248,8 @@ final class WordDecoder {
     /// `complete`: also words the taps so far begin — for suggestions while the word is typed.
     func decode(_ taps: [Tap], complete: Bool = false, context: Context = Context()) -> Result {
         var context = context
-        if nextWordScale > 0, context.next == nil, let nextWords, let previous = context.previous {
-            context.next = Dictionary(nextWords.predict(after: context.previous2, previous, limit: nextWordLimit).map { ($0.word, $0.p) }) { a, _ in a }
+        if nextWordScale > 0, context.next == nil, let nextWords, let (first, second) = nextWordsContext(context) {
+            context.next = Dictionary(nextWords.predict(after: first, second, limit: nextWordLimit).map { ($0.word, $0.p) }) { a, _ in a }
         }
         let spreads = taps.map(spread)
         let literal = String(spreads.map(\.landed))

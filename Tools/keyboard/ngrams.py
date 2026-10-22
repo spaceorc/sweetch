@@ -24,7 +24,9 @@ import numpy as np
 CORPORA = ["rus-ru_web-public_2019_1M", "rus_news_2024_1M", "eng-com_web-public_2018_1M"]
 CACHE = Path.home() / "Library/Caches/sweetch/corpora"
 TOKEN = re.compile(r"[A-Za-zА-Яа-яЁё]+(?:[-'’][A-Za-zА-Яа-яЁё]+)*")
-SENTENCE = re.compile(r"[.!?…\n]+")
+# A sentence ends at a mark followed by a space or the end — not inside «main.py» or «github.com»,
+# which made «py» and «com» words that English sentences begin with.
+SENTENCE = re.compile(r"[.!?…]+(?=\s|$)|\n+")
 NONE = 0xFFFFFFFF
 
 # How much a sentence of the user's own counts against one of the corpora's
@@ -56,6 +58,10 @@ def corpus(name):
 
 
 BITS = 21   # node ids are below 2²¹: three fit one 64-bit key
+# A sentence's start in a language: what follows it is what sentences in that language begin with
+# — the root (0) is any sentence's. The keyboard asks with the language the text was in just before
+# (NextWords.sentenceStart): a Russian sentence after a Russian one, an English after an English.
+START = {"ru": (1 << BITS) - 1, "en": (1 << BITS) - 2}
 
 
 def count(texts, ids, weight):
@@ -65,8 +71,10 @@ def count(texts, ids, weight):
     for text in texts:
         for sentence in SENTENCE.split(text):
             a, b = None, 0
-            for token in TOKEN.findall(sentence):
+            for i, token in enumerate(TOKEN.findall(sentence)):
                 c = ids.get(token.replace("’", "'").lower())
+                if i == 0 and c is not None:
+                    pairs.append(START["ru" if re.search("[а-яёА-ЯЁ]", token) else "en"] << BITS | c)
                 if c is not None and b is not None:
                     pairs.append(b << BITS | c)
                     if a is not None:

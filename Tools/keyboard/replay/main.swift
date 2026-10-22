@@ -307,7 +307,8 @@ if let i = args.firstIndex(of: "--predict-texts"), i + 1 < args.count {
     var sentenceStarts = (n: 0, three: 0)
     for text in texts {
         var lastWord: String?
-        for sentence in text.components(separatedBy: CharacterSet(charactersIn: ".!?…\n")) {
+        let sentences = text.replacingOccurrences(of: "[.!?…]+(?=\\s|$)|\\n+", with: "\u{1}", options: .regularExpression).components(separatedBy: "\u{1}")
+        for sentence in sentences {
             let ns = sentence as NSString
             let words = token.matches(in: sentence, range: NSRange(location: 0, length: ns.length)).map { ns.substring(with: $0.range).lowercased() }
             var previous2: Int?, previous: Int? = 0
@@ -317,6 +318,7 @@ if let i = args.firstIndex(of: "--predict-texts"), i + 1 < args.count {
                     var context = WordDecoder.Context()
                     context.previous = p
                     context.previous2 = previous2
+                    if p == 0, let lastWord, !args.contains("--no-start-language") { context.cyrillic = cyrillic(lastWord) }
                     var shown = decoder.predictions(context).map { $0.lowercased() }
                     if sameScript, p == 0, let lastWord {
                         shown = Array(decoder.predictions(context, limit: 40).map { $0.lowercased() }.filter { cyrillic($0) == cyrillic(lastWord) }.prefix(3))

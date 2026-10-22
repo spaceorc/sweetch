@@ -9,6 +9,10 @@ final class NextWords {
     private let contexts: Int
     private let tableOffset, entriesOffset: Int
     private static let none = 0xFFFF_FFFF
+
+    /// What stands for a sentence's start in a language (ngrams.py's START): the words sentences in
+    /// it begin with. Cyrillic: Russian; otherwise English.
+    static func sentenceStart(cyrillic: Bool) -> Int { cyrillic ? (1 << 21) - 1 : (1 << 21) - 2 }
     private static let row = 14
 
     init?(url: URL) {

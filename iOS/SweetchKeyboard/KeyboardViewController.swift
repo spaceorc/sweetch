@@ -1558,9 +1558,15 @@ final class KeyboardModel {
 
     /// The word before the one being typed and the word before that (the next words come from
     /// the two); the second nil when the first is unknown or starts the sentence.
+    /// At a sentence's start the second is the last word of the text before it, marked as a
+    /// sentence's start: the language it was in is the one the next sentence is likeliest in.
     private func previousWords(before text: String) -> (previous: (word: String?, sentenceStart: Bool), previous2: (word: String?, sentenceStart: Bool)?) {
         let previous = previousWord(before: text)
-        guard let word = previous.word else { return (previous, nil) }
+        guard let word = previous.word else {
+            let rest = text.reversed().drop { $0.isLetter }.drop { !$0.isLetter }
+            let last = String(rest.prefix { $0.isLetter }.reversed())
+            return (previous, last.isEmpty ? nil : (last, true))
+        }
         var rest = Substring(text)
         while let last = rest.last, last.isLetter || last == "'" || last == "’" || last == "-" { rest = rest.dropLast() }
         rest = rest.dropLast(rest.reversed().prefix { !$0.isLetter && !$0.isNumber }.count)
@@ -1583,6 +1589,9 @@ final class KeyboardModel {
                                 lexicon: Lexicon, previous2: (word: String?, sentenceStart: Bool)? = nil) -> WordDecoder.Context {
         var context = WordDecoder.Context()
         if previous.sentenceStart { context.previous = 0 } else if let word = previous.word { context.previous = lexicon.lookup(word) }
+        if previous.sentenceStart, let last = previous2?.word {
+            context.cyrillic = last.unicodeScalars.contains { (0x0400...0x04FF).contains($0.value) }
+        }
         if let previous2, !previous.sentenceStart {
             if previous2.sentenceStart { context.previous2 = 0 } else if let word = previous2.word { context.previous2 = lexicon.lookup(word) }
         }
