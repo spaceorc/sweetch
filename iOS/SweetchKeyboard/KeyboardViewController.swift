@@ -321,7 +321,8 @@ final class KeyboardModel {
             noteExternal(from: previous, to: now)
         }
         rememberField(now: false)
-        if !(proxy?.documentContextBeforeInput?.hasSuffix(" ") ?? false) { spaceIsOurs = false; spaceEndedWord = false }
+        // The cursor moved, or the text changed, not by the keyboard: its spaces are the user's.
+        if proxy?.documentContextBeforeInput != ownCursor { spaceIsOurs = false; spaceEndedWord = false; attachedMark = nil }
         log("host-change")
         autoCapitalise()
         fieldChanged()
@@ -361,7 +362,10 @@ final class KeyboardModel {
         // phone, 4 of 5 «)» after a space (22 Oct); a space the user typed stays («512 )»). The
         // space after is the keyboard's again, so «:» then «)» makes «:)».
         // A smiley out of the mark just put in place of the space: the space back before it.
-        if let mark = attachedMark, ":;".contains(mark), "()DPdp".contains(typed),
+        // Only where the keyboard left the cursor: put somewhere else by hand, a space before a
+        // mark is meant («:» typed after a space in the middle of the text, 23 Oct).
+        let untouched = proxy?.documentContextBeforeInput == ownCursor
+        if let mark = attachedMark, ":;".contains(mark), "()DPdp".contains(typed), untouched,
            proxy?.documentContextBeforeInput?.hasSuffix(mark + " ") == true {
             attachedMark = nil
             deleteBackward(); deleteBackward()
@@ -372,7 +376,7 @@ final class KeyboardModel {
             return
         }
         attachedMark = nil
-        if spaceIsOurs || spaceEndedWord, !keepSpace, ".,!?:;)".contains(typed), proxy?.documentContextBeforeInput?.hasSuffix(" ") == true {
+        if spaceIsOurs || spaceEndedWord, !keepSpace, untouched, ".,!?:;)".contains(typed), proxy?.documentContextBeforeInput?.hasSuffix(" ") == true {
             spaceEndedWord = false
             deleteBackward()
             insert(typed + " ")
