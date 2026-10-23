@@ -192,9 +192,9 @@ final class KeyboardModel {
     /// right by hand, 21 Oct) — the space was only how the word ended. Not `spaceIsOurs`: a second
     /// space after it still ends the sentence.
     private var spaceEndedWord = false
-    /// A mark just put in a space's place (and the space after it): ⌫ next takes that back, and a
-    /// smiley made of it gets its space back — «information :)», which the user fought for three
-    /// times on 22 Oct.
+    /// A mark just put in a space's place (and the space after it): ⌫ next takes that back — the
+    /// space a mark is wanted after. (A smiley isn't given its space back: the user writes them to
+    /// the word, «домой:)», «украдут:)» — 6 of 7 in their sent messages, 23 Oct.)
     private var attachedMark: String?
     /// The space the user asked back with ⌫: the next mark goes after it, as typed.
     private var keepSpace = false
@@ -359,22 +359,11 @@ final class KeyboardModel {
         }
         // A mark after a space the keyboard put in (after a picked word, or after a mark) takes its
         // place, the space going after it — «)» too: «(never )», «у тебя )», «украдут: )» on the
-        // phone, 4 of 5 «)» after a space (22 Oct); a space the user typed stays («512 )»). The
-        // space after is the keyboard's again, so «:» then «)» makes «:)».
-        // A smiley out of the mark just put in place of the space: the space back before it.
-        // Only where the keyboard left the cursor: put somewhere else by hand, a space before a
-        // mark is meant («:» typed after a space in the middle of the text, 23 Oct).
+        // phone, 4 of 5 «)» after a space (22 Oct). The space after is the keyboard's again, so
+        // «:» then «)» makes «:)», to the word as the user writes smileys. Only where the keyboard
+        // left the cursor: put somewhere else by hand, a space before a mark is meant («:» typed
+        // after a space in the middle of the text, 23 Oct).
         let untouched = proxy?.documentContextBeforeInput == ownCursor
-        if let mark = attachedMark, ":;".contains(mark), "()DPdp".contains(typed), untouched,
-           proxy?.documentContextBeforeInput?.hasSuffix(mark + " ") == true {
-            attachedMark = nil
-            deleteBackward(); deleteBackward()
-            insert(" " + mark + typed + " ")
-            spaceIsOurs = true
-            log("type", ["char": typed, "smiley": mark + typed])
-            afterTyping()
-            return
-        }
         attachedMark = nil
         if spaceIsOurs || spaceEndedWord, !keepSpace, untouched, ".,!?:;)".contains(typed), proxy?.documentContextBeforeInput?.hasSuffix(" ") == true {
             spaceEndedWord = false
