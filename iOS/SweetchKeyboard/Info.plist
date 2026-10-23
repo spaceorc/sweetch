@@ -45,6 +45,8 @@
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>The keyboard reaches your Mac on the local network when Tailscale is off.</string>
+	<key>SweetchCommit</key>
+	<string>$(SWEETCH_COMMIT)</string>
 	<key>SweetchToken</key>
 	<string>$(SWEETCH_TOKEN)</string>
 </dict>

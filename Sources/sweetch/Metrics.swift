@@ -74,7 +74,7 @@ enum Metrics {
                 "undone_per_100": per100(d.autocorrectUndone, d.typedWords),
                 "fixes_per_100": per100(d.fixes.count + d.suggestionFixes, d.typedWords),
                 "day": name, "typed_words": d.typedWords, "dictated_words": d.dictatedWords,
-                "dictations": d.dictations, "autocorrected": d.autocorrected, "undone": d.autocorrectUndone,
+                "dictations": d.dictations, "phone_dictations": d.phoneDictations, "autocorrected": d.autocorrected, "undone": d.autocorrectUndone,
                 "latency_median": median(d.latencies) ?? NSNull(),
             ]
         }

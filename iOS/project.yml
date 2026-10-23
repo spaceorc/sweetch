@@ -46,6 +46,7 @@ targets:
         NSSupportsLiveActivities: true
         NSLocalNetworkUsageDescription: Sweetch reaches your Mac on the local network when Tailscale is off.
         SweetchToken: $(SWEETCH_TOKEN)
+        SweetchCommit: $(SWEETCH_COMMIT)
         UIBackgroundModes: [audio]
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
@@ -89,6 +90,7 @@ targets:
       properties:
         CFBundleDisplayName: Sweetch
         SweetchToken: $(SWEETCH_TOKEN)
+        SweetchCommit: $(SWEETCH_COMMIT)
         NSLocalNetworkUsageDescription: The keyboard reaches your Mac on the local network when Tailscale is off.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true

@@ -44,6 +44,8 @@
 	<string>Sweetch shows the words as you say them.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
+	<key>SweetchCommit</key>
+	<string>$(SWEETCH_COMMIT)</string>
 	<key>SweetchToken</key>
 	<string>$(SWEETCH_TOKEN)</string>
 	<key>UIBackgroundModes</key>

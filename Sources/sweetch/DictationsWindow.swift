@@ -260,7 +260,7 @@ final class DictationsWindow: NSObject, NSWindowDelegate, NSTableViewDataSource,
 }
 
 /// The detail of one dictation as styled text.
-private enum DetailWriter {
+enum DetailWriter {
     static func write(_ entry: DictationsWindow.Entry) -> NSAttributedString {
         var w = Writer()
         let s = entry.session

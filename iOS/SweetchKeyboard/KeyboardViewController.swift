@@ -251,6 +251,8 @@ final class KeyboardModel {
         observeField()
         let proxy = proxy
         log("appear", [
+            // Which build the keyboard is (the Mac's window shows whether the iPhone is current).
+            "commit": Bundle.main.object(forInfoDictionaryKey: "SweetchCommit") as? String ?? "",
             "keyboard_type": proxy?.keyboardType?.rawValue ?? -1,
             "return_type": proxy?.returnKeyType?.rawValue ?? -1,
             "autocap": proxy?.autocapitalizationType?.rawValue ?? -1,

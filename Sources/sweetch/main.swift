@@ -67,7 +67,9 @@ if CommandLine.arguments.contains("--count-stats") {
 }
 // `sweetch --render-main <section> out.png`: Sweetch's window, a section of it, into a PNG.
 if let i = CommandLine.arguments.firstIndex(of: "--render-main"), i + 2 < CommandLine.arguments.count {
-    MainWindow.render(CommandLine.arguments[i + 1], to: URL(fileURLWithPath: CommandLine.arguments[i + 2]))
+    let a = CommandLine.arguments
+    let size = i + 4 < a.count ? Double(a[i + 3]).flatMap { w in Double(a[i + 4]).map { NSSize(width: w, height: $0) } } : nil
+    MainWindow.render(a[i + 1], to: URL(fileURLWithPath: a[i + 2]), size: size)
     exit(0)
 }
 // `sweetch --serve`: only the iPhone's dictation server, with no menu, keys or windows — for a Mac

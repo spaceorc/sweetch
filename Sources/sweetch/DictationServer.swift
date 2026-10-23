@@ -157,7 +157,8 @@ final class DictationServer {
         let (status, reply): (Int, [String: Any])
         if request.path == "/ping" {
             let idle = lock.withLock { hearing > 0 ? 0 : Date().timeIntervalSince(lastDictation) }
-            (status, reply) = (200, ["ok": true, "idle": Int(min(idle, 86_400))])
+            (status, reply) = (200, ["ok": true, "idle": Int(min(idle, 86_400)),
+                                     "commit": Bundle.main.object(forInfoDictionaryKey: "SweetchCommit") as? String ?? ""])
         } else if request.headers["authorization"] != "Bearer \(Self.token)" {
             (status, reply) = (401, ["error": "unauthorized"])
         } else {

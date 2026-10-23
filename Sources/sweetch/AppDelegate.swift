@@ -25,7 +25,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var detectingKey = false
     /// Open annotation windows, kept alive here — an accessory app has no document controller.
     private var editors: [ScreenshotEditor] = []
-    private var dictationsWindow: DictationsWindow?
     private var capturing = false
     /// Summary of a crash the previous run died from, until the user opens it.
     private var pendingCrashReport: URL?
@@ -405,7 +404,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// sweetch is a regular app for exactly as long as a window is open, and slips back into
     /// the menu bar when the last one closes.
     private func updateActivationPolicy() {
-        let policy: NSApplication.ActivationPolicy = editors.isEmpty && dictationsWindow == nil && mainWindow == nil ? .accessory : .regular
+        let policy: NSApplication.ActivationPolicy = editors.isEmpty && mainWindow == nil ? .accessory : .regular
         guard NSApp.activationPolicy() != policy else { return }
         NSApp.setActivationPolicy(policy)
     }
@@ -752,7 +751,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private var mainWindow: MainWindow?
 
-    @objc private func showMain() {
+    @objc private func showMain() { openMain(nil) }
+
+    private func openMain(_ section: MainView.Section?) {
         if mainWindow == nil {
             let actions = AppActions(
                 setServer: { [weak self] in self?.setServer($0) },
@@ -760,7 +761,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 forgetLastDictation: { [weak self] in self?.forgetLastDictation() },
                 captureScreenshot: { [weak self] in self?.captureScreenshot() },
                 captureFullScreen: { [weak self] in self?.captureFullScreen() },
-                showDictations: { [weak self] in self?.showDictations() },
                 detectKey: { [weak self] in self?.detectKey() },
                 refineDictionary: { [weak self] in self?.refineDictionary() },
                 showCrashReport: { [weak self] in self?.showCrashReport() },
@@ -777,21 +777,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             mainWindow = window
             updateActivationPolicy()
         }
-        mainWindow?.show()
+        mainWindow?.show(section)
     }
 
-    @objc private func showDictations() {
-        if dictationsWindow == nil {
-            let window = DictationsWindow()
-            window.onClose = { [weak self] in
-                self?.dictationsWindow = nil
-                self?.updateActivationPolicy()
-            }
-            dictationsWindow = window
-            updateActivationPolicy()   // before show(), so the window opens into the right policy
-        }
-        dictationsWindow?.show()
-    }
+    @objc private func showDictations() { openMain(.dictations) }
 
     @objc private func quit() {
         NSApp.terminate(nil)

@@ -88,6 +88,10 @@ $(ICON_ICNS): $(ICON_SRC) $(ICON_SRC)/icon.json $(wildcard $(ICON_SRC)/Assets/*)
 		--output-format human-readable-text $(CURDIR)/$(ICON_SRC) | grep -E 'error|warning' || true
 	@echo "built $(ICON_ICNS)"
 
+# The commit each build is made from (a + when there were changes not committed), kept in its
+# Info.plist as SweetchCommit: the window tells which device runs what.
+COMMIT = $(shell git describe --always --dirty=+ 2>/dev/null)
+
 build:
 	DEVELOPER_DIR=$(XCODE_DEV) swift build -c release
 
@@ -98,6 +102,7 @@ app: build setup-signing $(ICON_ICNS)
 	@mkdir -p $(APP_BUNDLE)/Contents/Resources
 	@cp .build/release/$(APP_NAME) $(APP_BUNDLE)/Contents/MacOS/$(APP_NAME)
 	@cp $(PLIST_SRC) $(APP_BUNDLE)/Contents/Info.plist
+	@/usr/libexec/PlistBuddy -c "Add :SweetchCommit string $(COMMIT)" $(APP_BUNDLE)/Contents/Info.plist
 	@cp $(ICON_ICNS) $(ICON_DIR)/Assets.car $(APP_BUNDLE)/Contents/Resources/
 	@cp $(LEXICON) $(APP_BUNDLE)/Contents/Resources/ 2>/dev/null || echo "warning: no lexicon (make lexicon) — no switching of the layout"
 	@cp .env $(APP_BUNDLE)/Contents/Resources/sweetch.env 2>/dev/null || echo "warning: .env missing — LLM correction disabled"
@@ -115,6 +120,7 @@ debug: setup-signing $(ICON_ICNS)
 	@mkdir -p $(APP_BUNDLE)/Contents/Resources
 	@cp .build/debug/$(APP_NAME) $(APP_BUNDLE)/Contents/MacOS/$(APP_NAME)
 	@cp $(PLIST_SRC) $(APP_BUNDLE)/Contents/Info.plist
+	@/usr/libexec/PlistBuddy -c "Add :SweetchCommit string $(COMMIT)" $(APP_BUNDLE)/Contents/Info.plist
 	@cp $(ICON_ICNS) $(ICON_DIR)/Assets.car $(APP_BUNDLE)/Contents/Resources/
 	@cp $(LEXICON) $(APP_BUNDLE)/Contents/Resources/ 2>/dev/null || echo "warning: no lexicon (make lexicon) — no switching of the layout"
 	@cp .env $(APP_BUNDLE)/Contents/Resources/sweetch.env 2>/dev/null || echo "warning: .env missing — LLM correction disabled"
@@ -157,7 +163,7 @@ phone:
 	cd iOS && DEVELOPER_DIR=$(XCODE_DEV) xcodegen generate -q
 	cd iOS && DEVELOPER_DIR=$(XCODE_DEV) xcodebuild -quiet -project SweetchPhone.xcodeproj -scheme SweetchPhone \
 		-destination id=$(PHONE_ID) -derivedDataPath build -allowProvisioningUpdates \
-		SWEETCH_TOKEN="$$(cat "$(HOME)/Library/Application Support/sweetch/server-token")" build
+		SWEETCH_TOKEN="$$(cat "$(HOME)/Library/Application Support/sweetch/server-token")" SWEETCH_COMMIT="$(COMMIT)" build
 	DEVELOPER_DIR=$(XCODE_DEV) xcrun devicectl device install app --device $(PHONE_ID) \
 		iOS/build/Build/Products/Debug-iphoneos/SweetchPhone.app
 
@@ -170,6 +176,7 @@ serve-app: build
 	@mkdir -p $(SERVE_BUNDLE)/Contents/MacOS $(SERVE_BUNDLE)/Contents/Resources
 	@cp .build/release/$(APP_NAME) $(SERVE_BUNDLE)/Contents/MacOS/$(APP_NAME)
 	@cp $(PLIST_SRC) $(SERVE_BUNDLE)/Contents/Info.plist
+	@/usr/libexec/PlistBuddy -c "Add :SweetchCommit string $(COMMIT)" $(SERVE_BUNDLE)/Contents/Info.plist
 	@cp .env $(SERVE_BUNDLE)/Contents/Resources/sweetch.env
 	@codesign --force --sign - $(SERVE_BUNDLE)
 
