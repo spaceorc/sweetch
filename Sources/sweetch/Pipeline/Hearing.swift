@@ -321,7 +321,7 @@ enum Hearing {
         }
     }
 
-    private static let system = """
+    static let system = """
     You work out what a user said into the microphone. They held a key in some app, dictated, and \
     released; whatever you answer is typed at their cursor as if they had typed it themselves. Getting \
     a word wrong there — a name, a term, a number — costs them more than a slightly awkward phrase.

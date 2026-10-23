@@ -18,6 +18,12 @@ if let i = CommandLine.arguments.firstIndex(of: "--fill-probe"), i + 2 < Command
     exit(0)
 }
 
+// `sweetch --learn-probe <cases.json> <out.json>`: settling again, told what corrections taught.
+if let i = CommandLine.arguments.firstIndex(of: "--learn-probe"), i + 2 < CommandLine.arguments.count {
+    LearnProbe.run(URL(fileURLWithPath: CommandLine.arguments[i + 1]), URL(fileURLWithPath: CommandLine.arguments[i + 2]))
+    exit(0)
+}
+
 // `sweetch --sweep [--dry-run]`: mask the secrets in everything kept (Sweep.swift).
 if CommandLine.arguments.contains("--sweep") {
     Sweep.run(dryRun: CommandLine.arguments.contains("--dry-run"))

@@ -233,6 +233,8 @@ final class WordMenu: NSObject {
             if AXUIElementCopyParameterizedAttributeValue(element, kAXBoundsForRangeParameterizedAttribute as CFString, value, &result) == .success,
                let result, CFGetTypeID(result) == AXValueGetTypeID() {
                 AXValueGetValue(result as! AXValue, .cgRect, &bounds)
+                // Electron (Claude, Slack) answers with an empty rectangle at the screen's corner.
+                if bounds.width < 1 || bounds.height < 1 || (bounds.minX == 0 && bounds.minY == 0) { topLeft = false }
             } else { topLeft = false }
         } else { topLeft = false }
         // The word in Cocoa's coordinates (Accessibility's run down from the main screen's top).
@@ -372,7 +374,10 @@ final class WordMenu: NSObject {
         return own.compactMap { entry -> (String, Double)? in
             let d = distance(key, entry.key)
             let ratio = 1 - Double(d) / Double(max(key.count, entry.key.count))
-            return ratio >= 0.75 && entry.word.lowercased() != word.lowercased() ? (entry.word, ratio * 1000 + Double(entry.frequency)) : nil
+            // Close, and starting with the same sound: the key is rough (all vowels one, «ч» near
+            // «к»), and at 0.75 «четыре» drew «который» (23 Oct).
+            return ratio >= 0.8 && entry.key.first == key.first && entry.word.lowercased() != word.lowercased()
+                ? (entry.word, ratio * 1000 + Double(entry.frequency)) : nil
         }.sorted { $0.1 > $1.1 }.map(\.0)
     }
 
