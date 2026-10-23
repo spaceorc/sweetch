@@ -10,6 +10,12 @@ if let i = CommandLine.arguments.firstIndex(of: "--next-word-probe"), i + 2 < Co
     exit(0)
 }
 
+// `sweetch --fill-probe <cases.json> <out.json>`: the model filling in a dictated word marked wrong.
+if let i = CommandLine.arguments.firstIndex(of: "--fill-probe"), i + 2 < CommandLine.arguments.count {
+    FillProbe.run(URL(fileURLWithPath: CommandLine.arguments[i + 1]), URL(fileURLWithPath: CommandLine.arguments[i + 2]))
+    exit(0)
+}
+
 // `sweetch --sweep [--dry-run]`: mask the secrets in everything kept (Sweep.swift).
 if CommandLine.arguments.contains("--sweep") {
     Sweep.run(dryRun: CommandLine.arguments.contains("--dry-run"))

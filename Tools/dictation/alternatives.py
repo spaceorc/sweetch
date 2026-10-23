@@ -76,7 +76,26 @@ def sound(word):
     return s.replace("dzh", "g").replace("zh", "g").replace("j", "g").replace("ph", "f").replace("ck", "k").replace("c", "k")
 
 
+def write_cases(path):
+    """The corrections as cases for the model (`sweetch --fill-probe`): the dictation's folder, its
+    text with the corrected words blanked, how many words, and what the user put in."""
+    cases = []
+    for folder, old, new, _ in corrections():
+        session = json.loads((folder / "session.json").read_text())
+        typed = session.get("inserted") or session.get("text") or ""
+        joined = " ".join(old)
+        at = typed.find(joined)
+        if at < 0 or not (session.get("settlement") or {}).get("input"):
+            continue
+        cases.append({"dir": str(folder), "blanked": typed[:at] + "[___]" + typed[at + len(joined):],
+                      "words": len(old), "old": joined, "truth": " ".join(new)})
+    Path(path).write_text(json.dumps(cases, ensure_ascii=False, indent=1))
+    print(f"{path}: {len(cases)} cases")
+
+
 def main():
+    if "--cases" in sys.argv:
+        return write_cases(sys.argv[sys.argv.index("--cases") + 1])
     verbose = "--verbose" in sys.argv
     spec = importlib.util.spec_from_file_location("build_lexicon", HERE.parent / "keyboard/build_lexicon.py")
     lexicon = importlib.util.module_from_spec(spec)
