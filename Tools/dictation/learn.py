@@ -46,6 +46,22 @@ def pairs():
     return sorted(out)
 
 
+def relevant(ps, versions):
+    """The pairs whose heard words sound like something in these versions: a run of one or two of
+    their words alike (0.85) — what bears on this dictation, not all that's learned."""
+    spans = set()
+    for v in versions:
+        ws = alt.words(v)
+        spans |= {w.lower() for w in ws} | {" ".join(ws[i:i + 2]).lower() for i in range(len(ws) - 1)}
+    keys = {alt.sound(s): s for s in spans}
+    out = []
+    for p in ps:
+        k = alt.sound(p[1])
+        if len(k) >= 2 and any(difflib.SequenceMatcher(a=k, b=key).ratio() >= 0.85 for key in keys):
+            out.append(p)
+    return out
+
+
 def learned_text(ps):
     """What's learned, as the model is told it: each word the user means, with what was heard for it."""
     by_word = collections.defaultdict(collections.Counter)
@@ -91,9 +107,9 @@ def cases(path):
         if session.get("handoff") or not (session.get("settlement") or {}).get("input"):
             continue
         before = [p for p in ps if p[0] < folder.name]
-        if not before:
-            continue
-        out.append({"dir": str(folder), "learned": learned_text(before), "truth": truth(folder),
+        versions = session.get("versions") or [session.get("text") or ""]
+        bearing = relevant(before, versions)
+        out.append({"dir": str(folder), "learned": learned_text(bearing), "truth": truth(folder),
                     "settled": session.get("text") or ""})
     Path(path).write_text(json.dumps(out, ensure_ascii=False, indent=1))
     print(f"{path}: {len(out)} settled dictations with something learned before them")

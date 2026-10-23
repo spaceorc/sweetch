@@ -42,7 +42,9 @@ enum LearnProbe {
                             return reply.flatMap { LLMJSON.object($0)?["text"] as? String } ?? ""
                         }
                         let plain = await settle(block)
-                        let taught = await settle(taught(block, learned: c["learned"] as? String ?? ""))
+                        // Nothing learned bears on it: told nothing, the same answer.
+                        let learned = c["learned"] as? String ?? ""
+                        let taught = learned.isEmpty ? plain : await settle(taught(block, learned: learned))
                         return (i, ["dir": dir.lastPathComponent, "plain": plain, "taught": taught,
                                     "truth": c["truth"] ?? "", "settled": c["settled"] ?? ""])
                     }
