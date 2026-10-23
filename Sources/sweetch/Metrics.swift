@@ -112,6 +112,17 @@ enum Metrics {
     /// The calls to models and what they cost (LLMUsage): the Macs' own (`llm-usage/`) and the
     /// iPhone's (`llm-usage` events in the keyboard's log) — today, the last seven days by what for
     /// and by model, each day of the last two weeks, and all that's kept.
+    /// What the models cost alone — for the Mac's window, without counting all the rest.
+    static func llmSummary(days count: Int = 14) -> [String: Any] {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        return llm(dayNames: (0..<count).reversed().map { dayName(calendar.date(byAdding: .day, value: -$0, to: today)!) })
+    }
+
+    /// The iPhone's `llm-usage` events per keyboard log, kept while the file is unchanged: the
+    /// logs are tens of megabytes, mostly touches.
+    nonisolated(unsafe) private static var llmCached: [String: (Date, [[String: Any]])] = [:]
+
     private static func llm(dayNames: [String]) -> [String: Any] {
         var records: [[String: Any]] = []
         let fm = FileManager.default
@@ -121,13 +132,21 @@ enum Metrics {
             }
         }
         let keyboard = AppSupport.dir.appendingPathComponent("keyboard", isDirectory: true)
-        for url in (try? fm.contentsOfDirectory(at: keyboard, includingPropertiesForKeys: nil)) ?? [] where url.pathExtension == "jsonl" {
+        for url in (try? fm.contentsOfDirectory(at: keyboard, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [] where url.pathExtension == "jsonl" {
+            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+            if let hit = lock.withLock({ llmCached[url.path] }), hit.0 == modified {
+                records += hit.1
+                continue
+            }
+            var found: [[String: Any]] = []
             for line in ((try? String(contentsOf: url, encoding: .utf8)) ?? "").split(separator: "\n") where line.contains("\"e\":\"llm-usage\"") {
                 if var r = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any] {
                     r["from"] = "iphone"
-                    records.append(r)
+                    found.append(r)
                 }
             }
+            lock.withLock { llmCached[url.path] = (modified, found) }
+            records += found
         }
         let byDay = Dictionary(grouping: records) { dayName(Date(timeIntervalSince1970: ($0["t"] as? Double) ?? 0)) }
         func cost(_ rs: [[String: Any]]) -> Double { rs.reduce(0) { $0 + (($1["cost"] as? NSNumber)?.doubleValue ?? 0) } }

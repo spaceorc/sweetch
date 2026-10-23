@@ -46,9 +46,9 @@ struct SweetchPhoneApp: App {
             if ProcessInfo.processInfo.arguments.contains("--keyboard-preview") {
                 KeyboardPreview()
             } else if ProcessInfo.processInfo.arguments.contains("--metrics") {
-                NavigationStack { MetricsView() }
+                NavigationStack { MetricsView(source: PhoneData.metrics) }
             } else if ProcessInfo.processInfo.arguments.contains("--insights") {
-                NavigationStack { InsightsView() }
+                NavigationStack { InsightsView(source: PhoneData.insights) }
             } else {
                 ContentView()
                     // sweetch://dictate — the keyboard's microphone: the big screen, listening at once.
@@ -93,12 +93,12 @@ struct ContentView: View {
             Form {
                 Section {
                     NavigationLink {
-                        MetricsView()
+                        MetricsView(source: PhoneData.metrics)
                     } label: {
                         Label("How It Goes", systemImage: "chart.bar.xaxis")
                     }
                     NavigationLink {
-                        InsightsView()
+                        InsightsView(source: PhoneData.insights)
                     } label: {
                         Label("Insights", systemImage: "hand.tap")
                     }
@@ -174,5 +174,18 @@ struct ContentView: View {
             .navigationTitle("Sweetch")
         }
         .fullScreenCover(isPresented: $dictation.screen) { DictationScreen() }
+    }
+}
+
+/// The statistics' numbers on the iPhone: counted on a Mac that answers.
+enum PhoneData {
+    static func metrics() async throws -> [String: Any] {
+        guard let mac = await Server.reachable() else { throw Failure("No Mac answers.") }
+        return try await mac.metrics()
+    }
+
+    static func insights() async throws -> [String: Any] {
+        guard let mac = await Server.reachable() else { throw Failure("No Mac answers.") }
+        return try await mac.insights()
     }
 }

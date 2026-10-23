@@ -4,6 +4,8 @@ import SwiftUI
 /// How well sweetch does, in numbers without any text — counted on the Mac from the dictations and
 /// the keyboard's log: the last week at a glance, and the last two weeks day by day.
 struct MetricsView: View {
+    /// Where the numbers come from: the Mac's `/metrics` on the iPhone, Metrics.compute on the Mac.
+    let source: () async throws -> [String: Any]
     @State private var metrics: Metrics?
     @State private var problem: String?
 
@@ -79,14 +81,14 @@ struct MetricsView: View {
                     Text("Counted on the Mac from what it keeps — the dictations and the keyboard's log — as numbers only; no text leaves it.")
                         .font(.footnote).foregroundStyle(.secondary)
                 } else if let problem {
-                    ContentUnavailableView("No Mac in reach", systemImage: "chart.bar.xaxis", description: Text(problem))
+                    ContentUnavailableView("Nothing to show yet", systemImage: "chart.bar.xaxis", description: Text(problem))
                 } else {
                     ProgressView().frame(maxWidth: .infinity, minHeight: 300)
                 }
             }
             .padding(16)
         }
-        .background(Color(.systemGroupedBackground))
+        .background(Color.grouped)
         .navigationTitle("How it goes")
         .task { await load() }
         .refreshable { await load() }
@@ -94,8 +96,7 @@ struct MetricsView: View {
 
     private func load() async {
         do {
-            guard let mac = await Server.reachable() else { throw Failure("No Mac answers.") }
-            metrics = Metrics(try await mac.metrics())
+            metrics = Metrics(try await source())
             problem = nil
         } catch {
             problem = error.localizedDescription
@@ -126,7 +127,7 @@ struct MetricsView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(Color.groupedSecondary, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
     /// The keyboard day by day: per 100 words typed, autocorrections kept, autocorrections taken
@@ -188,7 +189,7 @@ struct MetricsView: View {
             content()
         }
         .padding(14)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background(Color.groupedSecondary, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     // MARK: - Formatting

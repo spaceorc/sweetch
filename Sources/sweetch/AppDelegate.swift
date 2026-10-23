@@ -61,6 +61,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         InputSourceSwitcher.dumpInstalled()
         LayoutTranslator.prewarm()   // build the layout maps on the main thread, once
         WordMenu.prewarm()
+        // The statistics counted once in the background, so the window's open at once.
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 20) { _ = Metrics.compute(); _ = Insights.compute() }
         _ = LLMClient.isConfigured   // touch the lazy config so the provider line lands in the log
         if isDictationEnabled {
             Whisper.warmUp()   // the model takes seconds to load; not on the first hold
@@ -144,14 +146,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         refreshStatusIcon()
     }
 
-    @objc private func toggleWatchdog() {
-        if Watchdog.isInstalled {
-            Watchdog.uninstall()
-        } else {
-            // Installing spawns a supervised copy, which will ask this one to quit.
-            Watchdog.install()
-        }
-    }
 
     private func handleSwitch() {
         TypingLog.shared.note("switch")
@@ -411,7 +405,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// sweetch is a regular app for exactly as long as a window is open, and slips back into
     /// the menu bar when the last one closes.
     private func updateActivationPolicy() {
-        let policy: NSApplication.ActivationPolicy = editors.isEmpty && dictationsWindow == nil ? .accessory : .regular
+        let policy: NSApplication.ActivationPolicy = editors.isEmpty && dictationsWindow == nil && mainWindow == nil ? .accessory : .regular
         guard NSApp.activationPolicy() != policy else { return }
         NSApp.setActivationPolicy(policy)
     }
@@ -441,40 +435,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.windowsMenu = windowMenu
     }
 
-    @objc private func openRecentScreenshot(_ sender: NSMenuItem) {
-        guard let url = sender.representedObject as? URL else { return }
-        openEditor(for: url, previousApp: NSWorkspace.shared.frontmostApplication)
-    }
 
-    @objc private func openScreenshotsFolder() {
-        NSWorkspace.shared.activateFileViewerSelecting([Screenshots.dir])
-    }
 
-    /// Rebuild the recents list each time the menu opens — cheap, and always current.
-    private func refreshScreenshotsMenu(_ menu: NSMenu) {
-        menu.removeAllItems()
-        let recent = Screenshots.recent(limit: 12)
-        if recent.isEmpty {
-            let empty = NSMenuItem(title: "No screenshots yet", action: nil, keyEquivalent: "")
-            empty.isEnabled = false
-            menu.addItem(empty)
-        }
-        let formatter = DateFormatter()
-        formatter.dateStyle = .short
-        formatter.timeStyle = .short
-        for url in recent {
-            let item = NSMenuItem(title: formatter.string(from: Screenshots.modified(url)),
-                                  action: #selector(openRecentScreenshot(_:)), keyEquivalent: "")
-            item.representedObject = url
-            item.image = Screenshots.thumbnail(for: url)
-            item.target = self
-            menu.addItem(item)
-        }
-        menu.addItem(NSMenuItem.separator())
-        let folder = NSMenuItem(title: "Open Folder…", action: #selector(openScreenshotsFolder), keyEquivalent: "")
-        folder.target = self
-        menu.addItem(folder)
-    }
 
     /// Runs for every real key event, down and up, ahead of our own hotkeys. Returns true
     /// to swallow the event: either "Detect Key…" grabbed it, or a remap rule fired.
@@ -592,6 +554,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // A plain space after a word typed in the wrong layout: the word, and those of the same go
         // that suit the other layout too, typed again in it.
         if keyCode == 49, flags.intersection([.maskShift, .maskAlternate]).isEmpty, !converting,
+           UserDefaults.standard.object(forKey: "autoLayout") as? Bool ?? true,
            Privacy.check(NSWorkspace.shared.frontmostApplication) == nil {
             let keys = buffer.snapshot()
             guard let range = autoLayout.range(in: keys, automatic: true, knownStart: buffer.startsAtWordBoundary) else { return }
@@ -654,41 +617,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         crash.isHidden = true
         menu.addItem(crash)
         crashItem = crash
-        let loginItem = NSMenuItem(title: "Start at Login", action: #selector(toggleLoginItem), keyEquivalent: "")
-        loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
-        menu.addItem(loginItem)
-        let watchdogItem = NSMenuItem(title: "Restart on Crash", action: #selector(toggleWatchdog), keyEquivalent: "")
-        watchdogItem.state = Watchdog.isInstalled ? .on : .off
-        watchdogItem.toolTip = "Run under a launchd agent that starts Sweetch at login and brings it back if it dies"
-        menu.addItem(watchdogItem)
-        menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "Edit Dictionary…", action: #selector(openDictionary), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "Edit Persona…", action: #selector(openPersona), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "Show History…", action: #selector(showHistory), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "Refine Dictionary from History", action: #selector(refineDictionary), keyEquivalent: ""))
+        let open = NSMenuItem(title: "Open Sweetch…", action: #selector(showMain), keyEquivalent: ",")
+        menu.addItem(open)
         menu.addItem(NSMenuItem.separator())
         let incognitoItem = NSMenuItem(title: "Incognito", action: #selector(toggleIncognito), keyEquivalent: "")
         incognitoItem.toolTip = "Nothing recorded, captured, sent to the AI or kept — dictation and AI correction off, layout switching on. Private browser windows and password fields are incognito by themselves."
         menu.addItem(incognitoItem)
-        let forgetItem = NSMenuItem(title: "Forget Last Dictation", action: #selector(forgetLastDictation), keyEquivalent: "")
-        forgetItem.toolTip = "Take the last dictation out of the history, here and on the Mac mini — kept aside on this Mac for 30 days, then gone"
-        menu.addItem(forgetItem)
         let dictationItem = NSMenuItem(title: "Dictation (Hold Space)", action: #selector(toggleDictation), keyEquivalent: "")
         dictationItem.toolTip = "Hold Space in a text field to dictate; Claude desktop and Claude Code keep their own"
         menu.addItem(dictationItem)
-        menu.addItem(NSMenuItem(title: "Dictations…", action: #selector(showDictations), keyEquivalent: ""))
-        let serverItem = NSMenuItem(title: "Dictation Server for iPhone", action: #selector(toggleServer), keyEquivalent: "")
-        serverItem.toolTip = "Hear the iPhone's dictations on this Mac, on port \(DictationServer.port.rawValue)"
-        menu.addItem(serverItem)
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "New Screenshot", action: #selector(captureScreenshot), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "Capture Whole Screen", action: #selector(captureFullScreen), keyEquivalent: ""))
-        let screenshots = NSMenuItem(title: "Screenshots", action: nil, keyEquivalent: "")
-        screenshots.submenu = NSMenu()
-        menu.addItem(screenshots)
-        menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "Edit Key Remaps…", action: #selector(openRemaps), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "Detect Key…", action: #selector(detectKey), keyEquivalent: ""))
+        let forgetItem = NSMenuItem(title: "Forget Last Dictation", action: #selector(forgetLastDictation), keyEquivalent: "")
+        forgetItem.toolTip = "Take the last dictation out of the history, here and on the Mac mini — kept aside on this Mac for 30 days, then gone"
+        menu.addItem(forgetItem)
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit Sweetch", action: #selector(quit), keyEquivalent: "q"))
         menu.delegate = self
@@ -741,20 +683,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    @objc private func toggleLoginItem() {
-        let service = SMAppService.mainApp
-        do {
-            if service.status == .enabled {
-                try service.unregister()
-                log.info("unregistered login item")
-            } else {
-                try service.register()
-                log.info("registered login item")
-            }
-        } catch {
-            log.error("login item toggle failed: \(error.localizedDescription, privacy: .public)")
-        }
-    }
 
     private func ensureAccessibilityPermission() -> Bool {
         let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
@@ -762,25 +690,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return AXIsProcessTrustedWithOptions(options)
     }
 
-    @objc private func openDictionary() {
-        if !FileManager.default.fileExists(atPath: AppSupport.glossary.path) { Glossary.add([]) }
-        NSWorkspace.shared.open(AppSupport.glossary)
-    }
 
-    @objc private func openRemaps() {
-        remapper.reload()   // creates the file with the default rules if it's missing
-        NSWorkspace.shared.open(AppSupport.remaps)
-    }
 
-    @objc private func openPersona() {
-        _ = Persona.text()   // creates the file with the default if missing
-        NSWorkspace.shared.open(AppSupport.persona)
-    }
 
-    @objc private func showHistory() {
-        let target = FileManager.default.fileExists(atPath: AppSupport.history.path) ? AppSupport.history : AppSupport.dir
-        NSWorkspace.shared.activateFileViewerSelecting([target])
-    }
 
     @objc private func refineDictionary() {
         setThinking(true)
@@ -789,7 +701,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             await MainActor.run { [weak self] in
                 self?.setThinking(false)
                 log.info("distill: \(added, privacy: .public) new word(s) added")
-                if added > 0 { NSWorkspace.shared.open(AppSupport.glossary) }  // show the result
+                self?.loader.flash("dictionary", detail: added > 0 ? "\(added) word\(added == 1 ? "" : "s") added" : "nothing new", symbol: "character.book.closed")
             }
         }
     }
@@ -831,9 +743,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         UserDefaults.standard.bool(forKey: Self.serverEnabledKey)
     }
 
-    @objc private func toggleServer() {
-        UserDefaults.standard.set(!isServerEnabled, forKey: Self.serverEnabledKey)
-        if isServerEnabled { server.start() } else { server.stop() }
+    private func setServer(_ on: Bool) {
+        UserDefaults.standard.set(on, forKey: Self.serverEnabledKey)
+        if on { server.start() } else { server.stop() }
+    }
+
+    // MARK: Sweetch's window
+
+    private var mainWindow: MainWindow?
+
+    @objc private func showMain() {
+        if mainWindow == nil {
+            let actions = AppActions(
+                setServer: { [weak self] in self?.setServer($0) },
+                setIncognito: { [weak self] on in if Privacy.incognito != on { self?.toggleIncognito() } },
+                forgetLastDictation: { [weak self] in self?.forgetLastDictation() },
+                captureScreenshot: { [weak self] in self?.captureScreenshot() },
+                captureFullScreen: { [weak self] in self?.captureFullScreen() },
+                showDictations: { [weak self] in self?.showDictations() },
+                detectKey: { [weak self] in self?.detectKey() },
+                refineDictionary: { [weak self] in self?.refineDictionary() },
+                showCrashReport: { [weak self] in self?.showCrashReport() },
+                reloadRemaps: { [weak self] in self?.remapper.reload() },
+                privateNow: { [weak self] in self?.privateNow?.text },
+                crashReport: { [weak self] in self?.pendingCrashReport },
+                hotkeys: [("⌥Space", "Put the last words in the other layout"), ("⌘Space", "Switch the layout"),
+                          ("⌥⇧Space", "Correct with the model"), ("Space, held", "Dictate")])
+            let window = MainWindow(actions: actions)
+            window.onClose = { [weak self] in
+                self?.mainWindow = nil
+                self?.updateActivationPolicy()
+            }
+            mainWindow = window
+            updateActivationPolicy()
+        }
+        mainWindow?.show()
     }
 
     @objc private func showDictations() {
@@ -863,16 +807,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let item = menu.items.first(where: { $0.action == #selector(toggleIncognito) }) {
             item.state = Privacy.incognito ? .on : .off
         }
-        if let item = menu.items.first(where: { $0.action == #selector(toggleServer) }) {
-            item.state = isServerEnabled ? .on : .off
-        }
-        if let item = menu.items.first(where: { $0.action == #selector(toggleWatchdog) }) {
-            item.state = Watchdog.isInstalled ? .on : .off
-        }
-        if let submenu = menu.items.first(where: { $0.title == "Screenshots" })?.submenu {
-            refreshScreenshotsMenu(submenu)
-        }
-        guard let item = menu.items.first(where: { $0.action == #selector(toggleLoginItem) }) else { return }
-        item.state = SMAppService.mainApp.status == .enabled ? .on : .off
     }
+
 }

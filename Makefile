@@ -89,7 +89,7 @@ $(ICON_ICNS): $(ICON_SRC) $(ICON_SRC)/icon.json $(wildcard $(ICON_SRC)/Assets/*)
 	@echo "built $(ICON_ICNS)"
 
 build:
-	swift build -c release
+	DEVELOPER_DIR=$(XCODE_DEV) swift build -c release
 
 app: build setup-signing $(ICON_ICNS)
 	@$(MAKE) --no-print-directory stop
@@ -108,7 +108,7 @@ app: build setup-signing $(ICON_ICNS)
 run: app start
 
 debug: setup-signing $(ICON_ICNS)
-	swift build -c debug
+	DEVELOPER_DIR=$(XCODE_DEV) swift build -c debug
 	@$(MAKE) --no-print-directory stop
 	@rm -rf $(APP_BUNDLE)
 	@mkdir -p $(APP_BUNDLE)/Contents/MacOS

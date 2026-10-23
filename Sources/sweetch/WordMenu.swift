@@ -45,6 +45,7 @@ final class WordMenu: NSObject {
     func mouseDown() {
         if let panel, panel.isVisible, panel.frame.contains(NSEvent.mouseLocation) { return }
         hide()
+        guard UserDefaults.standard.object(forKey: "wordMenu") as? Bool ?? true else { return }
         let hasRecent = lock.withLock { recent.contains { Date().timeIntervalSince($0.at) < Self.fresh } }
         guard hasRecent else { return }
         DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.35) { [weak self] in self?.lookAtCursor() }

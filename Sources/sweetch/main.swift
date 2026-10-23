@@ -49,6 +49,11 @@ if let i = CommandLine.arguments.firstIndex(of: "--render-dictations"), i + 1 < 
     try? window.debugRenderContent()?.write(to: URL(fileURLWithPath: CommandLine.arguments[i + 1]))
     exit(0)
 }
+// `sweetch --render-main <section> out.png`: Sweetch's window, a section of it, into a PNG.
+if let i = CommandLine.arguments.firstIndex(of: "--render-main"), i + 2 < CommandLine.arguments.count {
+    MainWindow.render(CommandLine.arguments[i + 1], to: URL(fileURLWithPath: CommandLine.arguments[i + 2]))
+    exit(0)
+}
 // `sweetch --serve`: only the iPhone's dictation server, with no menu, keys or windows — for a Mac
 // nobody sits at (the Mac mini, run by launchd: see `make mini`).
 if CommandLine.arguments.contains("--serve") {

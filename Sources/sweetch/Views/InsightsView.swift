@@ -6,6 +6,8 @@ import SwiftUI
 /// for which, how typos grow with speed, what minding the offsets would do, how long dictations
 /// take, and the words whisper is unsure of.
 struct InsightsView: View {
+    /// Where the numbers come from: the Mac's `/insights` on the iPhone, Insights.compute on the Mac.
+    let source: () async throws -> [String: Any]
     @State private var data: [String: Any]?
     @State private var problem: String?
     @State private var mode = "fast"
@@ -26,14 +28,14 @@ struct InsightsView: View {
                     latency(data)
                     unsure(data).id("unsure")
                 } else if let problem {
-                    ContentUnavailableView("No Mac in reach", systemImage: "hand.tap", description: Text(problem))
+                    ContentUnavailableView("Nothing to show yet", systemImage: "hand.tap", description: Text(problem))
                 } else {
                     ProgressView().frame(maxWidth: .infinity, minHeight: 300)
                 }
             }
             .padding(16)
         }
-        .background(Color(.systemGroupedBackground))
+        .background(Color.grouped)
         .navigationTitle("Insights")
         .task {
             await load()
@@ -50,8 +52,7 @@ struct InsightsView: View {
 
     private func load() async {
         do {
-            guard let mac = await Server.reachable() else { throw Failure("No Mac answers.") }
-            data = try await mac.insights()
+            data = try await source()
             problem = nil
         } catch {
             problem = error.localizedDescription
@@ -72,7 +73,7 @@ struct InsightsView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background(Color.groupedSecondary, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     // MARK: - Heat map
@@ -269,7 +270,7 @@ struct InsightsView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
-        .background(Color(.tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 10))
+        .background(Color.groupedTertiary, in: RoundedRectangle(cornerRadius: 10))
     }
 
     // MARK: - Voice
@@ -337,7 +338,7 @@ struct InsightsView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background(Color.groupedSecondary, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 }
 
