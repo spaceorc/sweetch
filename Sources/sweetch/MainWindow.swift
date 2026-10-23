@@ -94,20 +94,37 @@ final class MainWindow: NSObject, NSWindowDelegate {
 }
 
 struct MainView: View {
+    /// A page of the window.
     enum Section: String, CaseIterable, Identifiable {
-        case overview = "Overview", dictations = "Dictations", words = "Words & names", typing = "Typing",
-             progress = "Progress", costs = "Costs", system = "System", screenshots = "Screenshots", settings = "Settings"
+        case overview = "Overview", dictations = "History", words = "Words & names", typing = "Typing",
+             statistics = "Statistics", insights = "Insights", costs = "Costs", screenshots = "Screenshots",
+             settings = "General", system = "System"
         var id: String { String(describing: self) }
+        var item: Item { Item.allCases.first { $0.sections.contains(self) }! }
+    }
+
+    /// A place in the sidebar: one page, or a few side by side, chosen above them.
+    enum Item: String, CaseIterable, Identifiable {
+        case overview = "Overview", dictation = "Dictation", typing = "Typing", progress = "Progress",
+             screenshots = "Screenshots", settings = "Settings"
+        var id: String { rawValue }
+        var sections: [Section] {
+            switch self {
+            case .overview: [.overview]
+            case .dictation: [.dictations, .words]
+            case .typing: [.typing]
+            case .progress: [.statistics, .insights, .costs]
+            case .screenshots: [.screenshots]
+            case .settings: [.settings, .system]
+            }
+        }
         /// The badge's colour, as System Settings colours its rows.
         var color: Color {
             switch self {
             case .overview: Color(red: 0.16, green: 0.62, blue: 0.62)
-            case .dictations: .red
-            case .words: .orange
+            case .dictation: .red
             case .typing: .blue
             case .progress: .purple
-            case .costs: .green
-            case .system: .gray
             case .screenshots: .indigo
             case .settings: .gray
             }
@@ -115,12 +132,9 @@ struct MainView: View {
         var symbol: String {
             switch self {
             case .overview: "house.fill"
-            case .dictations: "mic.fill"
-            case .words: "character.book.closed.fill"
+            case .dictation: "mic.fill"
             case .typing: "keyboard"
             case .progress: "chart.bar.fill"
-            case .costs: "dollarsign"
-            case .system: "macbook.and.iphone"
             case .screenshots: "camera.viewfinder"
             case .settings: "gearshape.fill"
             }
@@ -130,11 +144,17 @@ struct MainView: View {
     let actions: AppActions
     @EnvironmentObject private var navigation: MainNavigation
 
+    private var item: Binding<Item?> {
+        Binding(get: { (navigation.section ?? .overview).item },
+                set: { navigation.section = $0?.sections.first })
+    }
+
     var body: some View {
         NavigationSplitView {
-            List(selection: $navigation.section) {
-                SwiftUI.Section { ForEach([Section.overview, .dictations, .words, .typing], id: \.self, content: row) }
-                SwiftUI.Section { ForEach([Section.progress, .costs, .screenshots, .system], id: \.self, content: row) }
+            List(selection: item) {
+                ForEach([Item.overview, .dictation, .typing, .progress, .screenshots]) { i in
+                    badge(i).padding(.vertical, 3).tag(i)
+                }
             }
             .safeAreaInset(edge: .top) { emblem }
             .safeAreaInset(edge: .bottom) {
@@ -145,34 +165,43 @@ struct MainView: View {
             }
             .navigationSplitViewColumnWidth(min: 200, ideal: 230, max: 280)
         } detail: {
-            switch navigation.section ?? .overview {
-            case .overview: OverviewPane(actions: actions)
-            case .dictations: DictationsPane(actions: actions)
-            case .words: WordsPane(actions: actions)
-            case .typing: TypingPane(actions: actions)
-            case .progress: ProgressPane()
-            case .costs: CostsPane()
-            case .system: SystemPane()
-            case .screenshots: ScreenshotsPane(actions: actions)
-            case .settings: SettingsPane(actions: actions)
+            let section = navigation.section ?? .overview
+            VStack(spacing: 0) {
+                if section.item.sections.count > 1 {
+                    Picker("", selection: Binding(get: { section }, set: { navigation.section = $0 })) {
+                        ForEach(section.item.sections) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.segmented).labelsHidden().fixedSize()
+                    .padding(.top, 14).padding(.bottom, 4)
+                    .frame(maxWidth: .infinity)
+                    .background(Color.grouped)
+                }
+                switch section {
+                case .overview: OverviewPane(actions: actions)
+                case .dictations: DictationsPane(actions: actions)
+                case .words: WordsPane(actions: actions)
+                case .typing: TypingPane(actions: actions)
+                case .statistics: MetricsView(source: { await Task.detached { Stats.currentMetrics() }.value })
+                case .insights: InsightsView(source: { await Task.detached { Stats.currentInsights() }.value })
+                case .costs: CostsPane()
+                case .system: SystemPane()
+                case .screenshots: ScreenshotsPane(actions: actions)
+                case .settings: SettingsPane(actions: actions)
+                }
             }
         }
         .tint(.mint)
     }
 
-    private func row(_ s: Section) -> some View {
-        badge(s).padding(.vertical, 3).tag(s)
-    }
-
-    /// A section's name by its icon in a coloured rounded square.
-    private func badge(_ s: Section) -> some View {
+    /// A place's name by its icon in a coloured rounded square.
+    private func badge(_ i: Item) -> some View {
         HStack(spacing: 10) {
-            Image(systemName: s.symbol)
+            Image(systemName: i.symbol)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.white)
                 .frame(width: 26, height: 26)
-                .background(s.color.gradient, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-            Text(s.rawValue).font(.system(size: 14))
+                .background(i.color.gradient, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            Text(i.rawValue).font(.system(size: 14))
         }
     }
 
@@ -271,10 +300,47 @@ private struct Masonry: Layout {
     }
 }
 
+/// Cards side by side, equal in width and as tall as the tallest, when each gets at least
+/// `minChild`; else one under another, full width.
+private struct EqualRow: Layout {
+    var minChild: CGFloat
+    var spacing: CGFloat = 16
+
+    private func plan(_ subviews: Subviews, width: CGFloat) -> (side: Bool, child: CGFloat, height: CGFloat, heights: [CGFloat]) {
+        let n = CGFloat(subviews.count)
+        let child = (width - spacing * (n - 1)) / n
+        if child >= minChild {
+            let h = subviews.map { $0.sizeThatFits(ProposedViewSize(width: child, height: nil)).height }.max() ?? 0
+            return (true, child, h, [])
+        }
+        let hs = subviews.map { $0.sizeThatFits(ProposedViewSize(width: width, height: nil)).height }
+        return (false, width, hs.reduce(0, +) + spacing * (n - 1), hs)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? minChild * CGFloat(subviews.count)
+        return CGSize(width: width, height: plan(subviews, width: width).height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let p = plan(subviews, width: bounds.width)
+        var y = bounds.minY
+        for (i, view) in subviews.enumerated() {
+            if p.side {
+                view.place(at: CGPoint(x: bounds.minX + CGFloat(i) * (p.child + spacing), y: bounds.minY),
+                           proposal: ProposedViewSize(width: p.child, height: p.height))
+            } else {
+                view.place(at: CGPoint(x: bounds.minX, y: y), proposal: ProposedViewSize(width: p.child, height: p.heights[i]))
+                y += p.heights[i] + spacing
+            }
+        }
+    }
+}
+
 private extension View {
     func card(padding: CGFloat = 16) -> some View {
         self.padding(padding)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(Color.groupedSecondary, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }
@@ -373,28 +439,17 @@ private struct OverviewPane: View {
             // What needs the user comes first, and only when there's something.
             if !issues.isEmpty { needsYou }
 
-            Masonry(minColumn: 250, spacing: 12) {
-                deviceCard("This MacBook", symbol: "laptopcomputer", state: macState) {
-                    Fact(label: "Dictation · layouts", value: "\(dictation ? "on" : "off") · \(autoLayout ? "switched for you" : "as typed")")
-                    Fact(label: "Running since", value: launchedAt.formatted(Calendar.current.isDateInToday(launchedAt) ? .dateTime.hour().minute() : .dateTime.day().month().hour().minute()))
-                    Fact(label: "Build", value: version(status?.macCommit))
-                }
-                deviceCard("Mac mini", symbol: "macmini", state: miniState) {
-                    Fact(label: "Heard for the iPhone", value: "\(today("phone_dictations") ?? "—") today")
-                    Fact(label: "Build", value: status?.mini.reachable == true ? version(status?.mini.commit) : "doesn't answer")
-                    Fact(label: "Synced with this Mac", value: ago(status?.sync?.date))
-                }
-                deviceCard("iPhone", symbol: "iphone", state: phoneState) {
-                    Fact(label: "Keyboard log came", value: ago(status?.phoneLog))
-                    Fact(label: "Build", value: version(status?.phoneCommit))
-                    Fact(label: "Keyboard's words built", value: status?.keyboardWords?.formatted(date: .abbreviated, time: .omitted) ?? "—")
-                }
-            }
-
-            Masonry(minColumn: 380) {
-                dictationToday
-                typingToday
-                models
+            switch Self.variant {
+            case "masonry":
+                Masonry(minColumn: 250, spacing: 12) { macCard; miniCard; phoneCard }
+                Masonry(minColumn: 380) { dictationToday; typingToday; models }
+            case "strip":
+                devicesStrip
+                rows
+            default:
+                // Rows of cards alike, each row as tall as its tallest; one column when narrow.
+                EqualRow(minChild: 240, spacing: 12) { macCard; miniCard; phoneCard }
+                rows
             }
         }
         .task {
@@ -404,6 +459,76 @@ private struct OverviewPane: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: DictationStore.changed)) { _ in recent = finished() }
+    }
+
+    /// How the cards are laid out — "bento" (rows), "masonry", "strip"; SWEETCH_OVERVIEW picks one
+    /// for comparing renders.
+    static let variant = ProcessInfo.processInfo.environment["SWEETCH_OVERVIEW"] ?? "bento"
+
+    private var rows: some View {
+        VStack(spacing: 16) {
+            EqualRow(minChild: 360) { dictationToday; typingToday }
+            models
+        }
+    }
+
+    private var macCard: some View {
+        deviceCard("This MacBook", symbol: "laptopcomputer", state: macState) {
+            Fact(label: "Dictation · layouts", value: "\(dictation ? "on" : "off") · \(autoLayout ? "switched for you" : "as typed")")
+            Fact(label: "Running since", value: launchedAt.formatted(Calendar.current.isDateInToday(launchedAt) ? .dateTime.hour().minute() : .dateTime.day().month().hour().minute()))
+            Fact(label: "Build", value: version(status?.macCommit))
+        }
+    }
+
+    private var miniCard: some View {
+        deviceCard("Mac mini", symbol: "macmini", state: miniState) {
+            Fact(label: "Heard for the iPhone", value: "\(today("phone_dictations") ?? "—") today")
+            Fact(label: "Build", value: status?.mini.reachable == true ? version(status?.mini.commit) : "doesn't answer")
+            Fact(label: "Synced with this Mac", value: ago(status?.sync?.date))
+        }
+    }
+
+    private var phoneCard: some View {
+        deviceCard("iPhone", symbol: "iphone", state: phoneState) {
+            Fact(label: "Keyboard log came", value: ago(status?.phoneLog))
+            Fact(label: "Build", value: version(status?.phoneCommit))
+            Fact(label: "Keyboard's words built", value: status?.keyboardWords?.formatted(date: .abbreviated, time: .omitted) ?? "—")
+        }
+    }
+
+    /// The three devices in one card, side by side.
+    private var devicesStrip: some View {
+        Button { navigation.section = .system } label: {
+            HStack(alignment: .top, spacing: 0) {
+                stripColumn("This MacBook", "laptopcomputer", macState, version(status?.macCommit),
+                            "running since \(launchedAt.formatted(date: .omitted, time: .shortened))")
+                Divider().padding(.horizontal, 18)
+                stripColumn("Mac mini", "macmini", miniState,
+                            status?.mini.reachable == true ? version(status?.mini.commit) : "doesn't answer",
+                            "synced \(ago(status?.sync?.date))")
+                Divider().padding(.horizontal, 18)
+                stripColumn("iPhone", "iphone", phoneState, version(status?.phoneCommit), "log came \(ago(status?.phoneLog))")
+            }
+            .card(padding: 18)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func stripColumn(_ name: String, _ symbol: String, _ state: State, _ build: String, _ note: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: symbol).font(.system(size: 26, weight: .light)).foregroundStyle(.secondary).frame(width: 34)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(name).font(.headline)
+                    Dot(color: state == .good ? .mint : state == .attention ? .amber : .gray)
+                }
+                Text(build).font(.callout)
+                Text(note).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// The last six dictations done — not one still being heard.
@@ -501,7 +626,7 @@ private struct OverviewPane: View {
 
     private var typingToday: some View {
         VStack(alignment: .leading, spacing: 14) {
-            CardTitle(title: "Typing today", link: "Progress") { navigation.section = .progress }
+            CardTitle(title: "Typing today", link: "Statistics") { navigation.section = .statistics }
             HStack(alignment: .top, spacing: 12) {
                 BigNumber(value: today("typed_words") ?? "—", label: "words on the iPhone")
                 BigNumber(value: today("autocorrected") ?? "—", label: "autocorrected")
@@ -806,7 +931,7 @@ private struct TypingPane: View {
                 .card(padding: 18)
 
                 VStack(alignment: .leading, spacing: 12) {
-                    CardTitle(title: "The iPhone's keyboard, this week", link: "Progress") { navigation.section = .progress }
+                    CardTitle(title: "The iPhone's keyboard, this week", link: "Statistics") { navigation.section = .statistics }
                     HStack(alignment: .top, spacing: 12) {
                         BigNumber(value: number("typed_words", "%.0f"), label: "words typed")
                         BigNumber(value: number("good_autocorrect_per_100", "%.1f"), label: "autocorrected per 100, kept")
@@ -849,25 +974,6 @@ private struct TypingPane: View {
 
     private func percent(_ key: String) -> String {
         (week[key] as? NSNumber).map { "\(Int(($0.doubleValue * 100).rounded()))%" } ?? "—"
-    }
-}
-
-// MARK: - Progress
-
-private struct ProgressPane: View {
-    @State private var view = "Statistics"
-
-    var body: some View {
-        VStack(spacing: 0) {
-            Picker("", selection: $view) { ForEach(["Statistics", "Insights"], id: \.self) { Text($0) } }
-                .pickerStyle(.segmented).labelsHidden().frame(maxWidth: 280)
-                .padding(.vertical, 10)
-            switch view {
-            case "Insights": InsightsView(source: { await Task.detached { Stats.currentInsights() }.value })
-            default: MetricsView(source: { await Task.detached { Stats.currentMetrics() }.value })
-            }
-        }
-        .background(Color.grouped)
     }
 }
 
