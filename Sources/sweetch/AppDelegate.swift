@@ -60,6 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         remapper.onAction = { [weak self] name in self?.runAction(name) }
         InputSourceSwitcher.dumpInstalled()
         LayoutTranslator.prewarm()   // build the layout maps on the main thread, once
+        WordMenu.prewarm()
         _ = LLMClient.isConfigured   // touch the lazy config so the provider line lands in the log
         if isDictationEnabled {
             Whisper.warmUp()   // the model takes seconds to load; not on the first hold
@@ -89,6 +90,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             onPress:     { [weak self] event in self?.dictation.takeMark(event) ?? false },
             onMouseDown: { [weak self] in
                 self?.buffer.clear(reason: "mouse click", atWordBoundary: true); self?.lastCorrection = nil; self?.dictation.dropMark()
+                WordMenu.shared.mouseDown()   // a word of a dictation clicked: what it could be instead
                 // Where the click put the cursor, once the app has moved it.
                 DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.4) { TypingLog.shared.noteField(reason: "click") }
             }
@@ -528,8 +530,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if !editors.isEmpty && NSApp.isActive { return }
 
         // Any real keystroke ends the undo window (our own synthetic keys are filtered out
-        // by the tap before reaching here).
+        // by the tap before reaching here) — and closes the word menu.
         lastCorrection = nil
+        WordMenu.shared.keyDown()
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
 
         // Editing/navigation keys → buffer is out of sync with the document, drop it.

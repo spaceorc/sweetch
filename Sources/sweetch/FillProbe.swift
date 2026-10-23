@@ -6,7 +6,7 @@ import Foundation
 /// Tools/dictation/alternatives.py's `--cases`; the answer per case is the model's five guesses.
 /// For a menu of what a clicked word could be instead (23 Oct).
 enum FillProbe {
-    private static let system = """
+    static let system = """
     A recording of the user's speech was transcribed. The user has marked one place in the final \
     text, shown as [___], as wrong; everything else in it is right. From the context they were in \
     and what the recognisers heard, work out what they actually said there. They speak Russian \

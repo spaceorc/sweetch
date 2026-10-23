@@ -334,6 +334,8 @@ final class Dictation {
                 }
                 watched.wait()
                 record["theirs"] = theirs.value ?? NSNull()
+                // What the app wrote, ours to offer its words' alternatives for too.
+                if let written = theirs.value { WordMenu.shared.inserted(dir: session.dir, text: written, pid: session.app.processIdentifier) }
                 DictationStore.write(record, to: session.dir.appendingPathComponent("session.json"))
                 log.info("dictation: \(target, privacy: .public) wrote '\(shown(theirs.value), privacy: .public)'; we heard '\(shown(record["text"] as? String), privacy: .public)'")
             }
@@ -427,6 +429,7 @@ final class Dictation {
         Replayer.waitForModifierRelease()
         Replayer.replace(deleteCount: 0, with: typed)
         if let field { followUp.start(dir: session.dir, element: field.element, pid: session.app.processIdentifier) }
+        WordMenu.shared.inserted(dir: session.dir, text: typed, pid: session.app.processIdentifier)
         markAfter = typed.hasSuffix(".") ? MarkAfter(dir: session.dir, text: text, pid: session.app.processIdentifier, at: Date()) : nil
         return ["inserted": typed, "inserted_at": DictationStore.stamp(Date())]
     }
