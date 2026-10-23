@@ -365,7 +365,11 @@ final class KeyboardModel {
         // after a space in the middle of the text, 23 Oct).
         let untouched = proxy?.documentContextBeforeInput == ownCursor
         attachedMark = nil
-        if spaceIsOurs || spaceEndedWord, !keepSpace, untouched, ".,!?:;)".contains(typed), proxy?.documentContextBeforeInput?.hasSuffix(" ") == true {
+        // A closing quote too: «»», «”», or «"» with one open before it — «"рекламный "» after a
+        // picked word, retyped by hand on 23 Oct. An opening one stays after its space.
+        let context = proxy?.documentContextBeforeInput ?? ""
+        let closingQuote = "»”".contains(typed) || (typed == "\"" && context.filter { $0 == "\"" }.count % 2 == 1)
+        if spaceIsOurs || spaceEndedWord, !keepSpace, untouched, ".,!?:;)".contains(typed) || closingQuote, context.hasSuffix(" ") {
             spaceEndedWord = false
             deleteBackward()
             insert(typed + " ")
@@ -882,7 +886,16 @@ final class KeyboardModel {
     private func emojiAfter(_ words: [String], previous: String?, before: String) -> [String] {
         emojiUse = nil
         emojiWord = nil
-        guard let previous, before.hasSuffix(previous + " ") else { return words }
+        // A smiley typed as text, or begun («:»): its emoji, to put in its place.
+        if let (smiley, length) = Emoji.smiley(endOf: before) {
+            let emoji = Emoji.ranked(for: smiley)
+            if !emoji.isEmpty {
+                emojiUse = .smiley(String(before.suffix(length)))
+                emojiWord = smiley
+                return Array(words.prefix(2)) + [emoji.joined(separator: " ")]
+            }
+        }
+        guard let previous, before.hasSuffix(previous + " ") || before.dropLast().hasSuffix(previous) else { return words }
         let emoji = Emoji.ranked(for: previous)
         guard !emoji.isEmpty else { return words }
         emojiUse = .append
@@ -1535,24 +1548,14 @@ final class KeyboardModel {
         let insideWord = proxy?.documentContextAfterInput?.first?.isLetter == true
         let (previous, previous2) = previousWords(before: before)
         let recent = recentWords
-        // A smiley typed as text: the emoji for it, to put in its place.
-        if word.isEmpty, !insideWord, let smiley = Emoji.smiley(endOf: before) {
-            let emoji = Emoji.ranked(for: smiley)
-            if !emoji.isEmpty {
-                wordFix = nil
-                suggestionsFrom = "smiley"
-                suggestions = [emoji.joined(separator: " ")]
-                emojiUse = .smiley(smiley)
-                emojiWord = smiley
-                return
-            }
-        }
         // A word gone back to, or selected (the text before a selection ends with a space, as
         // before the next word: ahead of the predictions).
         wordFix = nil
         if offerFixes(before: before, insideWord: insideWord) { return }
         // Before a letter of the next word: the words likeliest after the last one.
-        if word.isEmpty, !insideWord, before.last?.isWhitespace == true, !Self.decoderFailed, !before.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        // A mark ends a word as a space does («домой:», «да,»): what comes next, offered alike.
+        let endedByMark = before.last.map { !$0.isLetter && !$0.isNumber && !$0.isWhitespace && !"'’-".contains($0) } ?? false
+        if word.isEmpty, !insideWord, before.last?.isWhitespace == true || endedByMark, !Self.decoderFailed, !before.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let capital = previous.sentenceStart && proxy?.autocapitalizationType != UITextAutocapitalizationType.none
             Self.decoderQueue.async { [weak self] in
                 guard let decoder = Self.loadDecoder() else { return }

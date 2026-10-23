@@ -45,7 +45,11 @@ enum Emoji {
             ("🐛 😬", ["баг", "bug"]),
             ("✅ 👍", ["готово", "сделал", "сделала", "done"]),
             // Smileys typed as text: the emoji they stand for, in their place.
-            ("🙂 😊", [":)", ":-)", "(:"]),
+            ("🙂 😊", [":)", ":-)", "(:", ")"]),
+            // A smiley begun: «:» or «;» right after a word is where one starts.
+            ("🙂 😊 😄", [":"]),
+            ("😉 😜", [";"]),
+            ("😄 😂", ["))"]),
             ("😄 😂", [":d", ":-d"]),
             ("🙁 😔", [":(", ":-("]),
             ("😢 😭", [":'("]),
@@ -61,11 +65,24 @@ enum Emoji {
         return map
     }()
 
-    /// The text smiley the text ends with — «:)», «;-)», «<3» — after a space or at the start.
-    static func smiley(endOf text: String) -> String? {
-        let last = String(text.reversed().prefix { !$0.isWhitespace }.reversed())
-        guard last.count >= 2, !last.allSatisfy(\.isLetter), byWord[last.lowercased()] != nil else { return nil }
-        return last
+    /// The text smiley the text ends with — «:)», «;-)», «<3», or one begun, «:» — on its own or
+    /// right after a word («домой:)», the user's way), and the space the keyboard put after it if
+    /// it did: the smiley as the emoji know it, and how much of the text's end to put an emoji in
+    /// place of. «)» and «))» only with no «(» open before them: otherwise they close it.
+    static func smiley(endOf text: String) -> (smiley: String, length: Int)? {
+        let space = text.hasSuffix(" ") ? 1 : 0
+        let last = String(text.dropLast(space).reversed().prefix { !$0.isWhitespace }.reversed())
+        for n in stride(from: min(3, last.count), through: 1, by: -1) {
+            let tail = String(last.suffix(n)).lowercased()
+            guard !tail.contains(where: \.isLetter) || tail.count >= 2, tail.contains(where: { !$0.isLetter }),
+                  byWord[tail] != nil else { continue }
+            if tail.allSatisfy({ $0 == ")" }) {
+                let open = text.filter { $0 == "(" }.count, closed = text.filter { $0 == ")" }.count - tail.count
+                guard open <= closed else { continue }
+            }
+            return (tail, n + space)
+        }
+        return nil
     }
 
     /// The emoji that come with `word`, as they came, likeliest first.
