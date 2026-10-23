@@ -223,11 +223,20 @@ final class WordMenu: NSObject {
                 AXValueGetValue(result as! AXValue, .cgRect, &bounds)
             } else { topLeft = false }
         } else { topLeft = false }
+        // The word in Cocoa's coordinates (Accessibility's run down from the main screen's top).
         let screenHeight = NSScreen.screens.first?.frame.height ?? 0
-        let origin = topLeft
-            ? NSPoint(x: bounds.minX, y: screenHeight - bounds.maxY - size.height - 4)
-            : NSPoint(x: NSEvent.mouseLocation.x, y: NSEvent.mouseLocation.y - size.height - 12)
-        panel.setFrame(NSRect(origin: origin, size: NSSize(width: max(size.width, 120), height: size.height)), display: true)
+        let word = topLeft
+            ? NSRect(x: bounds.minX, y: screenHeight - bounds.maxY, width: bounds.width, height: bounds.height)
+            : NSRect(x: NSEvent.mouseLocation.x, y: NSEvent.mouseLocation.y - 8, width: 1, height: 16)
+        let width = max(size.width, 120)
+        // Under the word if it fits above the Dock, over it otherwise; within the screen's visible part.
+        let visible = (NSScreen.screens.first { $0.frame.contains(NSPoint(x: word.midX, y: word.midY)) } ?? NSScreen.main)?.visibleFrame
+            ?? NSRect(x: 0, y: 0, width: 10_000, height: 10_000)
+        var y = word.minY - size.height - 4
+        if y < visible.minY { y = word.maxY + 4 }
+        y = min(max(y, visible.minY), visible.maxY - size.height)
+        let x = min(max(word.minX, visible.minX), visible.maxX - width)
+        panel.setFrame(NSRect(x: x, y: y, width: width, height: size.height), display: true)
     }
 
     func hide() {
