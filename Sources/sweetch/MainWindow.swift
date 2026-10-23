@@ -166,16 +166,7 @@ struct MainView: View {
             .navigationSplitViewColumnWidth(min: 200, ideal: 230, max: 280)
         } detail: {
             let section = navigation.section ?? .overview
-            VStack(spacing: 0) {
-                if section.item.sections.count > 1 {
-                    Picker("", selection: Binding(get: { section }, set: { navigation.section = $0 })) {
-                        ForEach(section.item.sections) { Text($0.rawValue).tag($0) }
-                    }
-                    .pickerStyle(.segmented).labelsHidden().fixedSize()
-                    .padding(.top, 14).padding(.bottom, 4)
-                    .frame(maxWidth: .infinity)
-                    .background(Color.grouped)
-                }
+            Group {
                 switch section {
                 case .overview: OverviewPane(actions: actions)
                 case .dictations: DictationsPane(actions: actions)
@@ -189,6 +180,17 @@ struct MainView: View {
                 case .settings: SettingsPane(actions: actions)
                 }
             }
+            .toolbar {
+                if section.item.sections.count > 1 {
+                    ToolbarItem(placement: .principal) {
+                        Picker("", selection: Binding(get: { section }, set: { navigation.section = $0 })) {
+                            ForEach(section.item.sections) { Text($0.rawValue).tag($0) }
+                        }
+                        .pickerStyle(.segmented).labelsHidden().fixedSize()
+                    }
+                }
+            }
+            .navigationTitle(section.item.rawValue)
         }
         .tint(.mint)
     }
@@ -207,15 +209,15 @@ struct MainView: View {
 
     /// The app's emblem over the list, with its name.
     private var emblem: some View {
-        VStack(spacing: 6) {
+        HStack(spacing: 10) {
             if let url = Bundle.main.url(forResource: "emblem", withExtension: "png"), let image = NSImage(contentsOf: url) {
-                Image(nsImage: image).resizable().interpolation(.high).scaledToFit().frame(width: 92, height: 92)
-                    .shadow(color: .mint.opacity(0.35), radius: 14)
+                Image(nsImage: image).resizable().interpolation(.high).scaledToFit().frame(width: 44, height: 44)
+                    .shadow(color: .mint.opacity(0.35), radius: 8)
             }
-            Text("Sweetch").font(.system(size: 17, weight: .semibold, design: .rounded))
+            Text("Sweetch").font(.system(size: 20, weight: .semibold, design: .rounded))
+            Spacer()
         }
-        .frame(maxWidth: .infinity)
-        .padding(.top, 8).padding(.bottom, 12)
+        .padding(.horizontal, 18).padding(.top, 4).padding(.bottom, 10)
     }
 }
 
@@ -247,7 +249,8 @@ private struct Page<Content: View, Trailing: View>: View {
                 content()
             }
             .padding(.horizontal, 32)
-            .padding(.vertical, 26)
+            .padding(.top, 12)
+            .padding(.bottom, 28)
             .frame(maxWidth: 1400, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -350,6 +353,15 @@ private struct Dot: View {
     var body: some View { Circle().fill(color).frame(width: 7, height: 7) }
 }
 
+/// A heading over a group of cards.
+private struct SectionHeader: View {
+    let title: String
+    var body: some View {
+        Text(title.uppercased()).font(.system(size: 12, weight: .semibold)).tracking(0.6).foregroundStyle(.secondary)
+            .padding(.bottom, -10)
+    }
+}
+
 private struct CardTitle: View {
     let title: String
     var link: String?
@@ -427,14 +439,11 @@ private struct OverviewPane: View {
     var body: some View {
         Page(title: "Overview", subtitle: Date().formatted(.dateTime.weekday(.wide).day().month(.wide))) {
             HStack(spacing: 8) {
-                Toggle(isOn: $incognito) { Label("Incognito", systemImage: "eye.slash") }
-                    .toggleStyle(.button)
-                    .onChange(of: incognito) { _, on in actions.setIncognito(on) }
-                Toggle(isOn: $dictation) { Label("Dictation", systemImage: "mic") }
-                    .toggleStyle(.button)
-                    .onChange(of: dictation) { _, on in if on { Whisper.warmUp() } }
+                pill(incognito ? "Incognito on" : "Incognito", "eye.slash", on: incognito, color: .amber) { incognito.toggle() }
+                pill(dictation ? "Dictation on" : "Dictation off", "mic.fill", on: dictation, color: .mint) { dictation.toggle() }
             }
-            .controlSize(.large)
+            .onChange(of: incognito) { _, on in actions.setIncognito(on) }
+            .onChange(of: dictation) { _, on in if on { Whisper.warmUp() } }
         } content: {
             // What needs the user comes first, and only when there's something.
             if !issues.isEmpty { needsYou }
@@ -461,9 +470,22 @@ private struct OverviewPane: View {
         .onReceive(NotificationCenter.default.publisher(for: DictationStore.changed)) { _ in recent = finished() }
     }
 
+    /// A switch in the header that shows its state: filled when on.
+    private func pill(_ title: String, _ symbol: String, on: Bool, color: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: symbol)
+                .font(.callout.weight(.medium))
+                .padding(.horizontal, 14).padding(.vertical, 7)
+                .foregroundStyle(on ? Color.black.opacity(0.85) : Color.primary)
+                .background(on ? AnyShapeStyle(color) : AnyShapeStyle(Color.groupedSecondary), in: Capsule())
+                .overlay(Capsule().strokeBorder(Color.primary.opacity(on ? 0 : 0.12)))
+        }
+        .buttonStyle(.plain)
+    }
+
     /// How the cards are laid out — "bento" (rows), "masonry", "strip"; SWEETCH_OVERVIEW picks one
     /// for comparing renders.
-    static let variant = ProcessInfo.processInfo.environment["SWEETCH_OVERVIEW"] ?? "bento"
+    static let variant = ProcessInfo.processInfo.environment["SWEETCH_OVERVIEW"] ?? "strip"
 
     private var rows: some View {
         VStack(spacing: 16) {
@@ -496,18 +518,14 @@ private struct OverviewPane: View {
         }
     }
 
-    /// The three devices in one card, side by side.
+    /// The three devices in one card, side by side — one under another when narrow: each one's
+    /// state in a line, amber only where something's wrong.
     private var devicesStrip: some View {
         Button { navigation.section = .system } label: {
-            HStack(alignment: .top, spacing: 0) {
-                stripColumn("This MacBook", "laptopcomputer", macState, version(status?.macCommit),
-                            "running since \(launchedAt.formatted(date: .omitted, time: .shortened))")
-                Divider().padding(.horizontal, 18)
-                stripColumn("Mac mini", "macmini", miniState,
-                            status?.mini.reachable == true ? version(status?.mini.commit) : "doesn't answer",
-                            "synced \(ago(status?.sync?.date))")
-                Divider().padding(.horizontal, 18)
-                stripColumn("iPhone", "iphone", phoneState, version(status?.phoneCommit), "log came \(ago(status?.phoneLog))")
+            EqualRow(minChild: 230, spacing: 24) {
+                stripColumn("This MacBook", "laptopcomputer", macState, macLine)
+                stripColumn("Mac mini", "macmini", miniState, miniLine)
+                stripColumn("iPhone", "iphone", phoneState, phoneLine)
             }
             .card(padding: 18)
             .contentShape(Rectangle())
@@ -515,16 +533,40 @@ private struct OverviewPane: View {
         .buttonStyle(.plain)
     }
 
-    private func stripColumn(_ name: String, _ symbol: String, _ state: State, _ build: String, _ note: String) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: symbol).font(.system(size: 26, weight: .light)).foregroundStyle(.secondary).frame(width: 34)
-            VStack(alignment: .leading, spacing: 4) {
+    private var macLine: String {
+        "\(buildWord(status?.macCommit)) · running since \(launchedAt.formatted(Calendar.current.isDateInToday(launchedAt) ? .dateTime.hour().minute() : .dateTime.day().month().hour().minute()))"
+    }
+
+    private var miniLine: String {
+        guard let status else { return "…" }
+        guard status.mini.reachable else { return "doesn't answer" }
+        return "\(buildWord(status.mini.commit)) · synced \(ago(status.sync?.date))"
+    }
+
+    private var phoneLine: String {
+        guard let status else { return "…" }
+        return "\(buildWord(status.phoneCommit)) · log \(ago(status.phoneLog))"
+    }
+
+    /// "current", "behind", or "older build" when it doesn't say.
+    private func buildWord(_ commit: String?) -> String {
+        guard let commit else { return "older build" }
+        switch status?.isCurrent(commit) {
+        case true: return "current"
+        case false: return "behind (\(short(commit)))"
+        default: return short(commit)
+        }
+    }
+
+    private func stripColumn(_ name: String, _ symbol: String, _ state: State, _ line: String) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: symbol).font(.system(size: 22, weight: .light)).foregroundStyle(.secondary).frame(width: 32)
+            VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(name).font(.headline)
-                    Dot(color: state == .good ? .mint : state == .attention ? .amber : .gray)
+                    if state == .attention { Dot(color: .amber) }
                 }
-                Text(build).font(.callout)
-                Text(note).font(.caption).foregroundStyle(.secondary)
+                Text(line).font(.callout).foregroundStyle(state == .attention ? Color.amber : .secondary).lineLimit(1)
             }
             Spacer(minLength: 0)
         }
@@ -605,7 +647,7 @@ private struct OverviewPane: View {
             HStack(alignment: .top, spacing: 12) {
                 BigNumber(value: today("dictations") ?? "—", label: "dictations")
                 BigNumber(value: today("dictated_words") ?? "—", label: "words")
-                BigNumber(value: (todayRow["latency_median"] as? Double).map { String(format: "%.1f s", $0) } ?? "—", label: "release to text, median")
+                BigNumber(value: (todayRow["latency_median"] as? Double).map { String(format: "%.1f s", $0) } ?? "—", label: "typical wait")
             }
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(recent, id: \.dir) { entry in
@@ -613,8 +655,9 @@ private struct OverviewPane: View {
                     HStack(alignment: .firstTextBaseline, spacing: 12) {
                         Text(entry.date.formatted(date: .omitted, time: .shortened)).monospacedDigit()
                             .foregroundStyle(.secondary).frame(width: 48, alignment: .leading)
-                        Text(entry.app).foregroundStyle(.secondary).frame(width: 90, alignment: .leading).lineLimit(1)
-                        Text(entry.summary).lineLimit(1).truncationMode(.tail)
+                        Text(entry.said).lineLimit(1).truncationMode(.tail)
+                        Spacer(minLength: 8)
+                        Text(entry.app).foregroundStyle(.secondary).lineLimit(1)
                     }
                     .font(.callout)
                     .padding(.vertical, 8)
@@ -627,15 +670,29 @@ private struct OverviewPane: View {
     private var typingToday: some View {
         VStack(alignment: .leading, spacing: 14) {
             CardTitle(title: "Typing today", link: "Statistics") { navigation.section = .statistics }
-            HStack(alignment: .top, spacing: 12) {
-                BigNumber(value: today("typed_words") ?? "—", label: "words on the iPhone")
-                BigNumber(value: today("autocorrected") ?? "—", label: "autocorrected")
-                BigNumber(value: today("undone") ?? "—", label: "taken back")
+            if (todayRow["typed_words"] as? Int ?? 0) > 0 {
+                HStack(alignment: .top, spacing: 12) {
+                    BigNumber(value: today("typed_words") ?? "—", label: "words on the iPhone")
+                    BigNumber(value: today("autocorrected") ?? "—", label: "autocorrected")
+                    BigNumber(value: today("undone") ?? "—", label: "taken back")
+                }
+            } else {
+                Text("Nothing typed on the iPhone yet today.").foregroundStyle(.secondary)
             }
+            // The week, so the card says something on a quiet day too.
+            let week = metrics["week"] as? [String: Any] ?? [:]
+            Text("THIS WEEK").font(.system(size: 11, weight: .semibold)).tracking(0.6).foregroundStyle(.secondary).padding(.top, 6)
+            HStack(alignment: .top, spacing: 12) {
+                BigNumber(value: (week["typed_words"] as? NSNumber)?.stringValue ?? "—", label: "words typed")
+                BigNumber(value: (week["good_autocorrect_per_100"] as? NSNumber).map { String(format: "%.1f", $0.doubleValue) } ?? "—",
+                          label: "autocorrected per 100")
+                BigNumber(value: (week["suggestion_share"] as? NSNumber).map { "\(Int(($0.doubleValue * 100).rounded()))%" } ?? "—",
+                          label: "from suggestions")
+            }
+            Spacer(minLength: 0)
             Divider()
-            Toggle("Switch a word typed in the wrong layout on the Mac", isOn: $autoLayout)
-                .font(.callout)
-            Text("Typing on the Mac isn't counted here yet.").font(.caption).foregroundStyle(.secondary)
+            Toggle("Fix words typed in the wrong layout on the Mac", isOn: $autoLayout)
+                .toggleStyle(.switch).font(.callout)
         }
         .card(padding: 18)
     }
@@ -714,15 +771,14 @@ private struct OverviewPane: View {
                     guard let day = (d["day"] as? String).flatMap(dayFormat.date(from:)) else { return nil }
                     return (day, (d["cost"] as? NSNumber)?.doubleValue ?? 0)
                 }
-                Chart(days, id: \.0) { day in
+                Chart(days.suffix(7), id: \.0) { day in
                     BarMark(x: .value("Day", day.0, unit: .day), y: .value("Cost", day.1))
                         .foregroundStyle(Calendar.current.isDateInToday(day.0) ? Color.mint : Color.secondary.opacity(0.45))
                         .cornerRadius(3)
                 }
                 .chartYAxis(.hidden)
-                .chartXAxis { AxisMarks(values: .stride(by: .day, count: 7)) { _ in AxisValueLabel(format: .dateTime.day().month()) } }
-                .frame(height: 70)
-                Text("Two weeks, a bar a day · click for the details").font(.caption).foregroundStyle(.secondary)
+                .chartXAxis { AxisMarks(values: .stride(by: .day)) { _ in AxisValueLabel(format: .dateTime.weekday(.narrow)) } }
+                .frame(height: 56)
             }
             .card(padding: 18)
             .contentShape(Rectangle())
@@ -760,6 +816,7 @@ private struct DictationsPane: View {
 
     private var shown: [DictationsWindow.Entry] {
         entries.filter { e in
+            guard !e.session.isEmpty else { return false }   // still being heard
             let phone = e.session["device"] as? String == "iPhone"
             let fits = source == "All" || (source == "iPhone") == phone
             return fits && (query.isEmpty || e.summary.localizedCaseInsensitiveContains(query) || e.app.localizedCaseInsensitiveContains(query))
@@ -773,17 +830,18 @@ private struct DictationsPane: View {
             VStack(spacing: 8) {
                 TextField("Search what you said", text: $query).textFieldStyle(.roundedBorder)
                 Picker("", selection: $source) { ForEach(["All", "Mac", "iPhone"], id: \.self) { Text($0) } }
-                    .pickerStyle(.segmented).labelsHidden()
+                    .pickerStyle(.segmented).labelsHidden().fixedSize()
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 List(shown, id: \.dir, selection: $selected) { e in
                     VStack(alignment: .leading, spacing: 3) {
                         HStack {
                             Text(e.date.formatted(Calendar.current.isDateInToday(e.date) ? .dateTime.hour().minute() : .dateTime.day().month().hour().minute()))
-                            Text(e.app)
+                            Text(e.isHandoff ? "\(e.app) · its own dictation" : e.app)
                             Spacer()
                             if e.session["device"] as? String == "iPhone" { Image(systemName: "iphone") }
                         }
                         .font(.caption).foregroundStyle(.secondary)
-                        Text(e.summary).lineLimit(2).foregroundStyle(e.isHandoff ? .secondary : .primary)
+                        Text(e.said).lineLimit(2)
                     }
                     .padding(.vertical, 3)
                 }
@@ -856,44 +914,20 @@ private struct WordsPane: View {
     @State private var savedGlossary = ""
     @State private var savedPersona = ""
 
+    private var words: Int {
+        glossary.split(separator: "\n").filter { let t = $0.trimmingCharacters(in: .whitespaces); return !t.isEmpty && !t.hasPrefix("#") }.count
+    }
+
     var body: some View {
         Page(title: "Words & names", subtitle: "What dictation and correction keep as they are") {
             Button("Refine from history", systemImage: "sparkles") { actions.refineDictionary() }
                 .help("Ask the model which names and terms from recent dictations to keep")
         } content: {
-            Masonry(minColumn: 420, spacing: 16) {
-                VStack(alignment: .leading, spacing: 10) {
-                    CardTitle(title: "Your words")
-                    Text("One a line: names, terms, words spelled your way. Heard close to one of these, dictation writes it so.")
-                        .font(.callout).foregroundStyle(.secondary)
-                    TextEditor(text: $glossary).font(.system(size: 13, design: .monospaced))
-                        .frame(minHeight: 320).scrollContentBackground(.hidden)
-                        .padding(6).background(Color.grouped, in: RoundedRectangle(cornerRadius: 8))
-                    HStack {
-                        Button("Save") {
-                            try? glossary.write(to: AppSupport.glossary, atomically: true, encoding: .utf8)
-                            savedGlossary = glossary
-                        }
-                        .disabled(glossary == savedGlossary)
-                        Text("\(glossary.split(separator: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.count) words")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-                .card(padding: 18)
-                VStack(alignment: .leading, spacing: 10) {
-                    CardTitle(title: "Who you are")
-                    Text("For the models settling a dictation: your name, what you do, who you write to.")
-                        .font(.callout).foregroundStyle(.secondary)
-                    TextEditor(text: $persona)
-                        .frame(minHeight: 320).scrollContentBackground(.hidden)
-                        .padding(6).background(Color.grouped, in: RoundedRectangle(cornerRadius: 8))
-                    Button("Save") {
-                        try? persona.write(to: AppSupport.persona, atomically: true, encoding: .utf8)
-                        savedPersona = persona
-                    }
-                    .disabled(persona == savedPersona)
-                }
-                .card(padding: 18)
+            EqualRow(minChild: 380) {
+                TextCard(title: "Your words", note: "\(words) · one a line: names, terms, words spelled your way",
+                         text: $glossary, saved: $savedGlossary, file: AppSupport.glossary)
+                TextCard(title: "Who you are", note: "for the models settling a dictation: your name, your work, who you write to",
+                         text: $persona, saved: $savedPersona, file: AppSupport.persona)
             }
         }
         .task {
@@ -903,6 +937,39 @@ private struct WordsPane: View {
             persona = (try? String(contentsOf: AppSupport.persona, encoding: .utf8)) ?? ""
             (savedGlossary, savedPersona) = (glossary, persona)
         }
+    }
+}
+
+/// A text file edited in place: its title and Save above it (Save only once something changed).
+private struct TextCard: View {
+    let title: String
+    let note: String
+    @Binding var text: String
+    @Binding var saved: String
+    let file: URL
+    var onSave: () -> Void = {}
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(title).font(.headline)
+                Spacer()
+                Button("Save") {
+                    try? text.write(to: file, atomically: true, encoding: .utf8)
+                    saved = text
+                    onSave()
+                }
+                .keyboardShortcut("s")
+                .buttonStyle(.borderedProminent)
+                .opacity(text == saved ? 0 : 1)
+            }
+            Text(note).font(.callout).foregroundStyle(.secondary)
+            TextEditor(text: $text)
+                .font(.system(size: 12, design: .monospaced)).lineSpacing(4)
+                .frame(minHeight: 340, maxHeight: .infinity).scrollContentBackground(.hidden)
+                .padding(8).background(Color.grouped, in: RoundedRectangle(cornerRadius: 8))
+        }
+        .card(padding: 18)
     }
 }
 
@@ -918,11 +985,12 @@ private struct TypingPane: View {
 
     var body: some View {
         Page(title: "Typing", subtitle: "On the Mac and on the iPhone's keyboard") {
-            Masonry(minColumn: 420, spacing: 16) {
+            EqualRow(minChild: 380) {
                 VStack(alignment: .leading, spacing: 12) {
                     CardTitle(title: "On the Mac")
-                    Toggle("Switch a word typed in the wrong layout as the space after it comes", isOn: $autoLayout)
-                    Text("⌥Space right after takes it back and keeps those words as typed.").font(.caption).foregroundStyle(.secondary)
+                    Toggle("Fix words typed in the wrong layout", isOn: $autoLayout).toggleStyle(.switch)
+                    Text("Switched as the space after the word comes; ⌥Space right after takes it back and keeps it as typed.")
+                        .font(.callout).foregroundStyle(.secondary)
                     Divider()
                     ForEach(actions.hotkeys, id: \.0) { key, what in Fact(label: what, value: key) }
                     Button("Detect a key…") { actions.detectKey() }
@@ -946,19 +1014,8 @@ private struct TypingPane: View {
                 .card(padding: 18)
             }
 
-            VStack(alignment: .leading, spacing: 10) {
-                CardTitle(title: "Key remaps")
-                TextEditor(text: $remaps).font(.system(size: 12, design: .monospaced))
-                    .frame(minHeight: 220).scrollContentBackground(.hidden)
-                    .padding(6).background(Color.grouped, in: RoundedRectangle(cornerRadius: 8))
-                Button("Save") {
-                    try? remaps.write(to: AppSupport.remaps, atomically: true, encoding: .utf8)
-                    savedRemaps = remaps
-                    actions.reloadRemaps()
-                }
-                .disabled(remaps == savedRemaps)
-            }
-            .card(padding: 18)
+            TextCard(title: "Key remaps", note: "a key for another, in the file's own words — the lines starting with # explain how",
+                     text: $remaps, saved: $savedRemaps, file: AppSupport.remaps, onSave: actions.reloadRemaps)
         }
         .task {
             actions.reloadRemaps()   // writes the default rules if the file is missing
@@ -1015,7 +1072,11 @@ private struct CostsPane: View {
         let today = calendar.startOfDay(for: Date())
         let end = calendar.dateInterval(of: component, for: today)!.end
         switch scale {
-        case .days: return calendar.date(byAdding: .day, value: -29, to: today)!...end
+        // From the first day anything was spent, if that's within the month — a week at least.
+        case .days:
+            let first = days.first.map { calendar.startOfDay(for: $0.date) } ?? today
+            let from = max(calendar.date(byAdding: .day, value: -29, to: today)!, min(first, calendar.date(byAdding: .day, value: -6, to: today)!))
+            return from...end
         case .weeks: return calendar.dateInterval(of: .weekOfYear, for: calendar.date(byAdding: .weekOfYear, value: -15, to: today)!)!.start...end
         case .months:
             let first = days.first?.date ?? today
@@ -1051,10 +1112,10 @@ private struct CostsPane: View {
             let calls = shown.reduce(0) { $0 + $1.calls }
             let spanDays = max(1, (Calendar.current.dateComponents([.day], from: shown.first?.date ?? Date(), to: Date()).day ?? 0) + 1)
             HStack(alignment: .top, spacing: 12) {
-                BigNumber(value: dollars(sum), label: scale == .days ? "the last 30 days" : scale == .weeks ? "the last 16 weeks" : "everything kept")
+                BigNumber(value: dollars(sum), label: scale == .days ? "these days" : scale == .weeks ? "these weeks" : "everything kept")
                 BigNumber(value: dollars(sum / Double(spanDays)), label: "a day, on average")
                 BigNumber(value: dollars(days.last { Calendar.current.isDateInToday($0.date) }?.cost ?? 0), label: "today")
-                BigNumber(value: "\(calls)", label: "calls")
+                BigNumber(value: "\(calls)", label: "calls to models")
             }
             .card(padding: 18)
 
@@ -1063,6 +1124,7 @@ private struct CostsPane: View {
                     BarMark(x: .value("When", bar.start, unit: component), y: .value("Cost", bar.cost))
                         .foregroundStyle(by: .value("For", bar.purpose))
                 }
+                .chartForegroundStyleScale(domain: purposes, range: purposes.map(color))
                 .chartXScale(domain: span)
                 .chartXAxis {
                     switch scale {
@@ -1079,22 +1141,33 @@ private struct CostsPane: View {
             .card(padding: 18)
 
             Masonry(minColumn: 260, spacing: 16) {
-                breakdown("By purpose", total(\.byPurpose), of: sum)
+                breakdown("By purpose", total(\.byPurpose), of: sum, colored: true)
                 breakdown("By model", total(\.byModel), of: sum)
-                breakdown("By device", total(\.byDevice).map { ($0.0 == "iphone" ? "iPhone" : "Macs", $0.1) }, of: sum)
+                if total(\.byDevice).count > 1 {
+                    breakdown("By device", total(\.byDevice).map { ($0.0 == "iphone" ? "iPhone" : "Macs", $0.1) }, of: sum)
+                }
             }
         }
         .task { await load() }
     }
 
-    private func breakdown(_ title: String, _ rows: [(String, Double)], of sum: Double) -> some View {
+    /// Every purpose seen, in one order — the chart's colours and the breakdown's the same.
+    private var purposes: [String] { Array(Set(days.flatMap { $0.byPurpose.keys })).sorted() }
+
+    private static let palette: [Color] = [.mint, .blue, .orange, .purple, .pink, .yellow, .teal, .indigo]
+
+    private func color(_ purpose: String) -> Color {
+        purposes.firstIndex(of: purpose).map { Self.palette[$0 % Self.palette.count] } ?? .gray
+    }
+
+    private func breakdown(_ title: String, _ rows: [(String, Double)], of sum: Double, colored: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             CardTitle(title: title)
             ForEach(rows, id: \.0) { name, cost in
                 VStack(alignment: .leading, spacing: 4) {
                     Fact(label: name, value: dollars(cost))
                     GeometryReader { g in
-                        Capsule().fill(Color.mint.opacity(0.7))
+                        Capsule().fill(colored ? color(name) : Color.secondary.opacity(0.5))
                             .frame(width: max(2, g.size.width * (sum > 0 ? cost / sum : 0)), height: 4)
                     }
                     .frame(height: 4)
@@ -1130,49 +1203,44 @@ private struct SystemPane: View {
         Page(title: "System", subtitle: "The three devices, and what keeps them in step") {
             Button("Refresh", systemImage: "arrow.clockwise") { Task { await load() } }
         } content: {
-            Text("Versions").font(.title3.weight(.semibold))
-            Masonry(minColumn: 220, spacing: 12) {
+            SectionHeader(title: "Versions")
+            EqualRow(minChild: 200, spacing: 12) {
                 version("This MacBook", status?.macCommit, note: "checked out here: \(short(status?.head))")
                 version("Mac mini", status?.mini.reachable == true ? status?.mini.commit : nil,
                         note: status?.mini.reachable == true ? "updates itself from main" : "doesn't answer")
                 version("iPhone app + keyboard", status?.phoneCommit, note: "as its keyboard last said")
                 VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 8) { Dot(color: .gray); Text("Keyboard's words").font(.headline) }
+                    HStack(spacing: 8) { Dot(color: .gray); Text("Keyboard dictionary").font(.headline) }
                     Text(status?.keyboardWords?.formatted(date: .abbreviated, time: .shortened) ?? "—")
-                    Text("Lexicon built, then installed with the app").font(.caption).foregroundStyle(.secondary)
+                    Text("built here, installed with the app").font(.caption).foregroundStyle(.secondary)
                 }
                 .card()
             }
 
-            Text("Runs by itself").font(.title3.weight(.semibold))
-            Masonry(minColumn: 280, spacing: 12) {
+            SectionHeader(title: "Runs by itself")
+            VStack(spacing: 0) {
                 routine("Sync with the Mac mini", "Recordings, logs, model costs both ways; a forgotten dictation stays gone on both.",
-                        every: "every 5 min", last: status?.sync.map { "\($0.line) · \(ago($0.date))" } ?? "—", ok: status?.sync?.ok)
+                        every: "every 5 min", last: status?.sync.map { "\($0.line) \(ago($0.date))" } ?? "…", ok: status?.sync?.ok)
+                Divider()
                 routine("The Mac mini updates itself", "Builds main when it changes, swaps the server in at a quiet moment, rolls back if it fails.",
-                        every: "every 5 min", last: status.map { $0.mini.reachable ? "\($0.mini.commit.map(short) ?? "a build from before versions"), idle \(($0.mini.idle ?? 0) / 60) min" : "doesn't answer" } ?? "—",
+                        every: "every 5 min", last: status.map { $0.mini.reachable ? ($0.mini.commit.map { "on \(short($0))" } ?? "on an older build") : "doesn't answer" } ?? "…",
                         ok: status.map { $0.mini.reachable && $0.isCurrent($0.mini.commit) != false })
+                Divider()
                 routine("The iPhone sends its keyboard log", "To whichever Mac it reaches — over Tailscale, or the home network.",
-                        every: "as the keyboard closes", last: ago(status?.phoneLog),
+                        every: "as the keyboard closes", last: "came \(ago(status?.phoneLog))",
                         ok: status?.phoneLog.map { Date().timeIntervalSince($0) < 86_400 })
+                Divider()
                 routine("Watchdog", "Restarts sweetch after a crash, and the microphone when it's lost.",
                         every: "always", last: Watchdog.isInstalled ? "on" : "off", ok: Watchdog.isInstalled)
-                routine("Statistics", "Counted in the background, only what changed, so Progress opens at once.",
-                        every: "every 5 min, and after a dictation", last: ago(Stats.countedAt), ok: Stats.countedAt != nil)
-            }
-
-            VStack(alignment: .leading, spacing: 10) {
-                CardTitle(title: "Running here")
-                Toggle("Start at login", isOn: Binding(
-                    get: { SMAppService.mainApp.status == .enabled },
-                    set: { on in _ = try? (on ? SMAppService.mainApp.register() : SMAppService.mainApp.unregister()) }))
-                Toggle("Restart on crash (watchdog)", isOn: Binding(
-                    get: { Watchdog.isInstalled },
-                    set: { on in if on { Watchdog.install() } else { Watchdog.uninstall() } }))
                 Divider()
-                Button("Pull the keyboard's log off the iPhone") { runPhoneLogs() }
-                    .help("Over the cable, when the phone reaches no Mac by itself — Tailscale off, a VPN in the way")
+                routine("Statistics", "Counted in the background, only what changed, so Progress opens at once.",
+                        every: "every 5 min, and after a dictation", last: Stats.countedAt.map { "counted \(ago($0))" } ?? "counting…",
+                        ok: Stats.countedAt.map { _ in true })
             }
-            .card(padding: 18)
+            .card(padding: 6)
+
+            Button("Pull the keyboard's log off the iPhone over the cable") { runPhoneLogs() }
+                .help("When the phone reaches no Mac by itself — Tailscale off, a VPN in the way")
         }
         .task { await load() }
     }
@@ -1193,20 +1261,19 @@ private struct SystemPane: View {
     }
 
     private func routine(_ name: String, _ what: String, every: String, last: String, ok: Bool?) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Dot(color: ok == true ? .mint : ok == false ? .amber : .gray)
+        HStack(alignment: .top, spacing: 12) {
+            Dot(color: ok == true ? .mint : ok == false ? .amber : .gray).padding(.top, 6)
+            VStack(alignment: .leading, spacing: 2) {
                 Text(name).font(.headline)
+                Text(what).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
-            Text(what).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            HStack {
-                Text(every)
-                Spacer()
-                Text(last).multilineTextAlignment(.trailing)
+            Spacer(minLength: 16)
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(last).font(.callout)
+                Text(every).font(.caption).foregroundStyle(.secondary)
             }
-            .font(.caption)
         }
-        .card()
+        .padding(.horizontal, 12).padding(.vertical, 10)
     }
 
     private func runPhoneLogs() {
@@ -1265,38 +1332,59 @@ private struct SettingsPane: View {
     @State private var incognito = Privacy.incognito
 
     var body: some View {
-        Form {
-            Section("Appearance") {
-                Picker("Theme", selection: $appearance) {
-                    ForEach(Appearance.allCases, id: \.rawValue) { Text($0.rawValue).tag($0.rawValue) }
+        Page(title: "Settings") {
+            Masonry(minColumn: 380) {
+                VStack(alignment: .leading, spacing: 12) {
+                    CardTitle(title: "Dictation")
+                    toggle("Dictation — hold Space and speak", $dictation)
+                        .onChange(of: dictation) { _, on in if on { Whisper.warmUp() } }
+                    toggle("Word menu — click a dictated word for what else it could be", $wordMenu)
+                    toggle("Hear for the iPhone on this Mac too", $server)
+                        .onChange(of: server) { _, on in actions.setServer(on) }
+                    Text("Claude desktop and Claude Code keep their own dictation, heard alongside.")
+                        .font(.callout).foregroundStyle(.secondary)
                 }
-                .pickerStyle(.segmented)
-                .onChange(of: appearance) { _, _ in Appearance.apply() }
-            }
-            Section("Dictation") {
-                Toggle("Dictation (hold Space)", isOn: $dictation)
-                    .onChange(of: dictation) { _, on in if on { Whisper.warmUp() } }
-                Text("Hold Space in a text field and speak; Claude desktop and Claude Code keep their own dictation, heard alongside.")
-                    .font(.caption).foregroundStyle(.secondary)
-                Toggle("Word menu: click a dictated word for what else it could be", isOn: $wordMenu)
-                Toggle("Dictation server for the iPhone, on this Mac", isOn: $server)
-                    .onChange(of: server) { _, on in actions.setServer(on) }
-            }
-            Section("Privacy") {
-                Toggle("Incognito", isOn: $incognito)
-                    .onChange(of: incognito) { _, on in actions.setIncognito(on) }
-                Text("Nothing recorded, captured, sent to a model or kept — dictation and corrections off, layout switching on. Private browser windows, password fields and password managers are private by themselves.")
-                    .font(.caption).foregroundStyle(.secondary)
-                LabeledContent("Private right now", value: actions.privateNow() ?? "no")
-                Button("Forget the last dictation") { actions.forgetLastDictation() }
-                Text("Out of the history here and on the Mac mini; kept aside on this Mac for 30 days, then gone.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            Section("Tracing") {
-                Toggle("Text in sweetch's log (for tracing a problem)", isOn: $logText)
-                    .onChange(of: logText) { _, _ in Privacy.refreshLogText() }
+                .card(padding: 18)
+
+                VStack(alignment: .leading, spacing: 12) {
+                    CardTitle(title: "Privacy")
+                    toggle("Incognito", $incognito)
+                        .onChange(of: incognito) { _, on in actions.setIncognito(on) }
+                    Text("Nothing recorded, sent to a model or kept. Private browser windows, password fields and password managers are private by themselves.")
+                        .font(.callout).foregroundStyle(.secondary)
+                    Fact(label: "Private right now", value: actions.privateNow() ?? "no")
+                    Button("Forget the last dictation") { actions.forgetLastDictation() }
+                        .help("Out of the history here and on the Mac mini; kept aside on this Mac for 30 days, then gone")
+                }
+                .card(padding: 18)
+
+                VStack(alignment: .leading, spacing: 12) {
+                    CardTitle(title: "This Mac")
+                    toggle("Start at login", Binding(
+                        get: { SMAppService.mainApp.status == .enabled },
+                        set: { on in _ = try? (on ? SMAppService.mainApp.register() : SMAppService.mainApp.unregister()) }))
+                    toggle("Restart on crash (watchdog)", Binding(
+                        get: { Watchdog.isInstalled },
+                        set: { on in if on { Watchdog.install() } else { Watchdog.uninstall() } }))
+                    toggle("Text in sweetch's log, for tracing a problem", $logText)
+                        .onChange(of: logText) { _, _ in Privacy.refreshLogText() }
+                }
+                .card(padding: 18)
+
+                VStack(alignment: .leading, spacing: 12) {
+                    CardTitle(title: "Appearance")
+                    Picker("", selection: $appearance) {
+                        ForEach(Appearance.allCases, id: \.rawValue) { Text($0.rawValue).tag($0.rawValue) }
+                    }
+                    .pickerStyle(.segmented).labelsHidden().fixedSize()
+                    .onChange(of: appearance) { _, _ in Appearance.apply() }
+                }
+                .card(padding: 18)
             }
         }
-        .formStyle(.grouped)
+    }
+
+    private func toggle(_ title: String, _ on: Binding<Bool>) -> some View {
+        Toggle(isOn: on) { Text(title).frame(maxWidth: .infinity, alignment: .leading) }.toggleStyle(.switch)
     }
 }

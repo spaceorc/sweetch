@@ -43,6 +43,13 @@ final class DictationsWindow: NSObject, NSWindowDelegate, NSTableViewDataSource,
             return "nothing heard"
         }
 
+        /// Just what was said, as it ended up typed: the app's own when the hold went to it.
+        var said: String {
+            let text = isHandoff ? session["theirs"] as? String ?? session["text"] as? String
+                : session["inserted"] as? String ?? session["text"] as? String
+            return text?.trimmingCharacters(in: .whitespaces) ?? summary
+        }
+
         var isHandoff: Bool { session["handoff"] != nil }
 
         func json(_ name: String) -> [String: Any] {
