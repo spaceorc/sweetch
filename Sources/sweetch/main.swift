@@ -49,6 +49,22 @@ if let i = CommandLine.arguments.firstIndex(of: "--render-dictations"), i + 1 < 
     try? window.debugRenderContent()?.write(to: URL(fileURLWithPath: CommandLine.arguments[i + 1]))
     exit(0)
 }
+// `sweetch --count-stats [metrics.json]`: the statistics and insights counted, and how long that took — the
+// second time reads only what changed in between.
+if CommandLine.arguments.contains("--count-stats") {
+    for _ in 0..<2 {
+        let start = Date()
+        let m = Metrics.compute(), i = Insights.compute()
+        Metrics.saveDigests()
+        Insights.saveDigests()
+        print(String(format: "%.2f s · %d days · %d taps", Date().timeIntervalSince(start),
+                     (m["days"] as? [Any])?.count ?? 0, ((i["taps"] as? [String: Any])?["all"] as? Int) ?? 0))
+        if let i = CommandLine.arguments.firstIndex(of: "--count-stats"), i + 1 < CommandLine.arguments.count {
+            try? JSONSerialization.data(withJSONObject: m, options: [.sortedKeys]).write(to: URL(fileURLWithPath: CommandLine.arguments[i + 1]))
+        }
+    }
+    exit(0)
+}
 // `sweetch --render-main <section> out.png`: Sweetch's window, a section of it, into a PNG.
 if let i = CommandLine.arguments.firstIndex(of: "--render-main"), i + 2 < CommandLine.arguments.count {
     MainWindow.render(CommandLine.arguments[i + 1], to: URL(fileURLWithPath: CommandLine.arguments[i + 2]))
@@ -59,6 +75,7 @@ if let i = CommandLine.arguments.firstIndex(of: "--render-main"), i + 2 < Comman
 if CommandLine.arguments.contains("--serve") {
     let server = DictationServer()
     server.start()
+    Stats.start()
     for signo in [SIGTERM, SIGINT] {
         signal(signo, SIG_IGN)
         let source = DispatchSource.makeSignalSource(signal: signo, queue: .main)

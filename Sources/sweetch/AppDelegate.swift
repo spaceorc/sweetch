@@ -62,7 +62,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         LayoutTranslator.prewarm()   // build the layout maps on the main thread, once
         WordMenu.prewarm()
         // The statistics counted once in the background, so the window's open at once.
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 20) { _ = Metrics.compute(); _ = Insights.compute() }
+        Stats.start()   // the statistics, counted in the background from now on
         _ = LLMClient.isConfigured   // touch the lazy config so the provider line lands in the log
         if isDictationEnabled {
             Whisper.warmUp()   // the model takes seconds to load; not on the first hold

@@ -5,7 +5,7 @@ import Foundation
 /// iPhone keyboard's log (both synced between the Macs) — per day, for the last two weeks.
 enum Metrics {
     /// One day's counts.
-    struct Day {
+    struct Day: Codable {
         var typedWords = 0
         var suggestionWords = 0
         var autocorrected = 0
@@ -15,7 +15,7 @@ enum Metrics {
         /// Fixing by hand: each run of backspaces (under 2 s apart, at most 40 characters — more is
         /// rewriting, not a typo), its characters and how long the backspacing took; and the
         /// suggestions picked in place of a word typed wrong.
-        var fixes: [(chars: Int, seconds: Double)] = []
+        var fixes: [Fix] = []
         var suggestionFixes = 0
         var wordLetters = 0
         /// Seconds between words typed one after another (a pause over 8 s isn't typing).
@@ -31,8 +31,22 @@ enum Metrics {
         var changedWords = 0
     }
 
-    private static let lock = NSLock()
-    nonisolated(unsafe) private static var cached: [String: (Date, Day)] = [:]
+    struct Fix: Codable {
+        let chars: Int
+        let seconds: Double
+    }
+
+    /// What each file came to (Stats): a keyboard log's day, a dictation's numbers, a keyboard
+    /// log's calls to models.
+    private static let keyboardDigests = LogDigests<KeyboardCount>("metrics-keyboard", version: 1)
+    private static let dictationDigests = DigestCache<Dictated>("metrics-dictations", version: 1)
+    private static let llmDigests = LogDigests<[String]>("metrics-llm", version: 1)
+
+    static func saveDigests() {
+        keyboardDigests.save()
+        dictationDigests.save()
+        llmDigests.save()
+    }
 
     static func compute(days count: Int = 14) -> [String: Any] {
         let calendar = Calendar.current
@@ -50,7 +64,7 @@ enum Metrics {
         // A character's time while typing: a word and the space after it.
         let secondsPerChar = typingSecondsPerWord / (typedAll > 0 ? Double(letters) / Double(typedAll) + 1 : 6)
         /// A fix by hand: the backspacing, typing the characters again, and half a second to notice.
-        func fixSeconds(_ fix: (chars: Int, seconds: Double)) -> Double { fix.seconds + Double(fix.chars) * secondsPerChar + 0.5 }
+        func fixSeconds(_ fix: Fix) -> Double { fix.seconds + Double(fix.chars) * secondsPerChar + 0.5 }
         let medianFix = median(days.values.flatMap(\.fixes).map(fixSeconds)) ?? 2.5
         let per100 = { (n: Int, words: Int) -> Any in words > 0 ? Double(n) * 100 / Double(words) : NSNull() }
         let series = dayNames.map { name -> [String: Any] in
@@ -119,10 +133,6 @@ enum Metrics {
         return llm(dayNames: (0..<count).reversed().map { dayName(calendar.date(byAdding: .day, value: -$0, to: today)!) })
     }
 
-    /// The iPhone's `llm-usage` events per keyboard log, kept while the file is unchanged: the
-    /// logs are tens of megabytes, mostly touches.
-    nonisolated(unsafe) private static var llmCached: [String: (Date, [[String: Any]])] = [:]
-
     private static func llm(dayNames: [String]) -> [String: Any] {
         var records: [[String: Any]] = []
         let fm = FileManager.default
@@ -132,21 +142,16 @@ enum Metrics {
             }
         }
         let keyboard = AppSupport.dir.appendingPathComponent("keyboard", isDirectory: true)
-        for url in (try? fm.contentsOfDirectory(at: keyboard, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [] where url.pathExtension == "jsonl" {
-            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
-            if let hit = lock.withLock({ llmCached[url.path] }), hit.0 == modified {
-                records += hit.1
-                continue
+        for url in (try? fm.contentsOfDirectory(at: keyboard, includingPropertiesForKeys: nil)) ?? [] where url.pathExtension == "jsonl" {
+            let lines = llmDigests.state(for: url, fresh: { [String]() }) { lines, text in
+                lines += text.split(separator: "\n").filter { $0.contains("\"e\":\"llm-usage\"") }.map(String.init)
             }
-            var found: [[String: Any]] = []
-            for line in ((try? String(contentsOf: url, encoding: .utf8)) ?? "").split(separator: "\n") where line.contains("\"e\":\"llm-usage\"") {
+            for line in lines {
                 if var r = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any] {
                     r["from"] = "iphone"
-                    found.append(r)
+                    records.append(r)
                 }
             }
-            lock.withLock { llmCached[url.path] = (modified, found) }
-            records += found
         }
         let byDay = Dictionary(grouping: records) { dayName(Date(timeIntervalSince1970: ($0["t"] as? Double) ?? 0)) }
         func cost(_ rs: [[String: Any]]) -> Double { rs.reduce(0) { $0 + (($1["cost"] as? NSNumber)?.doubleValue ?? 0) } }
@@ -162,6 +167,14 @@ enum Metrics {
             "all": cost(records), "since": records.compactMap { $0["t"] as? Double }.min() ?? NSNull(),
             "by_purpose": split("purpose"), "by_model": split("model"),
             "days": dayNames.map { ["day": $0, "cost": cost(byDay[$0] ?? [])] },
+            // Every day kept, by what for — for the window's chart by day, week and month.
+            "history": byDay.keys.sorted().map { day -> [String: Any] in
+                let rs = byDay[day]!
+                return ["day": day, "cost": cost(rs), "calls": rs.count,
+                        "by_purpose": Dictionary(grouping: rs) { $0["purpose"] as? String ?? "?" }.mapValues(cost),
+                        "by_model": Dictionary(grouping: rs) { $0["model"] as? String ?? "?" }.mapValues(cost),
+                        "by_device": Dictionary(grouping: rs) { $0["from"] as? String ?? "mac" }.mapValues(cost)]
+            },
         ]
     }
 
@@ -174,105 +187,134 @@ enum Metrics {
 
     private static func keyboard(into days: inout [String: Day]) {
         let dir = AppSupport.dir.appendingPathComponent("keyboard", isDirectory: true)
-        let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
         for file in files where file.pathExtension == "jsonl" {
             let name = String(file.lastPathComponent.prefix(10))
             guard days[name] != nil else { continue }
-            let modified = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
-            let day = lock.withLock { cached[file.path].flatMap { $0.0 == modified ? $0.1 : nil } } ?? {
-                let counted = countKeyboard(file)
-                lock.withLock { cached[file.path] = (modified, counted) }
-                return counted
-            }()
-            days[name]!.add(day)
+            days[name]!.add(countKeyboard(file))
+        }
+    }
+
+    /// The keyboard log read so far (LogDigests): the day's counts, and where the reading stands —
+    /// the last word, a run of ⌫ still going, a fix maybe being taken back, the lines seen.
+    struct KeyboardCount: Codable {
+        var day = Day()
+        var lastWordT: Double?
+        var lastWordSession = ""
+        var runChars = 0, runFirst = 0.0, runLast = 0.0
+        var running = false
+        // A fix ⌫ took back, while the ⌫s may still go on through the whole word: then the user was
+        // deleting it, not refusing the fix, and it counts neither way.
+        var takenBackLen: Int?
+        var takenBackLetters = 0
+        var seen = Set<UInt64>()
+
+        mutating func endRun() {
+            if running, runChars <= 40 { day.fixes.append(Fix(chars: runChars, seconds: runLast - runFirst)) }
+            running = false
+        }
+
+        /// The day as counted to the end of the log: a run of ⌫ at its end ends there.
+        var finished: Day {
+            var copy = self
+            copy.endRun()
+            return copy.day
         }
     }
 
     private static func countKeyboard(_ file: URL) -> Day {
-        var day = Day()
-        guard let text = try? String(contentsOf: file, encoding: .utf8) else { return day }
-        var lastWord: (t: Double, session: String)?
-        var run: (chars: Int, first: Double, last: Double)?
-        func endRun() {
-            if let r = run, r.chars <= 40 { day.fixes.append((r.chars, r.last - r.first)) }
-            run = nil
-        }
-        // A fix ⌫ took back, while the ⌫s may still go on through the whole word: then the user was
-        // deleting it, not refusing the fix, and it counts neither way.
-        var takenBack: (beforeLen: Int, letters: Int)?
-        var seenLines = Set<String>()
+        keyboardDigests.state(for: file, fresh: { KeyboardCount() }, read: countKeyboard).finished
+    }
+
+    private static func countKeyboard(_ c: inout KeyboardCount, _ text: Substring) {
         for line in text.split(separator: "\n") where wanted.contains(where: { line.contains($0) }) {
             // The same line twice (a batch sent again) counts once.
-            guard seenLines.insert(String(line)).inserted,
+            guard c.seen.insert(LogDigests<KeyboardCount>.lineHash(line)).inserted,
                   let event = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any],
                   let name = event["e"] as? String else { continue }
             let t = event["t"] as? Double ?? 0
             if name == "delete" || name == "delete-word" {
                 let chars = name == "delete" ? 1 : event["chars"] as? Int ?? 1
-                if let r = run, t - r.last < 2 { run = (r.chars + chars, r.first, t) } else { endRun(); run = (chars, t, t) }
-            } else if let r = run, t - r.last >= 2 || name == "word" {
-                _ = r
-                endRun()
+                if c.running, t - c.runLast < 2 {
+                    c.runChars += chars
+                    c.runLast = t
+                } else {
+                    c.endRun()
+                    (c.running, c.runChars, c.runFirst, c.runLast) = (true, chars, t, t)
+                }
+            } else if c.running, t - c.runLast >= 2 || name == "word" {
+                c.endRun()
             }
             switch name {
             case "word":
-                day.typedWords += 1
-                day.wordLetters += (event["word"] as? String ?? "").count
-                if event["boundary"] as? String == "suggestion" { day.suggestionWords += 1 }
+                c.day.typedWords += 1
+                c.day.wordLetters += (event["word"] as? String ?? "").count
+                if event["boundary"] as? String == "suggestion" { c.day.suggestionWords += 1 }
                 let session = event["session"] as? String ?? ""
-                if let last = lastWord, last.session == session, t - last.t > 0, t - last.t < 8 { day.typingGaps.append(t - last.t) }
-                lastWord = (t, session)
+                if let last = c.lastWordT, c.lastWordSession == session, t - last > 0, t - last < 8 { c.day.typingGaps.append(t - last) }
+                (c.lastWordT, c.lastWordSession) = (t, session)
             case "choose":
                 // A suggestion in place of the word typed, not its ending: a typo put right by hand.
                 let typed = (event["word"] as? String ?? "").lowercased(), picked = (event["suggestion"] as? String ?? "").lowercased()
-                if !typed.isEmpty, !picked.hasPrefix(typed) { day.suggestionFixes += 1 }
-            case "autocorrect": day.autocorrected += 1
+                if !typed.isEmpty, !picked.hasPrefix(typed) { c.day.suggestionFixes += 1 }
+            case "autocorrect": c.day.autocorrected += 1
             case "autofix-undone":
-                day.autocorrectUndone += 1
+                c.day.autocorrectUndone += 1
                 if event["by"] as? String == "delete", let len = event["before_len"] as? Int {
-                    takenBack = (len, (event["typed"] as? String ?? "").count)
+                    (c.takenBackLen, c.takenBackLetters) = (len, (event["typed"] as? String ?? "").count)
                 }
             case "delete", "delete-word":
-                day.deletes += 1
-                if let back = takenBack, let len = event["before_len"] as? Int, len <= back.beforeLen - back.letters {
-                    day.autocorrectUndone -= 1
-                    day.autocorrected -= 1
-                    takenBack = nil
+                c.day.deletes += 1
+                if let back = c.takenBackLen, let len = event["before_len"] as? Int, len <= back - c.takenBackLetters {
+                    c.day.autocorrectUndone -= 1
+                    c.day.autocorrected -= 1
+                    c.takenBackLen = nil
                 }
             case "decoder":
                 // A word the decoder took for no word, had a better one for, and left as typed.
                 let literal = (event["literal"] as? String ?? "").lowercased()
                 let top = (event["top"] as? [String])?.first?.lowercased()
                 if event["literal_is_word"] as? Bool == false, (event["correction"] as? String ?? "").isEmpty,
-                   let top, top != literal, literal.count > 2 { day.typosLeft += 1 }
+                   let top, top != literal, literal.count > 2 { c.day.typosLeft += 1 }
             case "dictation-final":
                 guard event["found"] as? Bool == true else { continue }
                 let heard = words(event["heard"] as? String ?? ""), final = words(event["final"] as? String ?? "")
-                day.finalWords += heard.count
-                day.changedWords += max(heard.count, final.count) - commonRun(heard, final)
+                c.day.finalWords += heard.count
+                c.day.changedWords += max(heard.count, final.count) - commonRun(heard, final)
             default: break
             }
-            if name != "delete", name != "delete-word", name != "autofix-undone" { takenBack = nil }
+            if name != "delete", name != "delete-word", name != "autofix-undone" { c.takenBackLen = nil }
         }
-        endRun()
-        return day
     }
 
     // MARK: - Dictations
+
+    /// A dictation's numbers; `words` nil when nothing was typed (cancelled, handed over, nothing heard).
+    struct Dictated: Codable {
+        var words: Int?
+        var phone = false
+        var seconds: Double?
+        var recording = 0.0
+    }
 
     private static func dictations(into days: inout [String: Day]) {
         let dirs = (try? FileManager.default.contentsOfDirectory(at: DictationStore.dir, includingPropertiesForKeys: nil)) ?? []
         for dir in dirs {
             let name = String(dir.lastPathComponent.prefix(10))
-            guard days[name] != nil,
-                  let data = try? Data(contentsOf: dir.appendingPathComponent("session.json")),
-                  let session = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-                  let text = session["inserted"] as? String ?? session["text"] as? String, !text.isEmpty else { continue }
+            guard days[name] != nil else { continue }
+            let d = dictationDigests.value(for: dir.appendingPathComponent("session.json")) { url in
+                guard let data = try? Data(contentsOf: url),
+                      let session = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                      let text = session["inserted"] as? String ?? session["text"] as? String, !text.isEmpty else { return Dictated() }
+                return Dictated(words: words(text).count, phone: session["device"] as? String == "iPhone",
+                                seconds: session["seconds"] as? Double, recording: session["recording_seconds"] as? Double ?? 0)
+            }
+            guard let count = d.words else { continue }
             days[name]!.dictations += 1
-            days[name]!.dictatedWords += words(text).count
-            if session["device"] as? String == "iPhone" { days[name]!.phoneDictations += 1 }
-            if let seconds = session["seconds"] as? Double { days[name]!.latencies.append(seconds) }
-            days[name]!.recordingSeconds += session["recording_seconds"] as? Double ?? 0
+            days[name]!.dictatedWords += count
+            if d.phone { days[name]!.phoneDictations += 1 }
+            if let seconds = d.seconds { days[name]!.latencies.append(seconds) }
+            days[name]!.recordingSeconds += d.recording
         }
     }
 

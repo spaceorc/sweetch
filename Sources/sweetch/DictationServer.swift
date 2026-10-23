@@ -180,9 +180,9 @@ final class DictationServer {
             // The model's credentials and the user's name, for the iPhone to hear by itself when no
             // Mac answers. Kept there in its Keychain; asked for with the server's token.
             // How well sweetch does, in numbers without text, for the app to show.
-            case ("GET", "/metrics"): (status, reply) = (200, Metrics.compute())
+            case ("GET", "/metrics"): (status, reply) = (200, Stats.currentMetrics())
             // What the numbers say about the hands and the voice: heat maps, offsets, confusions.
-            case ("GET", "/insights"): (status, reply) = (200, Insights.compute())
+            case ("GET", "/insights"): (status, reply) = (200, Stats.currentInsights())
             case ("GET", "/llm-config"):
                 (status, reply) = LLMClient.credentialsText.map { (200, ["env": $0, "user_name": NSFullUserName()]) }
                     ?? (404, ["error": "no credentials here"])

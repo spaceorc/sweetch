@@ -14,7 +14,7 @@ enum Insights {
     /// The heat map's cell, in points.
     static let cell = 4.0
 
-    private struct Tap {
+    private struct Tap: Codable {
         let key: String
         let x: Double
         let y: Double
@@ -27,9 +27,42 @@ enum Insights {
         var posture: String?
     }
 
-    private static let lock = NSLock()
-    nonisolated(unsafe) private static var cachedTaps: [String: (Date, [Tap], [(typed: String, meant: String, t: Double, run: String)], [[Any]])] = [:]
-    nonisolated(unsafe) private static var cachedUnsure: [String: [String: (unsure: Int, all: Int)]] = [:]
+    private struct Fix: Codable {
+        let typed: String
+        let meant: String
+        let t: Double
+        let run: String
+    }
+
+    /// A keyboard log read: its letter taps, the words put right, and the Russian layout's keys
+    /// (as the log has them, JSON).
+    private struct KeyboardRead: Codable {
+        var taps: [Tap] = []
+        var fixes: [Fix] = []
+        var layout = Data()
+        /// Where the reading stands: each run's last key up, the touches down not yet up, the lines seen.
+        var lastUp: [String: Double] = [:]
+        var radius: [String: Double] = [:]
+        var seen = Set<UInt64>()
+    }
+
+    /// A dictation's: how long it took to text and on what, and whisper's words, each [unsure, all].
+    private struct Heard: Codable {
+        var seconds: Double?
+        var phone = false
+        var words: [String: [Int]] = [:]
+    }
+
+    /// What each file came to (Stats).
+    private static let keyboardDigests = LogDigests<KeyboardRead>("insights-keyboard", version: 1)
+    private static let latencyDigests = DigestCache<Heard>("insights-latency", version: 1)
+    private static let unsureDigests = DigestCache<Heard>("insights-unsure", version: 1)
+
+    static func saveDigests() {
+        keyboardDigests.save()
+        latencyDigests.save()
+        unsureDigests.save()
+    }
 
     static func compute(days count: Int = 14) -> [String: Any] {
         let calendar = Calendar.current
@@ -40,22 +73,17 @@ enum Insights {
 
         // The keyboard's log: taps, the words put right, the Russian layout's keys.
         var taps: [Tap] = []
-        var fixes: [(typed: String, meant: String, t: Double, run: String)] = []
+        var fixes: [Fix] = []
         var layout: [[Any]] = []
         let dir = AppSupport.dir.appendingPathComponent("keyboard", isDirectory: true)
-        let files = ((try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [])
+        let files = ((try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? [])
             .filter { $0.pathExtension == "jsonl" && dayNames.contains(String($0.lastPathComponent.prefix(10))) }
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
         for file in files {
-            let modified = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
-            let read = lock.withLock { cachedTaps[file.path].flatMap { $0.0 == modified ? ($0.1, $0.2, $0.3) : nil } } ?? {
-                let r = readKeyboard(file)
-                lock.withLock { cachedTaps[file.path] = (modified, r.0, r.1, r.2) }
-                return r
-            }()
-            taps += read.0
-            fixes += read.1
-            if !read.2.isEmpty { layout = read.2 }
+            let read = readKeyboard(file)
+            taps += read.taps
+            fixes += read.fixes
+            if let keys = (try? JSONSerialization.jsonObject(with: read.layout)) as? [[Any]], !keys.isEmpty { layout = keys }
         }
         taps.sort { $0.t < $1.t }
 
@@ -129,40 +157,40 @@ enum Insights {
 
     // MARK: - Reading the keyboard's log
 
-    private static func readKeyboard(_ file: URL) -> ([Tap], [(typed: String, meant: String, t: Double, run: String)], [[Any]]) {
-        guard let text = try? String(contentsOf: file, encoding: .utf8) else { return ([], [], []) }
-        var taps: [Tap] = []
-        var fixes: [(typed: String, meant: String, t: Double, run: String)] = []
-        var layout: [[Any]] = []
-        var lastUp: [String: Double] = [:]
-        var radius: [String: Double] = [:]
-        var seen = Set<Substring>()
+    private static func readKeyboard(_ file: URL) -> KeyboardRead {
+        keyboardDigests.state(for: file, fresh: { KeyboardRead() }, read: readKeyboard)
+    }
+
+    private static func readKeyboard(_ r: inout KeyboardRead, _ text: Substring) {
         for line in text.split(separator: "\n") {
             if line.contains("\"e\":\"down\""),
-               let e = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any], let r = e["radius"] as? Double {
-                radius["\(e["run"] as? String ?? "")|\(e["touch"] as? Int ?? 0)"] = r
+               let e = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any], let radius = e["radius"] as? Double {
+                r.radius["\(e["run"] as? String ?? "")|\(e["touch"] as? Int ?? 0)"] = radius
                 continue
             }
             let up = line.contains("\"e\":\"up\""), keysLine = line.contains("\"e\":\"keys\"")
             let fix = line.contains("\"e\":\"autocorrect\"") || line.contains("\"e\":\"choose\"")
-            guard up || keysLine || fix, seen.insert(line).inserted,
+            guard up || keysLine || fix, r.seen.insert(LogDigests<KeyboardRead>.lineHash(line)).inserted,
                   let e = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any] else { continue }
             let t = e["t"] as? Double ?? 0, run = e["run"] as? String ?? ""
             if up {
                 let key = (e["key"] as? String ?? "").lowercased()
-                defer { lastUp[run] = t }
+                let touch = "\(run)|\(e["touch"] as? Int ?? 0)"
+                let radius = r.radius.removeValue(forKey: touch)
+                defer { r.lastUp[run] = t }
                 guard key.count == 1, key.first!.isLetter, let x = e["x"] as? Double, let y = e["y"] as? Double else { continue }
-                taps.append(Tap(key: key, x: x, y: y, t: t, interval: lastUp[run].map { t - $0 }, run: run,
-                                radius: radius["\(run)|\(e["touch"] as? Int ?? 0)"], posture: nil))
+                r.taps.append(Tap(key: key, x: x, y: y, t: t, interval: r.lastUp[run].map { t - $0 }, run: run,
+                                  radius: radius, posture: nil))
             } else if keysLine {
-                if let k = e["keys"] as? [[Any]], k.contains(where: { $0.first as? String == "й" }) { layout = k }
+                if let k = e["keys"] as? [[Any]], k.contains(where: { $0.first as? String == "й" }) {
+                    r.layout = (try? JSONSerialization.data(withJSONObject: k)) ?? Data()
+                }
             } else {
                 let typed = (e["typed"] as? String ?? e["word"] as? String ?? "").lowercased()
                 let meant = (e["fixed"] as? String ?? e["suggestion"] as? String ?? "").lowercased()
-                if !typed.isEmpty, typed != meant { fixes.append((typed, meant, t, run)) }
+                if !typed.isEmpty, typed != meant { r.fixes.append(Fix(typed: typed, meant: meant, t: t, run: run)) }
             }
         }
-        return (taps, fixes, layout)
     }
 
     // MARK: - Parts
@@ -217,10 +245,14 @@ enum Insights {
         var counts: [String: [Int]] = [:]
         let dirs = (try? FileManager.default.contentsOfDirectory(at: DictationStore.dir, includingPropertiesForKeys: nil)) ?? []
         for dir in dirs where dayNames.contains(String(dir.lastPathComponent.prefix(10))) {
-            guard let data = try? Data(contentsOf: dir.appendingPathComponent("session.json")),
-                  let s = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-                  let seconds = s["seconds"] as? Double, !((s["text"] as? String) ?? "").isEmpty else { continue }
-            let device = s["device"] as? String == "iPhone" ? "iPhone" : "Mac"
+            let d = latencyDigests.value(for: dir.appendingPathComponent("session.json")) { url in
+                guard let data = try? Data(contentsOf: url),
+                      let s = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                      let seconds = s["seconds"] as? Double, !((s["text"] as? String) ?? "").isEmpty else { return Heard() }
+                return Heard(seconds: seconds, phone: s["device"] as? String == "iPhone")
+            }
+            guard let seconds = d.seconds else { continue }
+            let device = d.phone ? "iPhone" : "Mac"
             let band = bands.firstIndex { seconds < $0.1 } ?? bands.count - 1
             counts[device, default: Array(repeating: 0, count: bands.count)][band] += 1
         }
@@ -228,14 +260,14 @@ enum Insights {
     }
 
     /// Words whisper heard unsure (probability under 0.5) most often, with how often it heard
-    /// them at all: [[word, unsure, all]]. A dictation's listenings don't change: read once.
+    /// them at all: [[word, unsure, all]].
     private static func unsure(_ dayNames: Set<String>) -> [[Any]] {
         var total: [String: (unsure: Int, all: Int)] = [:]
         let dirs = (try? FileManager.default.contentsOfDirectory(at: DictationStore.dir, includingPropertiesForKeys: nil)) ?? []
         for dir in dirs where dayNames.contains(String(dir.lastPathComponent.prefix(10))) {
-            let counted = lock.withLock { cachedUnsure[dir.lastPathComponent] } ?? {
-                var words: [String: (unsure: Int, all: Int)] = [:]
-                if let data = try? Data(contentsOf: dir.appendingPathComponent("listen-auto.json")),
+            let counted = unsureDigests.value(for: dir.appendingPathComponent("listen-auto.json")) { url in
+                var words: [String: [Int]] = [:]
+                if let data = try? Data(contentsOf: url),
                    let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
                     // Whisper's pieces (the Mac's server: inside the segments), a word beginning at each
                     // piece led by a space; a word as sure as its least sure piece.
@@ -245,8 +277,8 @@ enum Insights {
                     func finish() {
                         let word = current.lowercased().trimmingCharacters(in: .letters.inverted)
                         if word.count >= 3 {
-                            let w = words[word] ?? (0, 0)
-                            words[word] = (w.unsure + (least < 0.5 ? 1 : 0), w.all + 1)
+                            let w = words[word] ?? [0, 0]
+                            words[word] = [w[0] + (least < 0.5 ? 1 : 0), w[1] + 1]
                         }
                         current = ""
                         least = 1
@@ -259,12 +291,11 @@ enum Insights {
                     }
                     finish()
                 }
-                lock.withLock { cachedUnsure[dir.lastPathComponent] = words }
-                return words
-            }()
+                return Heard(words: words)
+            }.words
             for (word, c) in counted {
                 let t = total[word] ?? (0, 0)
-                total[word] = (t.unsure + c.unsure, t.all + c.all)
+                total[word] = (t.unsure + c[0], t.all + c[1])
             }
         }
         // Words often heard and only now and then unsure ("это", 4%) say nothing; a tenth or more does.
