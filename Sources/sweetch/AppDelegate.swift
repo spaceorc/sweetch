@@ -87,7 +87,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self?.handleRawKey(keyCode: keyCode, flags: flags, isDown: isDown) ?? false
             },
             onKeyDown:   { [weak self] event in self?.handleKeyDown(event) },
-            onPress:     { [weak self] event in self?.dictation.takeMark(event) ?? false },
+            onPress:     { [weak self] event in
+                WordMenu.shared.takeEscape(event) || (self?.dictation.takeMark(event) ?? false)
+            },
             onMouseDown: { [weak self] in
                 self?.buffer.clear(reason: "mouse click", atWordBoundary: true); self?.lastCorrection = nil; self?.dictation.dropMark()
                 WordMenu.shared.mouseDown()   // a word of a dictation clicked: what it could be instead

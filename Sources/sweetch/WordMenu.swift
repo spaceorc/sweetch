@@ -50,6 +50,18 @@ final class WordMenu: NSObject {
         DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.35) { [weak self] in self?.lookAtCursor() }
     }
 
+    /// Escape while the menu is up: it closes the menu, and nothing else — the app doesn't get it
+    /// (a chat would close). From the event tap; true: eaten.
+    func takeEscape(_ event: CGEvent) -> Bool {
+        guard event.getIntegerValueField(.keyboardEventKeycode) == 53 else { return false }
+        return MainQueue.sync {
+            guard panel?.isVisible == true else { return false }
+            hide()
+            TypingLog.shared.note("word-menu-closed", ["by": "escape"])
+            return true
+        }
+    }
+
     /// A key pressed: the menu goes.
     func keyDown() {
         guard panel?.isVisible == true else { return }
