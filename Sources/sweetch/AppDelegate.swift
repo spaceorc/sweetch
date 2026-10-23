@@ -61,6 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         LayoutTranslator.prewarm()   // build the layout maps on the main thread, once
         WordMenu.prewarm()
         // The statistics counted once in the background, so the window's open at once.
+        Appearance.apply()
         Stats.start()   // the statistics, counted in the background from now on
         _ = LLMClient.isConfigured   // touch the lazy config so the provider line lands in the log
         if isDictationEnabled {

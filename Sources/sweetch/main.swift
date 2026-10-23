@@ -1,6 +1,8 @@
 import Cocoa
 
 let app = NSApplication.shared
+/// When sweetch started, for the window.
+let launchedAt = Date()
 // Every call to a model, and what it cost — the probes' too.
 LLMUsage.sink = LLMUsageLog.append
 nonisolated(unsafe) var signalSources: [DispatchSourceSignal] = []

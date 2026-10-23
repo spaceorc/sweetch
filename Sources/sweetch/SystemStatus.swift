@@ -25,7 +25,6 @@ struct SystemStatus {
     var phoneLog: Date?
     var sync: Sync?
     var keyboardWords: Date?
-    var launched: Date?
     var crashReport: URL?
 
     func isCurrent(_ commit: String?) -> Bool? {
@@ -42,7 +41,6 @@ struct SystemStatus {
         var s = SystemStatus()
         s.macCommit = Bundle.main.object(forInfoDictionaryKey: "SweetchCommit") as? String
         s.head = git(["describe", "--always", "--dirty=+"])
-        s.launched = NSRunningApplication.current.launchDate
         async let mini = pingMini()
         let phone = phoneSeen()
         s.phoneCommit = phone.commit

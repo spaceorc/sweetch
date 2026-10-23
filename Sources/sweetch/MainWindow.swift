@@ -19,6 +19,21 @@ struct AppActions {
     var hotkeys: [(String, String)]
 }
 
+/// Light, dark, or as the system is — for sweetch's windows and panels; kept in UserDefaults.
+enum Appearance: String, CaseIterable {
+    case system = "System", light = "Light", dark = "Dark"
+
+    static let key = "appearance"
+
+    static func apply() {
+        switch Appearance(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .system {
+        case .system: NSApp.appearance = nil
+        case .light: NSApp.appearance = NSAppearance(named: .aqua)
+        case .dark: NSApp.appearance = NSAppearance(named: .darkAqua)
+        }
+    }
+}
+
 /// Which section the window shows — set from outside too (the menu's "All dictations").
 final class MainNavigation: ObservableObject {
     @Published var section: MainView.Section? = .overview
@@ -83,17 +98,31 @@ struct MainView: View {
         case overview = "Overview", dictations = "Dictations", words = "Words & names", typing = "Typing",
              progress = "Progress", costs = "Costs", system = "System", screenshots = "Screenshots", settings = "Settings"
         var id: String { String(describing: self) }
+        /// The badge's colour, as System Settings colours its rows.
+        var color: Color {
+            switch self {
+            case .overview: Color(red: 0.16, green: 0.62, blue: 0.62)
+            case .dictations: .red
+            case .words: .orange
+            case .typing: .blue
+            case .progress: .purple
+            case .costs: .green
+            case .system: .gray
+            case .screenshots: .indigo
+            case .settings: .gray
+            }
+        }
         var symbol: String {
             switch self {
-            case .overview: "house"
-            case .dictations: "mic"
-            case .words: "character.book.closed"
+            case .overview: "house.fill"
+            case .dictations: "mic.fill"
+            case .words: "character.book.closed.fill"
             case .typing: "keyboard"
-            case .progress: "chart.bar.xaxis"
-            case .costs: "dollarsign.circle"
+            case .progress: "chart.bar.fill"
+            case .costs: "dollarsign"
             case .system: "macbook.and.iphone"
             case .screenshots: "camera.viewfinder"
-            case .settings: "gearshape"
+            case .settings: "gearshape.fill"
             }
         }
     }
@@ -104,12 +133,17 @@ struct MainView: View {
     var body: some View {
         NavigationSplitView {
             List(selection: $navigation.section) {
-                row(.overview)
-                SwiftUI.Section("Dictation & typing") { row(.dictations); row(.words); row(.typing) }
-                SwiftUI.Section("How it goes") { row(.progress); row(.costs) }
-                SwiftUI.Section("System") { row(.system); row(.screenshots); row(.settings) }
+                SwiftUI.Section { ForEach([Section.overview, .dictations, .words, .typing], id: \.self, content: row) }
+                SwiftUI.Section { ForEach([Section.progress, .costs, .screenshots, .system], id: \.self, content: row) }
             }
-            .navigationSplitViewColumnWidth(min: 180, ideal: 210, max: 260)
+            .safeAreaInset(edge: .top) { emblem }
+            .safeAreaInset(edge: .bottom) {
+                Button { navigation.section = .settings } label: { badge(.settings) }
+                    .buttonStyle(.plain)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 18).padding(.bottom, 14)
+            }
+            .navigationSplitViewColumnWidth(min: 200, ideal: 230, max: 280)
         } detail: {
             switch navigation.section ?? .overview {
             case .overview: OverviewPane(actions: actions)
@@ -127,7 +161,32 @@ struct MainView: View {
     }
 
     private func row(_ s: Section) -> some View {
-        Label(s.rawValue, systemImage: s.symbol).tag(s)
+        badge(s).padding(.vertical, 3).tag(s)
+    }
+
+    /// A section's name by its icon in a coloured rounded square.
+    private func badge(_ s: Section) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: s.symbol)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 26, height: 26)
+                .background(s.color.gradient, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            Text(s.rawValue).font(.system(size: 14))
+        }
+    }
+
+    /// The app's emblem over the list, with its name.
+    private var emblem: some View {
+        VStack(spacing: 6) {
+            if let url = Bundle.main.url(forResource: "emblem", withExtension: "png"), let image = NSImage(contentsOf: url) {
+                Image(nsImage: image).resizable().interpolation(.high).scaledToFit().frame(width: 92, height: 92)
+                    .shadow(color: .mint.opacity(0.35), radius: 14)
+            }
+            Text("Sweetch").font(.system(size: 17, weight: .semibold, design: .rounded))
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 8).padding(.bottom, 12)
     }
 }
 
@@ -170,6 +229,45 @@ private struct Page<Content: View, Trailing: View>: View {
 private extension Page where Trailing == EmptyView {
     init(title: String, subtitle: String? = nil, @ViewBuilder content: @escaping () -> Content) {
         self.init(title: title, subtitle: subtitle, trailing: { EmptyView() }, content: content)
+    }
+}
+
+/// Cards in columns, as many as fit at least `minColumn` wide; each card goes under the shortest
+/// column's last, so cards of any height leave no holes, and the columns reflow as the window
+/// resizes.
+private struct Masonry: Layout {
+    var minColumn: CGFloat
+    var spacing: CGFloat = 16
+
+    private func columns(_ width: CGFloat) -> (count: Int, width: CGFloat) {
+        let count = max(1, Int((width + spacing) / (minColumn + spacing)))
+        return (count, (width - spacing * CGFloat(count - 1)) / CGFloat(count))
+    }
+
+    /// Each card's place, and the height of it all.
+    private func arrange(_ subviews: Subviews, width: CGFloat) -> ([CGPoint], CGFloat, CGFloat) {
+        let (count, column) = columns(width)
+        var heights = Array(repeating: CGFloat(0), count: count)
+        var places: [CGPoint] = []
+        for view in subviews {
+            let i = heights.indices.min { heights[$0] < heights[$1] }!
+            places.append(CGPoint(x: CGFloat(i) * (column + spacing), y: heights[i]))
+            heights[i] += view.sizeThatFits(ProposedViewSize(width: column, height: nil)).height + spacing
+        }
+        return (places, column, max(0, (heights.max() ?? 0) - spacing))
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? minColumn * 2 + spacing
+        return CGSize(width: width, height: arrange(subviews, width: width).2)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let (places, column, _) = arrange(subviews, width: bounds.width)
+        for (view, place) in zip(subviews, places) {
+            view.place(at: CGPoint(x: bounds.minX + place.x, y: bounds.minY + place.y),
+                       proposal: ProposedViewSize(width: column, height: nil))
+        }
     }
 }
 
@@ -272,10 +370,13 @@ private struct OverviewPane: View {
             }
             .controlSize(.large)
         } content: {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 250), spacing: 12, alignment: .top)], spacing: 12) {
+            // What needs the user comes first, and only when there's something.
+            if !issues.isEmpty { needsYou }
+
+            Masonry(minColumn: 250, spacing: 12) {
                 deviceCard("This MacBook", symbol: "laptopcomputer", state: macState) {
                     Fact(label: "Dictation · layouts", value: "\(dictation ? "on" : "off") · \(autoLayout ? "switched for you" : "as typed")")
-                    Fact(label: "Running since", value: status?.launched?.formatted(date: .omitted, time: .shortened) ?? "—")
+                    Fact(label: "Running since", value: launchedAt.formatted(Calendar.current.isDateInToday(launchedAt) ? .dateTime.hour().minute() : .dateTime.day().month().hour().minute()))
                     Fact(label: "Build", value: version(status?.macCommit))
                 }
                 deviceCard("Mac mini", symbol: "macmini", state: miniState) {
@@ -290,13 +391,9 @@ private struct OverviewPane: View {
                 }
             }
 
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 380), spacing: 16, alignment: .top)], spacing: 16) {
+            Masonry(minColumn: 380) {
                 dictationToday
                 typingToday
-            }
-
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 380), spacing: 16, alignment: .top)], spacing: 16) {
-                needsYou
                 models
             }
         }
@@ -306,13 +403,18 @@ private struct OverviewPane: View {
                 try? await Task.sleep(for: .seconds(60))
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: DictationStore.changed)) { _ in recent = DictationsPane.load(limit: 4) }
+        .onReceive(NotificationCenter.default.publisher(for: DictationStore.changed)) { _ in recent = finished() }
+    }
+
+    /// The last six dictations done — not one still being heard.
+    private func finished() -> [DictationsWindow.Entry] {
+        Array(DictationsPane.load(limit: 12).filter { !$0.session.isEmpty }.prefix(6))
     }
 
     private func load() async {
         async let s = SystemStatus.gather()
         metrics = await Task.detached { Stats.currentMetrics() }.value
-        recent = DictationsPane.load(limit: 4)
+        recent = finished()
         var gathered = await s
         gathered.crashReport = actions.crashReport()
         status = gathered
@@ -455,11 +557,6 @@ private struct OverviewPane: View {
     private var needsYou: some View {
         VStack(alignment: .leading, spacing: 10) {
             CardTitle(title: "Needs you", link: "System") { navigation.section = .system }
-            if status == nil {
-                ProgressView().controlSize(.small)
-            } else if issues.isEmpty {
-                HStack(spacing: 8) { Dot(color: .mint); Text("Nothing — all three are well.").foregroundStyle(.secondary) }
-            }
             ForEach(issues) { issue in
                 HStack(alignment: .top, spacing: 10) {
                     Dot(color: .amber).padding(.top, 6)
@@ -639,7 +736,7 @@ private struct WordsPane: View {
             Button("Refine from history", systemImage: "sparkles") { actions.refineDictionary() }
                 .help("Ask the model which names and terms from recent dictations to keep")
         } content: {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 420), spacing: 16, alignment: .top)], spacing: 16) {
+            Masonry(minColumn: 420, spacing: 16) {
                 VStack(alignment: .leading, spacing: 10) {
                     CardTitle(title: "Your words")
                     Text("One a line: names, terms, words spelled your way. Heard close to one of these, dictation writes it so.")
@@ -696,7 +793,7 @@ private struct TypingPane: View {
 
     var body: some View {
         Page(title: "Typing", subtitle: "On the Mac and on the iPhone's keyboard") {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 420), spacing: 16, alignment: .top)], spacing: 16) {
+            Masonry(minColumn: 420, spacing: 16) {
                 VStack(alignment: .leading, spacing: 12) {
                     CardTitle(title: "On the Mac")
                     Toggle("Switch a word typed in the wrong layout as the space after it comes", isOn: $autoLayout)
@@ -875,7 +972,7 @@ private struct CostsPane: View {
             }
             .card(padding: 18)
 
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 16, alignment: .top)], spacing: 16) {
+            Masonry(minColumn: 260, spacing: 16) {
                 breakdown("By purpose", total(\.byPurpose), of: sum)
                 breakdown("By model", total(\.byModel), of: sum)
                 breakdown("By device", total(\.byDevice).map { ($0.0 == "iphone" ? "iPhone" : "Macs", $0.1) }, of: sum)
@@ -928,7 +1025,7 @@ private struct SystemPane: View {
             Button("Refresh", systemImage: "arrow.clockwise") { Task { await load() } }
         } content: {
             Text("Versions").font(.title3.weight(.semibold))
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 12, alignment: .top)], spacing: 12) {
+            Masonry(minColumn: 220, spacing: 12) {
                 version("This MacBook", status?.macCommit, note: "checked out here: \(short(status?.head))")
                 version("Mac mini", status?.mini.reachable == true ? status?.mini.commit : nil,
                         note: status?.mini.reachable == true ? "updates itself from main" : "doesn't answer")
@@ -942,7 +1039,7 @@ private struct SystemPane: View {
             }
 
             Text("Runs by itself").font(.title3.weight(.semibold))
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 280), spacing: 12, alignment: .top)], spacing: 12) {
+            Masonry(minColumn: 280, spacing: 12) {
                 routine("Sync with the Mac mini", "Recordings, logs, model costs both ways; a forgotten dictation stays gone on both.",
                         every: "every 5 min", last: status?.sync.map { "\($0.line) · \(ago($0.date))" } ?? "—", ok: status?.sync?.ok)
                 routine("The Mac mini updates itself", "Builds main when it changes, swaps the server in at a quiet moment, rolls back if it fails.",
@@ -1058,10 +1155,18 @@ private struct SettingsPane: View {
     @AppStorage("dictationServerEnabled") private var server = false
     @AppStorage("wordMenu") private var wordMenu = true
     @AppStorage("logText") private var logText = false
+    @AppStorage(Appearance.key) private var appearance = Appearance.system.rawValue
     @State private var incognito = Privacy.incognito
 
     var body: some View {
         Form {
+            Section("Appearance") {
+                Picker("Theme", selection: $appearance) {
+                    ForEach(Appearance.allCases, id: \.rawValue) { Text($0.rawValue).tag($0.rawValue) }
+                }
+                .pickerStyle(.segmented)
+                .onChange(of: appearance) { _, _ in Appearance.apply() }
+            }
             Section("Dictation") {
                 Toggle("Dictation (hold Space)", isOn: $dictation)
                     .onChange(of: dictation) { _, on in if on { Whisper.warmUp() } }

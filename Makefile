@@ -104,6 +104,7 @@ app: build setup-signing $(ICON_ICNS)
 	@cp $(PLIST_SRC) $(APP_BUNDLE)/Contents/Info.plist
 	@/usr/libexec/PlistBuddy -c "Add :SweetchCommit string $(COMMIT)" $(APP_BUNDLE)/Contents/Info.plist
 	@cp $(ICON_ICNS) $(ICON_DIR)/Assets.car $(APP_BUNDLE)/Contents/Resources/
+	@sips -Z 512 Resources/icon/AppIcon.icon/Assets/emblem.png --out $(APP_BUNDLE)/Contents/Resources/emblem.png >/dev/null
 	@cp $(LEXICON) $(APP_BUNDLE)/Contents/Resources/ 2>/dev/null || echo "warning: no lexicon (make lexicon) — no switching of the layout"
 	@cp .env $(APP_BUNDLE)/Contents/Resources/sweetch.env 2>/dev/null || echo "warning: .env missing — LLM correction disabled"
 	@codesign --force --sign "$(SIGN_ID)" $(APP_BUNDLE)
@@ -122,6 +123,7 @@ debug: setup-signing $(ICON_ICNS)
 	@cp $(PLIST_SRC) $(APP_BUNDLE)/Contents/Info.plist
 	@/usr/libexec/PlistBuddy -c "Add :SweetchCommit string $(COMMIT)" $(APP_BUNDLE)/Contents/Info.plist
 	@cp $(ICON_ICNS) $(ICON_DIR)/Assets.car $(APP_BUNDLE)/Contents/Resources/
+	@sips -Z 512 Resources/icon/AppIcon.icon/Assets/emblem.png --out $(APP_BUNDLE)/Contents/Resources/emblem.png >/dev/null
 	@cp $(LEXICON) $(APP_BUNDLE)/Contents/Resources/ 2>/dev/null || echo "warning: no lexicon (make lexicon) — no switching of the layout"
 	@cp .env $(APP_BUNDLE)/Contents/Resources/sweetch.env 2>/dev/null || echo "warning: .env missing — LLM correction disabled"
 	@codesign --force --sign "$(SIGN_ID)" $(APP_BUNDLE)
