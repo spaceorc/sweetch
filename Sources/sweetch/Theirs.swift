@@ -16,9 +16,12 @@ enum Theirs {
 
     /// Polls the focused field of `pid` until the user leaves the app or the time is up, writes what
     /// it saw to `field.json` in `dir`, and returns what the app wrote.
-    static func watch(after before: String, in pid: pid_t, dir: URL) -> String? {
+    /// `settled`: called once, as soon as what the app wrote has held still — for the word menu,
+    /// which shouldn't wait the whole watch.
+    static func watch(after before: String, in pid: pid_t, dir: URL, settled: ((String) -> Void)? = nil) -> String? {
         var states: [State] = []
         let started = Date()
+        var told = false
         while Date().timeIntervalSince(started) < watchSeconds {
             usleep(400_000)
             guard let element = AX.focusedElement() else { continue }
@@ -29,6 +32,11 @@ enum Theirs {
             let value = AX.string(element, kAXValueAttribute) ?? ""
             if value != (states.last?.value ?? before) {
                 states.append(State(at: Date().timeIntervalSince(started), value: value))
+            }
+            if !told, let settled, let last = states.last, Date().timeIntervalSince(started) - last.at >= 1.2,
+               let written = extract(before: before, states: states, until: Date().timeIntervalSince(started)) {
+                told = true
+                settled(written)
             }
         }
         let until = Date().timeIntervalSince(started)

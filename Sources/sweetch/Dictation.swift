@@ -301,7 +301,10 @@ final class Dictation {
         DispatchQueue.global(qos: .utility).async {
             defer { watched.leave() }
             let before = session.prepared.fieldBefore(waiting: 2) ?? ""
-            theirs.value = Theirs.watch(after: before, in: session.app.processIdentifier, dir: session.dir)
+            theirs.value = Theirs.watch(after: before, in: session.app.processIdentifier, dir: session.dir) { written in
+                // Its words clickable as soon as they've stopped changing.
+                WordMenu.shared.inserted(dir: session.dir, text: written, pid: session.app.processIdentifier)
+            }
         }
 
         microphone.async { [shadowQueue] in
@@ -334,8 +337,6 @@ final class Dictation {
                 }
                 watched.wait()
                 record["theirs"] = theirs.value ?? NSNull()
-                // What the app wrote, ours to offer its words' alternatives for too.
-                if let written = theirs.value { WordMenu.shared.inserted(dir: session.dir, text: written, pid: session.app.processIdentifier) }
                 DictationStore.write(record, to: session.dir.appendingPathComponent("session.json"))
                 log.info("dictation: \(target, privacy: .public) wrote '\(shown(theirs.value), privacy: .public)'; we heard '\(shown(record["text"] as? String), privacy: .public)'")
             }
