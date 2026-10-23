@@ -19,8 +19,9 @@ final class HostMemory {
     }
 
     private let key = "hostMemory"
-    /// Incognito: nothing seen is kept.
-    var paused = false
+    /// Incognito: nothing seen is kept — from the start of a new process, by what was set by hand
+    /// (the keyboard's own setting), before the keyboard comes up and says.
+    var paused = UserDefaults.standard.bool(forKey: "incognito")
     private var hosts: [String: Host]
 
     private init() {

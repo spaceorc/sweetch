@@ -236,6 +236,7 @@ final class KeyboardModel {
         privateFieldDeclined = false
         privateField = looksPrivate()
         KeyLog.paused = incognito
+        KeyLog.decide()
         HostMemory.shared.paused = incognito
         showStatus()
         lastWord = nil

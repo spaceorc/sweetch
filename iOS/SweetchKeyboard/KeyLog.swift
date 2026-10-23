@@ -23,9 +23,30 @@ enum KeyLog {
 
     /// Incognito: nothing is noted at all while it's on.
     static var paused = false
+    /// Until the keyboard has come up and known whether it's incognito — on by hand, which a new
+    /// process only reads then, or a private tab's field — what's noted waits here, and goes if it
+    /// is: on 22 Oct iOS started the keyboard again while incognito, and its first events (the
+    /// field changing among them, which carries the field's text) were logged before it knew.
+    private static var undecided: [[String: Any]]? = []
+
+    /// The keyboard knows now: what waited is kept, or dropped when incognito.
+    static func decide() {
+        guard let waiting = undecided else { return }
+        undecided = nil
+        guard !paused else { return }
+        buffer.append(contentsOf: waiting)
+    }
 
     static func note(_ event: String, _ fields: [String: Any] = [:]) {
         guard !paused else { return }
+        if undecided != nil {
+            var entry = fields
+            entry["e"] = event
+            entry["t"] = (Date().timeIntervalSince1970 * 1000).rounded() / 1000
+            entry["run"] = run
+            undecided?.append(entry)
+            return
+        }
         var entry = fields
         entry["e"] = event
         entry["t"] = (Date().timeIntervalSince1970 * 1000).rounded() / 1000
