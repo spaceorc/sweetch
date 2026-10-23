@@ -87,7 +87,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             },
             onKeyDown:   { [weak self] event in self?.handleKeyDown(event) },
             onPress:     { [weak self] event in self?.dictation.takeMark(event) ?? false },
-            onMouseDown: { [weak self] in self?.buffer.clear(reason: "mouse click", atWordBoundary: true); self?.lastCorrection = nil; self?.dictation.dropMark() }
+            onMouseDown: { [weak self] in
+                self?.buffer.clear(reason: "mouse click", atWordBoundary: true); self?.lastCorrection = nil; self?.dictation.dropMark()
+                // Where the click put the cursor, once the app has moved it.
+                DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.4) { TypingLog.shared.noteField(reason: "click") }
+            }
         )
         do {
             try manager.start()
@@ -533,7 +537,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case 36, 76:                     // Return, Numpad Enter
             buffer.clear(reason: "Return", atWordBoundary: true)
             // A plain Return sends a chat message: the last chance to see what a dictation became.
-            if event.flags.intersection([.maskCommand, .maskShift, .maskAlternate, .maskControl]).isEmpty { dictation.noteReturn() }
+            if event.flags.intersection([.maskCommand, .maskShift, .maskAlternate, .maskControl]).isEmpty {
+                dictation.noteReturn()
+                TypingLog.shared.noteField(reason: "return")   // before the app sends and clears it
+            }
             return
         case 53:                         // Escape
             buffer.clear(reason: "Escape")

@@ -24,11 +24,26 @@ final class TypingLog {
     /// Autorepeats of a key held, counted rather than logged one by one: Space held to dictate
     /// repeats ~30 times a second, and made 80% of the log (20 Oct). Its release carries the count.
     private var repeats: [Int64: Int] = [:]
+    /// When a key last came, and whether the field has been read since — a pause reads it.
+    private var lastKeyAt: TimeInterval = 0
+    private var fieldReadSinceKey = true
+    /// Reading the field (Accessibility) off the event tap's thread.
+    private let reader = DispatchQueue(label: "sweetch.typinglog.field", qos: .utility)
 
     private init() {
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + 1, repeating: 1)
-        timer.setEventHandler { [weak self] in self?.flush(force: false) }
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            self.flush(force: false)
+            // A pause in typing: what the field holds now — the words as they ended up, put right
+            // by hand or not, for the bench to know what the keys meant (an arrow back to fix «z»
+            // into «я» was invisible in the keys alone, 23 Oct).
+            if !self.fieldReadSinceKey, Date().timeIntervalSince1970 - self.lastKeyAt > 1.5 {
+                self.fieldReadSinceKey = true
+                self.reader.async { self.noteField(reason: "pause") }
+            }
+        }
         timer.resume()
         self.timer = timer
     }
@@ -95,6 +110,8 @@ final class TypingLog {
         if flags.contains(.maskAlphaShift) { mods += "⇪" }
         if !mods.isEmpty { fields["m"] = mods }
         let app = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "?"
+        // Any key — an arrow too: the field is read once typing rests.
+        if type == .keyDown { queue.async { [self] in lastKeyAt = now; fieldReadSinceKey = false } }
         queue.async { [self] in
             if type == .keyUp, let n = repeats.removeValue(forKey: code) { fields["r"] = n }
             guard privateSince == nil else { return }
@@ -104,6 +121,28 @@ final class TypingLog {
             }
             append(now, fields)
         }
+    }
+
+    /// The focused field around the cursor — 300 characters before it, 100 after — and its app:
+    /// the text as it stands, for the bench. Nothing while private, or from a password field.
+    /// `reason`: a pause, a Return about to send it, a click. Off the tap's thread but Return's,
+    /// which reads before the app takes the key.
+    func noteField(reason: String) {
+        guard let element = AX.focusedElement() else { return }
+        AXUIElementSetMessagingTimeout(element, 0.15)
+        guard AX.string(element, kAXSubroleAttribute) != kAXSecureTextFieldSubrole as String,
+              let value = AX.string(element, kAXValueAttribute) else { return }
+        let ns = value as NSString
+        let cursor = AX.range(element, kAXSelectedTextRangeAttribute).map { min($0.location, ns.length) } ?? ns.length
+        let start = max(0, cursor - 300), end = min(ns.length, cursor + 100)
+        var fields: [String: Any] = [
+            "reason": reason,
+            "before": ns.substring(with: NSRange(location: start, length: cursor - start)),
+            "after": ns.substring(with: NSRange(location: cursor, length: end - cursor)),
+            "role": AX.string(element, kAXRoleAttribute) ?? "",
+        ]
+        if let selected = AX.range(element, kAXSelectedTextRangeAttribute), selected.length > 0 { fields["selected"] = selected.length }
+        note("field", fields)
     }
 
     /// Something else worth knowing beside the keys: a click, our hotkeys.

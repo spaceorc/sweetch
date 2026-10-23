@@ -124,7 +124,9 @@ def examples(evs, letters):
         word = buf[start:]
         if start in finished:
             return   # put right on the way: the attempt is the example
-        if len(word) >= 2 and all(code in GEOMETRY for _, code, _ in word) and len({l for _, _, l in word}) == 1:
+        # One letter too: «z» for «я», «b» for «и» are what stays behind when the word after
+        # them is switched to the other layout alone.
+        if len(word) >= 1 and all(code in GEOMETRY for _, code, _ in word) and len({l for _, _, l in word}) == 1:
             finished[start] = {"kind": "clean", "taps": [tap(*k) for k in word], "truth": "".join(c for c, _, _ in word),
                                **context_of(start), **when(start, len(word))}
 

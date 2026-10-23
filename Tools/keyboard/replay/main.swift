@@ -427,7 +427,20 @@ if let i = args.firstIndex(of: "--layout-runs") {
             if switched.contains(j) { c.switched += 1; if w.converted == w.word.truth.lowercased() { c.right += 1 } }
             counts[kind] = c
         }
-        print("rule \(rule) (\(rule == "A" ? "the word alone" : "with the go before it")):")
+        // Left behind: wrong-layout words before a switch in the same go, not switched with it —
+        // each one the user goes back for.
+        var leftBehind = 0, leftExamples: [String] = []
+        for j in switched {
+            var k = j - 1
+            while k >= 0, seen[k].word.session == seen[j].word.session, seen[k].layout == seen[j].layout {
+                if !switched.contains(k), seen[k].word.kind.hasPrefix("layout") {
+                    leftBehind += 1
+                    if leftExamples.count < 12 { leftExamples.append("\(seen[k].typed)→\(seen[k].word.truth) before \(seen[j].typed)") }
+                }
+                k -= 1
+            }
+        }
+        print("rule \(rule) (\(rule == "A" ? "the word alone" : "with the go before it")): wrong-layout words left behind a switch \(leftBehind) \(leftExamples)")
         for (kind, c) in counts.sorted(by: { $0.key < $1.key }) { print("  \(kind): \(c.n) — switched \(c.switched), to the word meant \(c.right)") }
         if rule == "B", verbose { extra.forEach { print($0) } }
     }
