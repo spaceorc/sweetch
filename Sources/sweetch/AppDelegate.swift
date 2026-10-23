@@ -80,14 +80,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             holdToTalk: HoldToTalk(
                 dictation: dictation,
                 isDictationEnabled: { [weak self] in self?.isDictationEnabled ?? false },
-                onTakeOver: { [weak self] in self?.buffer.clear(reason: "hold-to-talk"); self?.lastCorrection = nil }
+                onTakeOver: { [weak self] in self?.buffer.clear(reason: "hold-to-talk", atWordBoundary: true); self?.lastCorrection = nil }
             ),
             onRawKey:    { [weak self] keyCode, flags, isDown in
                 self?.handleRawKey(keyCode: keyCode, flags: flags, isDown: isDown) ?? false
             },
             onKeyDown:   { [weak self] event in self?.handleKeyDown(event) },
             onPress:     { [weak self] event in self?.dictation.takeMark(event) ?? false },
-            onMouseDown: { [weak self] in self?.buffer.clear(reason: "mouse click"); self?.lastCorrection = nil; self?.dictation.dropMark() }
+            onMouseDown: { [weak self] in self?.buffer.clear(reason: "mouse click", atWordBoundary: true); self?.lastCorrection = nil; self?.dictation.dropMark() }
         )
         do {
             try manager.start()
@@ -531,7 +531,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Editing/navigation keys → buffer is out of sync with the document, drop it.
         switch keyCode {
         case 36, 76:                     // Return, Numpad Enter
-            buffer.clear(reason: "Return")
+            buffer.clear(reason: "Return", atWordBoundary: true)
             // A plain Return sends a chat message: the last chance to see what a dictation became.
             if event.flags.intersection([.maskCommand, .maskShift, .maskAlternate, .maskControl]).isEmpty { dictation.noteReturn() }
             return
@@ -539,7 +539,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             buffer.clear(reason: "Escape")
             return
         case 48:                         // Tab
-            buffer.clear(reason: "Tab")
+            buffer.clear(reason: "Tab", atWordBoundary: true)
             return
         case 51, 117:                    // Backspace, Forward Delete
             buffer.clear(reason: "Backspace/Delete")
@@ -582,7 +582,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if keyCode == 49, flags.intersection([.maskShift, .maskAlternate]).isEmpty, !converting,
            Privacy.check(NSWorkspace.shared.frontmostApplication) == nil {
             let keys = buffer.snapshot()
-            guard let range = autoLayout.range(in: keys, automatic: true) else { return }
+            guard let range = autoLayout.range(in: keys, automatic: true, knownStart: buffer.startsAtWordBoundary) else { return }
             converting = true
             let words = autoLayout.words(in: Array(keys[range])).map { "\($0.own) → \($0.other)" }
             TypingLog.shared.note("auto-layout", ["words": words])
@@ -604,7 +604,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             object: nil,
             queue: .main
         ) { [weak self] note in
-            self?.buffer.clear(reason: "app activation")
+            self?.buffer.clear(reason: "app activation", atWordBoundary: true)
             self?.lastCorrection = nil
             if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
                 SelectionConverter.wakeAccessibility(of: app)

@@ -34,10 +34,13 @@ final class AutoLayout {
     /// The keystrokes to put in the other layout: the last word and those of the same go before it
     /// that suit it no worse, to the end of the buffer (the space after included). Automatic: only
     /// when the last word is plainly in the wrong layout; on ⌥Space the last word goes regardless.
-    func range(in keys: [Keystroke], automatic: Bool) -> Range<Int>? {
+    /// `knownStart`: the buffer's first keystroke begins a word; when not, a word starting there may
+    /// be the end of one on the screen, and isn't switched on its own.
+    func range(in keys: [Keystroke], automatic: Bool, knownStart: Bool = true) -> Range<Int>? {
         let words = self.words(in: keys)
         guard let last = words.last else { return nil }
         if automatic {
+            guard knownStart || last.range.lowerBound > 0 else { return nil }
             // The word alone: the words before it in the same go switched along added two of the
             // user's 204 wrong-layout words in 4 days, and broke one (`replay --layout-runs`).
             guard last.own.count >= 2, !kept.contains(last.own.lowercased()), plainlyWrong(last) else { return nil }

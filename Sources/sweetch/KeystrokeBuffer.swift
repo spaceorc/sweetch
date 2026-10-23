@@ -18,8 +18,14 @@ final class KeystrokeBuffer {
         self.idleTimeout = idleTimeout
     }
 
+    /// Whether the first keystroke kept begins a word — nothing of it typed before what's kept.
+    /// Not so after ⌫, an arrow, a shortcut: what's typed next may finish a word on the screen
+    /// («каку» ⌫⌫ «ую»), and taken alone it's no word (AutoLayout switched «ую», «ds», «ых»).
+    private(set) var startsAtWordBoundary = true
+
     func append(_ k: Keystroke) {
         if let last = buffer.last, k.timestamp.timeIntervalSince(last.timestamp) > idleTimeout {
+            startsAtWordBoundary = last.keyCode == 49 || !(last.chars.first?.isLetter ?? false)
             buffer.removeAll(keepingCapacity: true)
         }
         buffer.append(k)
@@ -28,7 +34,9 @@ final class KeystrokeBuffer {
         }
     }
 
-    func clear(reason: String) {
+    /// `atWordBoundary`: what's typed next begins a word — after Return, Tab, a click, another app.
+    func clear(reason: String, atWordBoundary: Bool = false) {
+        startsAtWordBoundary = atWordBoundary
         if !buffer.isEmpty {
             log.info("buffer clear: \(reason, privacy: .public) (dropped \(self.buffer.count, privacy: .public) keystrokes)")
         }
