@@ -22,6 +22,11 @@ enum Apostrophes {
     /// The word as it's written, or nil when it's fine as typed. A capital stays a capital; «I» is
     /// always one.
     static func fix(_ word: String) -> String? {
+        // «I» is always a capital: «i», «i'm», «i've» as typed, too.
+        let lower = word.lowercased().replacingOccurrences(of: "’", with: "'")
+        if (lower == "i" || ["i'm", "i've", "i'll", "i'd"].contains(lower)), word.first == "i" {
+            return "I" + word.dropFirst()
+        }
         guard !word.contains("'"), !word.contains("’"), let form = forms[word.lowercased()] else { return nil }
         if form.hasPrefix("I'") { return form }
         guard let first = word.first, first.isUppercase else { return form }
