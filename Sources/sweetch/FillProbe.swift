@@ -40,7 +40,7 @@ enum FillProbe {
                         <final_text>\(c["blanked"] as? String ?? "")</final_text>
                         [___] stands for \(words) word\(words == 1 ? "" : "s") in the transcript (the filling may differ in length). \
                         The transcript had: «\(c["old"] as? String ?? "")» — that is wrong.
-                        """]], maxTokens: 200, model: model)
+                        """]], maxTokens: 200, model: model, purpose: "probe")
                     options = LLMJSON.object(reply)?["options"] as? [String] ?? []
                 } catch {
                     print("case \(i): \(error)")

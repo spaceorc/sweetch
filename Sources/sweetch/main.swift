@@ -1,6 +1,8 @@
 import Cocoa
 
 let app = NSApplication.shared
+// Every call to a model, and what it cost — the probes' too.
+LLMUsage.sink = LLMUsageLog.append
 nonisolated(unsafe) var signalSources: [DispatchSourceSignal] = []
 
 // `sweetch --rehear <dictation folder>…`: run stored dictations through today's pipeline.

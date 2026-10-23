@@ -96,7 +96,7 @@ struct Prefix {
             do {
                 let system = system.replacingOccurrences(of: "USER_NAME", with: Prefix.userName) + (namingTheApp ? nameTheApp : "")
                 let raw = try await LLMClient.complete(system: system, messages: [["role": "user", "content": context]],
-                                                       maxTokens: 200)
+                                                       maxTokens: 200, purpose: "prefix")
                 let reply = LLMJSON.object(raw)
                 terms = (reply?["terms"] as? [String] ?? [])
                     .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }

@@ -36,7 +36,7 @@ enum NextWordProbe {
                     let reply = try await LLMClient.complete(system: isWide ? wide : system,
                                                              messages: [["role": "user", "content": "Text so far: «\(c["before"] ?? "")»"
                                                                 + (c["prefix"].map { "\nThe next word starts with «\($0)»." } ?? "")]],
-                                                             maxTokens: isWide ? 400 : 60)
+                                                             maxTokens: isWide ? 400 : 60, purpose: "probe")
                     words = (LLMJSON.object(reply)?["words"] as? [String] ?? []).map { $0.lowercased() }
                 } catch {
                     print("case \(i): \(error)")

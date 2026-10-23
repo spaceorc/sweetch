@@ -137,13 +137,15 @@ enum LLMClient {
     /// Call the model, walking the provider chain (proxy → vertex → azure). Any failure from
     /// one provider falls through to the next, so being off-VPN (proxy unreachable) or a
     /// revoked key degrades gracefully instead of breaking correction.
+    /// `purpose`: what the call is for, in the account of what the models cost (LLMUsage).
     static func complete(system: String,
                          messages: [[String: String]],
                          maxTokens: Int = 600,
-                         model: LLMModel = .fast) async throws -> String {
+                         model: LLMModel = .fast,
+                         purpose: String = "other") async throws -> String {
         guard let config else { throw LLMError.notConfigured }
 
-        var attempts: [(name: String, call: () async throws -> String)] = []
+        var attempts: [(name: String, call: () async throws -> Answer)] = []
         if config.hasAzure {
             attempts.append(("azure", { try await callAzure(config: config, system: system, messages: messages,
                                                             maxTokens: maxTokens, model: model) }))
@@ -160,8 +162,13 @@ enum LLMClient {
 
         var lastError: Error = LLMError.notConfigured
         for (index, attempt) in attempts.enumerated() {
+            let started = Date()
             do {
-                return try await attempt.call()
+                let answer = try await attempt.call()
+                LLMUsage.record(model: model, provider: attempt.name, purpose: purpose, usage: answer.usage,
+                                seconds: Date().timeIntervalSince(started),
+                                regional: attempt.name == "vertex" && config.vertexLocation != "global")
+                return answer.text
             } catch {
                 lastError = error
                 let next = index + 1 < attempts.count ? attempts[index + 1].name : "none"
@@ -171,10 +178,16 @@ enum LLMClient {
         throw lastError
     }
 
+    /// A model's answer, and its `usage` as the provider gave it.
+    struct Answer {
+        let text: String
+        let usage: [String: Any]?
+    }
+
     // MARK: - ANNA LLM proxy (fallback)
 
     private static func callProxy(config: Config, system: String, messages: [[String: String]],
-                                  maxTokens: Int, model: LLMModel) async throws -> String {
+                                  maxTokens: Int, model: LLMModel) async throws -> Answer {
         guard let base = config.proxyURL,
               let url = URL(string: base.hasSuffix("/") ? base + "api/chat" : base + "/api/chat") else {
             throw LLMError.notConfigured
@@ -209,13 +222,13 @@ enum LLMClient {
               let message = payload["message"] as? String else { throw LLMError.decode }
         let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { throw LLMError.emptyResult }
-        return text
+        return Answer(text: text, usage: payload["usage"] as? [String: Any])
     }
 
     // MARK: - Vertex AI (primary)
 
     private static func callVertex(config: Config, system: String, messages: [[String: String]],
-                                   maxTokens: Int, model: LLMModel) async throws -> String {
+                                   maxTokens: Int, model: LLMModel) async throws -> Answer {
         guard let project = config.vertexProject,
               let location = config.vertexLocation,
               let sa = config.vertexSA else { throw LLMError.notConfigured }
@@ -250,7 +263,7 @@ enum LLMClient {
     // MARK: - Azure AI Foundry (primary)
 
     private static func callAzure(config: Config, system: String, messages: [[String: String]],
-                                 maxTokens: Int, model: LLMModel) async throws -> String {
+                                 maxTokens: Int, model: LLMModel) async throws -> Answer {
         guard let resource = config.azureResource, let key = config.azureKey,
               let url = URL(string: "https://\(resource).services.ai.azure.com/anthropic/v1/messages") else {
             throw LLMError.notConfigured
@@ -273,7 +286,7 @@ enum LLMClient {
 
     // MARK: - Shared response handling
 
-    private static func send(_ req: URLRequest) async throws -> String {
+    private static func send(_ req: URLRequest) async throws -> Answer {
         let (data, resp) = try await URLSession.shared.data(for: req)
         let code = (resp as? HTTPURLResponse)?.statusCode ?? -1
         guard code == 200 else {
@@ -288,6 +301,6 @@ enum LLMClient {
             .joined()
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { throw LLMError.emptyResult }
-        return text
+        return Answer(text: text, usage: obj["usage"] as? [String: Any])
     }
 }

@@ -5,6 +5,14 @@ struct SweetchPhoneApp: App {
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
+        // What the phone's own calls to a model cost (settling what it heard by itself, its
+        // prefix): to the Mac with the keyboard's log, counted there with the Macs' own.
+        LLMUsage.sink = { record in
+            var event = record
+            event["e"] = "llm-usage"
+            event["run"] = "app"
+            Task { await PhoneLog.note([event]) }
+        }
         LivePreview.prepare()
         Credentials.load()
         PhoneServer.shared.start()   // the keyboard hears from here what the phone heard itself

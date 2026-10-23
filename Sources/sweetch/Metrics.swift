@@ -104,7 +104,46 @@ enum Metrics {
             "fix_seconds_median": medianFix,
             "suggestion_share": typed > 0 ? Double(week.reduce(0) { $0 + $1.suggestionWords }) / Double(typed) : 0,
         ]
-        return ["days": series, "week": totals, "computed_at": Date().timeIntervalSince1970]
+        return ["days": series, "week": totals, "llm": llm(dayNames: dayNames), "computed_at": Date().timeIntervalSince1970]
+    }
+
+    // MARK: - What the models cost
+
+    /// The calls to models and what they cost (LLMUsage): the Macs' own (`llm-usage/`) and the
+    /// iPhone's (`llm-usage` events in the keyboard's log) — today, the last seven days by what for
+    /// and by model, each day of the last two weeks, and all that's kept.
+    private static func llm(dayNames: [String]) -> [String: Any] {
+        var records: [[String: Any]] = []
+        let fm = FileManager.default
+        for url in (try? fm.contentsOfDirectory(at: LLMUsageLog.dir, includingPropertiesForKeys: nil)) ?? [] where url.pathExtension == "jsonl" {
+            for line in ((try? String(contentsOf: url, encoding: .utf8)) ?? "").split(separator: "\n") {
+                if let r = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any] { records.append(r) }
+            }
+        }
+        let keyboard = AppSupport.dir.appendingPathComponent("keyboard", isDirectory: true)
+        for url in (try? fm.contentsOfDirectory(at: keyboard, includingPropertiesForKeys: nil)) ?? [] where url.pathExtension == "jsonl" {
+            for line in ((try? String(contentsOf: url, encoding: .utf8)) ?? "").split(separator: "\n") where line.contains("\"e\":\"llm-usage\"") {
+                if var r = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any] {
+                    r["from"] = "iphone"
+                    records.append(r)
+                }
+            }
+        }
+        let byDay = Dictionary(grouping: records) { dayName(Date(timeIntervalSince1970: ($0["t"] as? Double) ?? 0)) }
+        func cost(_ rs: [[String: Any]]) -> Double { rs.reduce(0) { $0 + (($1["cost"] as? NSNumber)?.doubleValue ?? 0) } }
+        let week = dayNames.suffix(7).flatMap { byDay[$0] ?? [] }
+        func split(_ key: String) -> [[String: Any]] {
+            Dictionary(grouping: week) { $0[key] as? String ?? "?" }
+                .map { ["name": $0.key, "cost": cost($0.value), "calls": $0.value.count] }
+                .sorted { ($0["cost"] as! Double) > ($1["cost"] as! Double) }
+        }
+        return [
+            "today": cost(byDay[dayNames.last ?? ""] ?? []),
+            "week": cost(week), "week_calls": week.count,
+            "all": cost(records), "since": records.compactMap { $0["t"] as? Double }.min() ?? NSNull(),
+            "by_purpose": split("purpose"), "by_model": split("model"),
+            "days": dayNames.map { ["day": $0, "cost": cost(byDay[$0] ?? [])] },
+        ]
     }
 
     // MARK: - The keyboard's log

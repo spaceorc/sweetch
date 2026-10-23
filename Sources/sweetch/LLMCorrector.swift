@@ -71,7 +71,7 @@ enum LLMCorrector {
         for attempt in 0..<2 {
             let raw: String
             do {
-                raw = try await LLMClient.complete(system: systemPrompt + Persona.promptSection() + Glossary.promptSection(), messages: convo)
+                raw = try await LLMClient.complete(system: systemPrompt + Persona.promptSection() + Glossary.promptSection(), messages: convo, purpose: "correct")
             } catch {
                 log.error("LLM correct failed: \(String(describing: error), privacy: .public)")
                 return nil

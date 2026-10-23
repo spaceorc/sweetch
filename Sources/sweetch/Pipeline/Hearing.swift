@@ -431,7 +431,7 @@ enum Hearing {
         Task {
             defer { done.signal() }
             do {
-                reply.value = try await LLMClient.complete(system: system, messages: [["role": "user", "content": block]], maxTokens: 400)
+                reply.value = try await LLMClient.complete(system: system, messages: [["role": "user", "content": block]], maxTokens: 400, purpose: "settle")
             } catch {
                 log.error("dictation: settling failed: \(String(describing: error), privacy: .public)")
             }

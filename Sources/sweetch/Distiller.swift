@@ -27,7 +27,8 @@ enum Distiller {
                 system: system,
                 messages: [["role": "user", "content": "History (JSONL):\n" + history]],
                 maxTokens: 1024,
-                model: model
+                model: model,
+                purpose: "glossary"
             )
             guard let words = parseWords(raw), !words.isEmpty else {
                 log.info("distill: nothing to add")

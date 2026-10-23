@@ -23,9 +23,12 @@ struct MetricsView: View {
 
         let week: [String: Any]
         let days: [Day]
+        /// What the models cost (the Mac's Metrics.llm).
+        let llm: [String: Any]
 
         init(_ json: [String: Any]) {
             week = json["week"] as? [String: Any] ?? [:]
+            llm = json["llm"] as? [String: Any] ?? [:]
             let f = DateFormatter()
             f.dateFormat = "yyyy-MM-dd"
             days = (json["days"] as? [[String: Any]] ?? []).compactMap { d in
@@ -66,6 +69,13 @@ struct MetricsView: View {
                         tile("Backspaces", count(metrics.number("deletes_per_100")), "per 100 words typed")
                         tile("Suggestions", percent(metrics.number("suggestion_share")), "of the words typed")
                     }
+                    section("Models") {
+                        tile("Today", dollars(metrics.llm["today"]), "settling, prefixes, corrections")
+                        tile("This week", dollars(metrics.llm["week"]), "\(count((metrics.llm["week_calls"] as? NSNumber)?.doubleValue)) calls · \(dollars(metrics.llm["all"])) all kept")
+                        ForEach(Array((metrics.llm["by_purpose"] as? [[String: Any]] ?? []).prefix(4).enumerated()), id: \.offset) { _, row in
+                            tile(row["name"] as? String ?? "?", dollars(row["cost"]), "this week · \(count((row["calls"] as? NSNumber)?.doubleValue)) calls")
+                        }
+                    }
                     Text("Counted on the Mac from what it keeps — the dictations and the keyboard's log — as numbers only; no text leaves it.")
                         .font(.footnote).foregroundStyle(.secondary)
                 } else if let problem {
@@ -90,6 +100,12 @@ struct MetricsView: View {
         } catch {
             problem = error.localizedDescription
         }
+    }
+
+    /// Dollars, to the cent — or to a tenth of one below a dollar: these are small sums.
+    private func dollars(_ value: Any?) -> String {
+        let v = (value as? NSNumber)?.doubleValue ?? 0
+        return v >= 1 ? String(format: "$%.2f", v) : String(format: "$%.3f", v)
     }
 
     // MARK: - Parts
