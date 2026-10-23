@@ -343,7 +343,15 @@ final class KeyboardModel {
         if typed.first?.isLetter == true {
             if let tap { wordTaps.append(tap) } else { wordTapsHold = false }
         }
-        if !(typed.first?.isLetter ?? true) { noteWordEnd(typed) }
+        // A digit right after letters is an identifier going on («abc123», «v2»), not a word ended:
+        // nothing put right, its taps no word's.
+        let before0 = proxy?.documentContextBeforeInput ?? ""
+        if typed.first?.isNumber == true, before0.last?.isLetter == true {
+            wordTaps = []
+            wordTapsHold = false
+            pendingCorrection = nil
+            lastWord = nil
+        } else if !(typed.first?.isLetter ?? true) { noteWordEnd(typed) }
         // «?», «!» or «)» right after a dictation that ended with a period: the period was a guess,
         // and this is what the sentence ends with — it takes the period's place. Logged as what the
         // dictation should have ended with, to learn a question's intonation from.
@@ -985,11 +993,13 @@ final class KeyboardModel {
         }
         let pending = pendingCorrection
         pendingCorrection = nil
-        let tapped = hold && taps.count == word.filter(\.isLetter).count && taps.count >= 2
+        // Letters right after a digit («123abc», «2d») are no word to put right either.
+        let gluedToDigits = before.dropLast(word.count).last?.isNumber == true
+        let tapped = hold && taps.count == word.filter(\.isLetter).count && taps.count >= 2 && !gluedToDigits
         if tapped { shadowDecode(word, taps: taps) }
         // An English contraction typed without its apostrophe («im», «Ill»): what it is, ahead of
         // the decoder — unless the user took it back before.
-        let contraction = (keepAsTyped[word.lowercased()] ?? 0) < 1 ? Apostrophes.fix(word) : nil
+        let contraction = !gluedToDigits && (keepAsTyped[word.lowercased()] ?? 0) < 1 ? Apostrophes.fix(word) : nil
         if tapped, contraction == nil, pending?.word != word {   // not worked out by the space
             KeyLog.note("autocorrect-late", ["word": word])
             correctLate(word, taps: taps, boundary: boundary, before: before)
@@ -1008,7 +1018,7 @@ final class KeyboardModel {
             log("autocorrect", ["typed": word, "fixed": fixed, "confidence": Double(pending.confidence)])
             autoFixed = AutoFix(typed: word, fixed: fixed, boundary: boundary, taps: hold ? taps : [], times: times)
             word = fixed
-        } else if !word.contains("-"), let fixed = Hyphens.fix(word) {
+        } else if !gluedToDigits, !word.contains("-"), let fixed = Hyphens.fix(word) {
             // A word written with a hyphen, typed without one: put right, and ⌫ next puts it back.
             for _ in word { deleteBackward() }
             insert(fixed)
