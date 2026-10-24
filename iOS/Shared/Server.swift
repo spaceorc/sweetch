@@ -176,6 +176,11 @@ struct Server {
         try await get("/insights", timeout: 60)
     }
 
+    /// The dictations, newest first (see the Mac's DictationServer.dictations).
+    func dictations(limit: Int = 200) async throws -> [[String: Any]] {
+        try await get("/dictations?limit=\(limit)", timeout: 15)["dictations"] as? [[String: Any]] ?? []
+    }
+
     func llmConfig() async throws -> (env: String, userName: String) {
         let reply = try await get("/llm-config", timeout: 5)
         guard let env = reply["env"] as? String else { throw Failure("no credentials from the Mac") }

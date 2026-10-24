@@ -184,6 +184,9 @@ final class DictationServer {
             case ("GET", "/metrics"): (status, reply) = (200, Stats.currentMetrics())
             // What the numbers say about the hands and the voice: heat maps, offsets, confusions.
             case ("GET", "/insights"): (status, reply) = (200, Stats.currentInsights())
+            // The dictations, newest first — what was said, into what, on which device — for the
+            // iPhone app's history.
+            case ("GET", "/dictations"): (status, reply) = (200, ["dictations": Self.dictations(limit: Int(request.query["limit"] ?? "") ?? 200)])
             case ("GET", "/llm-config"):
                 (status, reply) = LLMClient.credentialsText.map { (200, ["env": $0, "user_name": NSFullUserName()]) }
                     ?? (404, ["error": "no credentials here"])
@@ -194,6 +197,31 @@ final class DictationServer {
         var head = "HTTP/1.1 \(status) \(status == 200 ? "OK" : "Error")\r\n"
         head += "Content-Type: application/json; charset=utf-8\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n"
         connection.send(content: Data(head.utf8) + body, completion: .contentProcessed { _ in connection.cancel() })
+    }
+
+    /// The last `limit` dictations that typed something, as the iPhone's history shows them.
+    static func dictations(limit: Int) -> [[String: Any]] {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd_HH-mm-ss-SSS"
+        let dirs = ((try? FileManager.default.contentsOfDirectory(at: DictationStore.dir, includingPropertiesForKeys: nil,
+                                                                  options: [.skipsHiddenFiles])) ?? [])
+            .sorted { $0.lastPathComponent > $1.lastPathComponent }
+        var list: [[String: Any]] = []
+        for dir in dirs {
+            guard list.count < min(limit, 1000) else { break }
+            let entry = DictationsWindow.Entry(dir: dir, date: f.date(from: dir.lastPathComponent) ?? .distantPast, session: [:])
+            let session = entry.json("session.json")
+            guard !session.isEmpty, session["cancelled"] as? Bool != true, session["error"] == nil else { continue }
+            let full = DictationsWindow.Entry(dir: dir, date: entry.date, session: session)
+            let text = full.said
+            guard !text.isEmpty, text != full.summary || session["inserted"] != nil || session["text"] != nil else { continue }
+            var item: [String: Any] = ["id": dir.lastPathComponent, "t": entry.date.timeIntervalSince1970, "text": text,
+                                       "app": full.app, "device": session["device"] as? String ?? "Mac"]
+            if let seconds = session["seconds"] as? Double { item["seconds"] = seconds }
+            if let to = session["handoff"] as? String { item["handoff"] = to }
+            list.append(item)
+        }
+        return list
     }
 
     // MARK: - Dictation

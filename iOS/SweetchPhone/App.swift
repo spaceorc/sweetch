@@ -77,9 +77,44 @@ struct SweetchPhoneApp: App {
     }
 }
 
-/// Settings and a way to try it by hand; day to day the app stays closed and the Action Button
-/// drives it.
+/// The app: what's happening at a glance, every dictation to copy, how it goes, and the
+/// settings — day to day it stays closed and the Action Button drives it.
 struct ContentView: View {
+    @ObservedObject private var dictation = Dictation.shared
+
+    var body: some View {
+        TabView {
+            NavigationStack { HomeView() }
+                .tabItem { Label("Today", systemImage: "house.fill") }
+            NavigationStack { HistoryView() }
+                .tabItem { Label("History", systemImage: "text.bubble.fill") }
+            NavigationStack { ProgressTab() }
+                .tabItem { Label("Progress", systemImage: "chart.bar.fill") }
+            NavigationStack { SettingsView() }
+                .tabItem { Label("Settings", systemImage: "gearshape.fill") }
+        }
+        .tint(Color(red: 0.25, green: 0.72, blue: 0.62))
+        .fullScreenCover(isPresented: $dictation.screen) { DictationScreen() }
+    }
+}
+
+/// Statistics and insights, counted on the Mac.
+struct ProgressTab: View {
+    @State private var view = "Statistics"
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Picker("", selection: $view) { ForEach(["Statistics", "Insights"], id: \.self) { Text($0) } }
+                .pickerStyle(.segmented).padding(.horizontal).padding(.bottom, 6)
+            if view == "Insights" { InsightsView(source: PhoneData.insights) } else { MetricsView(source: PhoneData.metrics) }
+        }
+        .background(Color.grouped)
+        .navigationTitle(view == "Insights" ? "Insights" : "How It Goes")
+    }
+}
+
+/// Settings and a way to try it by hand.
+struct SettingsView: View {
     @ObservedObject private var dictation = Dictation.shared
     @ObservedObject private var whisper = PhoneWhisper.shared
     @ObservedObject private var bench = EngineBench.shared
@@ -89,19 +124,8 @@ struct ContentView: View {
     @State private var reachable: String??
 
     var body: some View {
-        NavigationStack {
             Form {
                 Section {
-                    NavigationLink {
-                        MetricsView(source: PhoneData.metrics)
-                    } label: {
-                        Label("How It Goes", systemImage: "chart.bar.xaxis")
-                    }
-                    NavigationLink {
-                        InsightsView(source: PhoneData.insights)
-                    } label: {
-                        Label("Insights", systemImage: "hand.tap")
-                    }
                     NavigationLink {
                         EmojiView()
                     } label: {
@@ -171,9 +195,7 @@ struct ContentView: View {
                     Text("An experiment: a dictation made here, in the open app, is heard on the phone as well as on the Mac — the same model — to compare speed and text.")
                 }
             }
-            .navigationTitle("Sweetch")
-        }
-        .fullScreenCover(isPresented: $dictation.screen) { DictationScreen() }
+            .navigationTitle("Settings")
     }
 }
 
