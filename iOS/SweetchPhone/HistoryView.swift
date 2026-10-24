@@ -84,7 +84,7 @@ struct DictationRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(item.text).lineLimit(3)
+            Text(item.text).lineLimit(3).multilineTextAlignment(.leading)
             HStack(spacing: 6) {
                 Image(systemName: item.device == "iPhone" ? "iphone" : "laptopcomputer")
                 Text(item.date.formatted(Calendar.current.isDateInToday(item.date) ? .dateTime.hour().minute()
