@@ -13,6 +13,7 @@ struct SweetchPhoneApp: App {
             event["run"] = "app"
             Task { await PhoneLog.note([event]) }
         }
+        SharedState.appProcess = ProcessInfo.processInfo.processIdentifier   // the keyboard knows it's in sweetch
         LivePreview.prepare()
         Credentials.load()
         PhoneServer.shared.start()   // the keyboard hears from here what the phone heard itself

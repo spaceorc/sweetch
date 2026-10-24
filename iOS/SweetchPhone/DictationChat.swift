@@ -70,7 +70,19 @@ struct DictationChat: View {
             }
             .overlay(alignment: .bottom) { CopiedToast(copier: copier).padding(.bottom, 70) }
         }
-        .onAppear(perform: load)
+        .onAppear {
+            load()
+            publishScreen()
+        }
+        .onDisappear { SharedState.appScreen = nil }
+        .onChange(of: turns) { _, _ in publishScreen() }
+    }
+
+    /// What the keyboard tells the Mac a dictation into this chat is about: this one.
+    private func publishScreen() {
+        var screen: [String: Any] = ["screen": "dictation-chat", "about": String(original.prefix(3000))]
+        if let last = turns.last?.answer { screen["last"] = String(last.prefix(1500)) }
+        SharedState.appScreen = screen
     }
 
     // MARK: Parts

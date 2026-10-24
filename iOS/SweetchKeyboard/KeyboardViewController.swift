@@ -723,6 +723,11 @@ final class KeyboardModel {
             "content_type": proxy?.textContentType?.rawValue ?? "",
         ]
         if let process = hostProcess { context["process"] = Int(process) }
+        // In sweetch itself — its talk about a dictation: what it's about goes with the dictation.
+        if let process = hostProcess, process == SharedState.appProcess {
+            context["host_app"] = "Sweetch"
+            if let screen = SharedState.appScreen { context["sweetch_screen"] = screen }
+        }
         if let host = HostMemory.shared.host(hostProcess) {
             let now = Date()
             let current = String(text).trimmingCharacters(in: .whitespacesAndNewlines)

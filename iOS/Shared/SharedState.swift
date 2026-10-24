@@ -16,6 +16,20 @@ enum SharedState {
         set { defaults?.set(newValue, forKey: "keyboardIncognito") }
     }
 
+    /// The app's own process: the keyboard, open in a field of a process with this number, is in
+    /// sweetch itself.
+    static var appProcess: Int32 {
+        get { Int32(defaults?.integer(forKey: "appProcess") ?? 0) }
+        set { defaults?.set(Int(newValue), forKey: "appProcess") }
+    }
+
+    /// What the app shows where the keyboard types — the talk about a dictation: {"screen":
+    /// "dictation-chat", "about": the dictation, "last": the last version}. Nil elsewhere.
+    static var appScreen: [String: Any]? {
+        get { defaults?.dictionary(forKey: "appScreen") }
+        set { defaults?.set(newValue, forKey: "appScreen") }
+    }
+
     /// A dictation heard on the phone itself: its text, its folder, and when (in milliseconds, as
     /// the app's loopback server numbers what it publishes).
     static func publishHeard(_ text: String, id: String?, seq: Int) {

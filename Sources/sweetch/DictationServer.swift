@@ -307,8 +307,22 @@ final class DictationServer {
             }
             saved["seconds"] = Date().timeIntervalSince(started)
             DictationStore.write(saved, to: entry.dir.appendingPathComponent("context.json"))
-            let gathered = ContextSnapshot.Gathered(app: app ?? Prefix.unknownApp, windowTitle: nil, textBeforeCursor: fieldBefore,
-                                                    windowTexts: [], ocrText: ocr, keyboard: keyboard.map(ContextSnapshot.keyboard))
+            // Dictated into sweetch's own talk about a dictation: that dictation is what's on screen.
+            var windowTexts: [String] = []
+            var title: String?
+            if let screen = keyboard?["sweetch_screen"] as? [String: Any], screen["screen"] as? String == "dictation-chat" {
+                title = "Sweetch — a chat about a dictation, asking for a version of it or about it"
+                if let about = screen["about"] as? String { windowTexts.append(about) }
+                if let last = screen["last"] as? String { windowTexts.append(last) }
+            }
+            let gathered = ContextSnapshot.Gathered(app: app ?? Prefix.unknownApp, windowTitle: title, textBeforeCursor: fieldBefore,
+                                                    windowTexts: windowTexts, ocrText: ocr, keyboard: keyboard.map(ContextSnapshot.keyboard))
+            if let title {
+                // Kept with the rest, so hearing it again has it too.
+                saved["window_title"] = title
+                saved["window_texts"] = windowTexts
+                DictationStore.write(saved, to: entry.dir.appendingPathComponent("context.json"))
+            }
             entry.context = gathered
             let gatheredSeconds = Date().timeIntervalSince(started)
             let prefix = Prefix.build(from: gathered)

@@ -141,6 +141,7 @@ struct Server {
         if let screenshot { body["screenshot"] = screenshot.base64EncodedString() }
         if let fieldBefore { body["field_before"] = fieldBefore }
         if let keyboard { body["keyboard"] = keyboard }
+        if let app = keyboard?["host_app"] as? String { body["app"] = app }
         let reply = try await send("/context", body: try JSONSerialization.data(withJSONObject: body), timeout: 10)
         guard let id = reply["id"] as? String else { throw Failure("the Mac gave no id") }
         return id
