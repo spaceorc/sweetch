@@ -11,6 +11,8 @@ struct DictationScreen: View {
     static func open(keyboard: [String: Any]?, incognito: Bool = false) {
         let dictation = Dictation.shared
         dictation.screen = true
+        // The keyboard is in sweetch's own talk about a dictation.
+        dictation.inApp = keyboard?["host_app"] as? String == "Sweetch" && keyboard?["sweetch_screen"] != nil
         if dictation.phase == .idle {
             dictation.keyboard = incognito ? nil : keyboard
             dictation.incognito = incognito
@@ -47,6 +49,30 @@ struct DictationScreen: View {
             }
             Spacer(minLength: 12)
             Text(hint).font(.callout).foregroundStyle(.white.opacity(0.55)).padding(.bottom, 24)
+            if dictation.inApp, dictation.phase == .idle, let text = dictation.last, !text.isEmpty {
+                // In sweetch itself: nothing to swipe back to — put in the talk's field.
+                Button {
+                    dictation.insertion = text
+                    dictation.screen = false
+                } label: {
+                    Label("Insert", systemImage: "text.insert").font(.title3.weight(.semibold))
+                        .frame(maxWidth: .infinity).padding(.vertical, 16)
+                        .background(.white, in: Capsule()).foregroundStyle(.black)
+                }
+                .padding(.horizontal, 28).padding(.bottom, 16)
+            }
+            if !dictation.inApp, dictation.phase == .idle, let item = dictation.lastItem, item.text == dictation.last, !item.text.isEmpty {
+                // More to do with it than paste: the talk about it, here.
+                Button {
+                    dictation.talkAbout = item
+                    dictation.screen = false
+                } label: {
+                    Label("Talk about it", systemImage: "bubble.left.and.text.bubble.right")
+                        .font(.headline).padding(.horizontal, 20).padding(.vertical, 11)
+                        .background(.white.opacity(0.14), in: Capsule()).foregroundStyle(.white)
+                }
+                .padding(.bottom, 8)
+            }
             button.padding(.bottom, 40)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -85,9 +111,9 @@ struct DictationScreen: View {
 
     private var hint: String {
         switch dictation.phase {
-        case .listening: "Swipe back when done — it'll be typed there"
+        case .listening: dictation.inApp ? "Stop when done" : "Swipe back when done — it'll be typed there"
         case .recognizing: "Hearing…"
-        case .idle: dictation.last.map { $0.isEmpty ? "" : "Swipe back — it's typed there" } ?? ""
+        case .idle: dictation.inApp ? "" : dictation.last.map { $0.isEmpty ? "" : "Swipe back — it's typed there" } ?? ""
         }
     }
 

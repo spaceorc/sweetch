@@ -249,6 +249,10 @@ final class DictationServer {
             let entry = DictationsWindow.Entry(dir: dir, date: f.date(from: dir.lastPathComponent) ?? .distantPast, session: [:])
             let session = entry.json("session.json")
             guard !session.isEmpty, session["cancelled"] as? Bool != true, session["error"] == nil else { continue }
+            // Dictated into sweetch's talk about a dictation: part of that talk, not one of its own.
+            if let context = (try? Data(contentsOf: dir.appendingPathComponent("context.json")))
+                .flatMap({ try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }),
+               (context["keyboard"] as? [String: Any])?["sweetch_screen"] != nil { continue }
             let full = DictationsWindow.Entry(dir: dir, date: entry.date, session: session)
             let text = full.said
             guard !text.isEmpty, text != full.summary || session["inserted"] != nil || session["text"] != nil else { continue }
@@ -378,7 +382,8 @@ final class DictationServer {
                 heard.broadcast()
             }
             log.info("dictation server: heard '\(shown(settled.text), privacy: .public)'")
-            return (200, ["text": settled.text, "seconds": record["seconds"] ?? 0, "versions": settled.versions.map(\.text)])
+            return (200, ["text": settled.text, "seconds": record["seconds"] ?? 0, "versions": settled.versions.map(\.text),
+                          "id": entry.dir.lastPathComponent])
         } catch {
             record["error"] = String(describing: error)
             log.error("dictation server: \(String(describing: error), privacy: .public)")

@@ -15,6 +15,7 @@ struct DictationChat: View {
     @State private var hearing = false
     @State private var problem: String?
     @FocusState private var typing: Bool
+    @ObservedObject private var recorder = Dictation.shared
     @Environment(\.dismiss) private var dismiss
 
     struct Turn: Codable, Identifiable, Hashable {
@@ -75,12 +76,19 @@ struct DictationChat: View {
             publishScreen()
         }
         .onDisappear { SharedState.appScreen = nil }
+        // Dictated in the talk's own field (the keyboard's microphone): put there, to edit or send.
+        .onChange(of: recorder.insertion) { _, text in
+            guard let text else { return }
+            recorder.insertion = nil
+            input = input.isEmpty ? text : input + " " + text
+            typing = true
+        }
         .onChange(of: turns) { _, _ in publishScreen() }
     }
 
     /// What the keyboard tells the Mac a dictation into this chat is about: this one.
     private func publishScreen() {
-        var screen: [String: Any] = ["screen": "dictation-chat", "about": String(original.prefix(3000))]
+        var screen: [String: Any] = ["screen": "dictation-chat", "about_id": item.id, "about": String(original.prefix(3000))]
         if let last = turns.last?.answer { screen["last"] = String(last.prefix(1500)) }
         SharedState.appScreen = screen
     }

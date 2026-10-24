@@ -97,7 +97,16 @@ struct ContentView: View {
         }
         .tint(Color(red: 0.25, green: 0.72, blue: 0.62))
         .fullScreenCover(isPresented: $dictation.screen) { DictationScreen() }
+        // "Talk about it" on the dictation screen: the talk, once the screen is down.
+        .sheet(item: $talking) { item in DictationChat(item: item) }
+        .onChange(of: dictation.screen) { _, up in
+            guard !up, let item = dictation.talkAbout else { return }
+            dictation.talkAbout = nil
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { talking = item }
+        }
     }
+
+    @State private var talking: DictationItem?
 }
 
 /// Statistics and insights, counted on the Mac.

@@ -22,12 +22,22 @@ final class Dictation: ObservableObject {
     @Published private(set) var preview = ""
     @Published private(set) var last: String?
     @Published private(set) var lastSeconds: Double?
+    /// The last dictation as the history knows it — its folder on the Mac, or on the phone — and
+    /// how it was heard: for a talk about it straight from the dictation screen.
+    @Published private(set) var lastItem: DictationItem?
+    /// Asked from the dictation screen: a talk about this one, once the screen is down.
+    @Published var talkAbout: DictationItem?
     @Published private(set) var problem: String?
     /// The big dictation screen is up: opened from the keyboard's microphone.
     @Published var screen = false {
         // Closed: incognito was the screen's — an Action Button dictation after it is as usual.
-        didSet { if !screen, phase == .idle { incognito = false } }
+        didSet { if !screen, phase == .idle { incognito = false; inApp = false } }
     }
+    /// The screen was opened by the keyboard in sweetch's own talk about a dictation: nothing to
+    /// swipe back to — what's heard is put in the talk's field from here (`insertion`).
+    @Published var inApp = false
+    /// Heard for the talk's field: taken by the talk, which puts it in its field.
+    @Published var insertion: String?
     /// What the keyboard knew when its microphone opened the dictation: the context, in place of a
     /// screenshot. Taken by the next dictation.
     var keyboard: [String: Any]?
@@ -189,6 +199,7 @@ final class Dictation: ObservableObject {
         if let reason, phase == .listening { noteAction("stop", source: reason) }
         if phase == .listening { lastEnded = Date() }
         last = nil
+        lastItem = nil
         guard phase == .listening, let recording else { return }
         tap.end()   // closes the WAV: only then are its samples and sizes written
         microphoneOff()
@@ -233,17 +244,19 @@ final class Dictation: ObservableObject {
             guard !Self.phoneOnly, let mac = await server?.value else { throw Failure("the Mac is out of reach") }
             let audio = try Data(contentsOf: recording)
             let text: String
+            var id: String?
             do {
-                text = try await mac.hear(audio, contextID: contextID, apple: apple)
+                (text, id) = try await mac.hear(audio, contextID: contextID, apple: apple)
             } catch let error as URLError {
                 // The Mac went away while hearing: the next one hears it, without the screen's context
                 // (that stayed on the first).
                 Server.markDown(mac.mac)
                 guard let next = await Server.reachable(), next.mac != mac.mac else { throw error }
-                text = try await next.hear(audio, contextID: nil, apple: apple)
+                (text, id) = try await next.hear(audio, contextID: nil, apple: apple)
             }
             lastSeconds = Date().timeIntervalSince(started)
             last = text
+            lastItem = id.flatMap { Self.item(id: $0, text: text, heardOn: "mac", local: false) }
             copyInFront(text)
         } catch {
             // No Mac: the phone hears it the Mac's way, if whisper is here; else Apple's hearing will do.
@@ -254,6 +267,7 @@ final class Dictation: ObservableObject {
                 if let settled {
                     lastSeconds = Date().timeIntervalSince(started)
                     last = settled.text
+                    lastItem = localDir.flatMap { Self.item(id: $0.lastPathComponent, text: settled.text, heardOn: "phone", local: true) }
                     copyInFront(settled.text)
                 } else {
                     last = ""
@@ -282,6 +296,11 @@ final class Dictation: ObservableObject {
         self.recording = nil
         await endActivity(showing: .init(phase: problem == nil || last != nil ? .done : .failed,
                                          text: last.map { $0.isEmpty ? "Nothing heard" : $0 } ?? problem ?? ""))
+    }
+
+    private static func item(id: String, text: String, heardOn: String, local: Bool) -> DictationItem? {
+        DictationItem(["id": id, "t": Date().timeIntervalSince1970, "text": text, "app": "", "device": "iPhone",
+                       "heard_on": heardOn, "recording": true, "local": local])
     }
 
     private func microphoneOff() {

@@ -189,13 +189,14 @@ struct Server {
     }
 
     /// What the Mac heard in `recording`.
-    func hear(_ recording: Data, contextID: String?, apple: String?) async throws -> String {
+    /// What the Mac heard in `recording`, and the dictation's folder there.
+    func hear(_ recording: Data, contextID: String?, apple: String?) async throws -> (text: String, id: String?) {
         var query = URLComponents()
         query.queryItems = [contextID.map { URLQueryItem(name: "id", value: $0) },
                             apple.map { URLQueryItem(name: "apple", value: $0) }].compactMap { $0 }
         let reply = try await send("/hear?" + (query.percentEncodedQuery ?? ""), body: recording, timeout: 20)
         guard let text = reply["text"] as? String else { throw Failure(reply["error"] as? String ?? "the Mac sent no text") }
-        return text
+        return (text, reply["id"] as? String)
     }
 
     func post(_ path: String, body: Data, timeout: TimeInterval) async throws -> [String: Any] {

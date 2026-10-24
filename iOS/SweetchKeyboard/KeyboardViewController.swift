@@ -1884,6 +1884,14 @@ final class KeyboardModel {
     /// was up ("live"), after the app's dictation screen ("after-app"), or the strip's button typing
     /// the last one again ("typed-again").
     private func insertHeard(_ text: String, again: Bool = false, id: String?, from: String, how: String) {
+        // In sweetch's own talk about a dictation the app puts what's heard in its field (its
+        // dictation screen's Insert): typed here too, it would be there twice.
+        if how != "typed-again", let process = hostProcess, process == SharedState.appProcess, SharedState.appScreen != nil {
+            lastHeard = (text, Date(), id)
+            last = text
+            log("heard-left-to-app", ["dictation": id ?? "", "from": from, "how": how])
+            return
+        }
         wordTaps = []
         wordTapsHold = true
         // The same words from a second Mac: one that seemed gone while hearing, and the next heard
