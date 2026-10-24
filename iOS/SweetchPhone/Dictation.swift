@@ -264,6 +264,8 @@ final class Dictation: ObservableObject {
                     last = apple
                     copyInFront(apple)
                 }
+                // Kept with its recording all the same: a Mac hears it again once one answers.
+                PhonePipeline.keepUnheard(recording, apple: apple, keyboard: keyboard)
             }
         }
         // Heard here, not by a Mac (whose own server tells the keyboard): to the keyboard from here.
@@ -272,7 +274,10 @@ final class Dictation: ObservableObject {
         localContext = nil
         localDir = nil
         keyboard = nil
-        Task { await PhoneLog.flush() }
+        Task {
+            await PhoneLog.flush()
+            await PhoneDictations.upload()
+        }
         try? FileManager.default.removeItem(at: recording)
         self.recording = nil
         await endActivity(showing: .init(phase: problem == nil || last != nil ? .done : .failed,

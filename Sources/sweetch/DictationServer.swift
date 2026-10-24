@@ -187,6 +187,11 @@ final class DictationServer {
             // The dictations, newest first — what was said, into what, on which device — for the
             // iPhone app's history.
             case ("GET", "/dictations"): (status, reply) = (200, ["dictations": Self.dictations(limit: Int(request.query["limit"] ?? "") ?? 200)])
+            // A dictation the iPhone heard by itself, no Mac in reach: its folder, kept here as the
+            // Macs keep theirs (and synced on), to be heard again.
+            case ("POST", "/phone-dictation"): (status, reply) = keepPhoneDictation(request)
+            // A dictation heard again from its recording, today's way.
+            case ("POST", "/hear-again"): (status, reply) = hearAgain(request)
             case ("GET", "/llm-config"):
                 (status, reply) = LLMClient.credentialsText.map { (200, ["env": $0, "user_name": NSFullUserName()]) }
                     ?? (404, ["error": "no credentials here"])
@@ -197,6 +202,38 @@ final class DictationServer {
         var head = "HTTP/1.1 \(status) \(status == 200 ? "OK" : "Error")\r\n"
         head += "Content-Type: application/json; charset=utf-8\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n"
         connection.send(content: Data(head.utf8) + body, completion: .contentProcessed { _ in connection.cancel() })
+    }
+
+    /// A dictation folder's name as the phone gives it: a timestamp, nothing to climb out with.
+    private static func folder(_ id: String?) -> URL? {
+        guard let id, id.range(of: #"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}-\d{3}$"#, options: .regularExpression) != nil else { return nil }
+        return DictationStore.dir.appendingPathComponent(id, isDirectory: true)
+    }
+
+    /// Body: {"files": {name: base64}} — session.json, context.json, recording.wav, window.png.
+    private func keepPhoneDictation(_ request: Request) -> (Int, [String: Any]) {
+        guard let dir = Self.folder(request.query["id"]),
+              let body = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any],
+              let files = body["files"] as? [String: String] else { return (400, ["error": "bad dictation"]) }
+        if FileManager.default.fileExists(atPath: dir.appendingPathComponent("session.json").path) { return (200, ["ok": true, "kept": false]) }
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        for (name, base64) in files where ["session.json", "context.json", "recording.wav", "window.png"].contains(name) {
+            if let data = Data(base64Encoded: base64) { try? data.write(to: dir.appendingPathComponent(name)) }
+        }
+        log.info("phone dictation kept: \(dir.lastPathComponent, privacy: .public)")
+        DispatchQueue.main.async { NotificationCenter.default.post(name: DictationStore.changed, object: dir) }
+        return (200, ["ok": true, "kept": true])
+    }
+
+    private func hearAgain(_ request: Request) -> (Int, [String: Any]) {
+        guard let dir = Self.folder(request.query["id"]) else { return (400, ["error": "bad id"]) }
+        do {
+            guard let text = try Rehear.again(dir) else { return (404, ["error": "no recording of it here"]) }
+            DispatchQueue.main.async { NotificationCenter.default.post(name: DictationStore.changed, object: dir) }
+            return (200, ["text": text])
+        } catch {
+            return (500, ["error": "\(error)"])
+        }
     }
 
     /// The last `limit` dictations that typed something, as the iPhone's history shows them.
@@ -219,6 +256,9 @@ final class DictationServer {
                                        "app": full.app, "device": session["device"] as? String ?? "Mac"]
             if let seconds = session["seconds"] as? Double { item["seconds"] = seconds }
             if let to = session["handoff"] as? String { item["handoff"] = to }
+            item["heard_on"] = session["heard_on"] as? String ?? "mac"
+            item["recording"] = FileManager.default.fileExists(atPath: dir.appendingPathComponent("recording.wav").path)
+            if let before = session["before"] as? [[String: Any]], let first = before.first?["text"] as? String { item["before"] = first }
             list.append(item)
         }
         return list

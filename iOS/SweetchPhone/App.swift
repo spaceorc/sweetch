@@ -19,6 +19,7 @@ struct SweetchPhoneApp: App {
         Task {
             if let mac = await Server.reachable() { await Credentials.refresh(from: mac) }
             await PhoneLog.flush()   // the keyboard's log kept on the phone, if a Mac answers now
+            await PhoneDictations.upload()   // and what the phone heard by itself
         }
         _ = PhoneWhisper.shared   // knows from the start whether the app is in front
         // The folder shared with the keyboard, if the signing allows one: a file to show it works.
@@ -71,7 +72,7 @@ struct SweetchPhoneApp: App {
             }
             // Each time the app comes up: the keyboard's log kept on the phone, to a Mac that answers.
             .onChange(of: scenePhase) { _, phase in
-                if phase == .active { Task { await PhoneLog.flush() } }
+                if phase == .active { Task { await PhoneLog.flush(); await PhoneDictations.upload() } }
             }
         }
     }

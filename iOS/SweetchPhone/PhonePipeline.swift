@@ -119,6 +119,19 @@ enum PhonePipeline {
         return settled
     }
 
+    /// A recording no Mac heard and whisper isn't here for: kept, with what Apple's hearing made of
+    /// it, to be heard by a Mac later.
+    static func keepUnheard(_ wav: URL, apple: String?, keyboard: [String: Any]?) {
+        let dir = newDirectory()
+        try? FileManager.default.copyItem(at: wav, to: dir.appendingPathComponent("recording.wav"))
+        var context: [String: Any] = ["app": Prefix.unknownApp, "device": "iPhone"]
+        if let before = keyboard?["field_before"] as? String { context["text_before_cursor"] = before }
+        if let keyboard { context["keyboard"] = keyboard }
+        try? JSONSerialization.data(withJSONObject: context, options: [.prettyPrinted]).write(to: dir.appendingPathComponent("context.json"))
+        let session: [String: Any] = ["device": "iPhone", "heard_on": "apple", "text": apple ?? "", "app": "iPhone"]
+        try? JSONSerialization.data(withJSONObject: session, options: [.prettyPrinted]).write(to: dir.appendingPathComponent("session.json"))
+    }
+
     private final class Box: @unchecked Sendable {
         var value: (Prefix?, ContextSnapshot.Gathered)?
     }

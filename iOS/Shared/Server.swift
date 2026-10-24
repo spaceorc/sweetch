@@ -197,6 +197,17 @@ struct Server {
         return text
     }
 
+    func post(_ path: String, body: Data, timeout: TimeInterval) async throws -> [String: Any] {
+        try await send(path, body: body, timeout: timeout)
+    }
+
+    /// A dictation heard again on the Mac, from its recording: the new text.
+    func hearAgain(_ id: String) async throws -> String {
+        let reply = try await send("/hear-again?id=\(id)", body: Data(), timeout: 180)
+        guard let text = reply["text"] as? String else { throw Failure(reply["error"] as? String ?? "not heard") }
+        return text
+    }
+
     private func get(_ path: String, timeout: TimeInterval) async throws -> [String: Any] {
         try await send(path, body: nil, timeout: timeout)
     }

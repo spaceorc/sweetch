@@ -51,6 +51,37 @@ enum Rehear {
         }
     }
 
+    /// A stored dictation heard again, today's way, from its recording and saved context — for the
+    /// iPhone's history: one heard badly (on the phone alone, or a glitch) asked again. Its
+    /// session.json then says the new text; what it said before is kept beside, as `before`.
+    static func again(_ dir: URL) throws -> String? {
+        let wav = dir.appendingPathComponent("recording.wav")
+        guard FileManager.default.fileExists(atPath: wav.path) else { return nil }
+        let context = gathered(from: dir) ?? ContextSnapshot.Gathered(app: "iPhone", windowTitle: nil, textBeforeCursor: nil,
+                                                                       windowTexts: [], ocrText: nil, keyboard: nil)
+        let out = dir.appendingPathComponent("rehear", isDirectory: true)
+        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let started = Date()
+        let prefix = Prefix.build(from: context)
+        var apple: String?
+        if #available(macOS 26.0, *) { apple = LivePreview.transcribe(file: wav) }
+        guard let settled = try Hearing.hear(wav, dir: out, prepared: { (prefix, context, apple) }) else { return "" }
+        var session = json(dir.appendingPathComponent("session.json"))
+        var before = session["before"] as? [[String: Any]] ?? []
+        before.append(["text": session["inserted"] as? String ?? session["text"] as? String ?? "",
+                       "heard_on": session["heard_on"] as? String ?? "mac"])
+        session["before"] = before
+        session["text"] = settled.text
+        session.removeValue(forKey: "inserted")
+        session["heard_on"] = "mac-again"
+        session["heard_again_at"] = DictationStore.stamp(Date())
+        session["versions"] = settled.versions.map(\.text)
+        session["settlement"] = settled.settlement ?? NSNull()
+        session["again_seconds"] = Date().timeIntervalSince(started)
+        DictationStore.write(session, to: dir.appendingPathComponent("session.json"))
+        return settled.text
+    }
+
     /// The context as it was gathered, read back from `context.json`.
     private static func gathered(from dir: URL) -> ContextSnapshot.Gathered? {
         let c = json(dir.appendingPathComponent("context.json"))
