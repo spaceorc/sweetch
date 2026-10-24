@@ -193,10 +193,21 @@ enum SelectionConverter {
     @discardableResult
     static func wakeAccessibility(of app: NSRunningApplication) -> Bool {
         let el = AXUIElementCreateApplication(app.processIdentifier)
+        // Chromium browsers don't take `AXManualAccessibility`: they build their pages' tree when
+        // asked with `AXEnhancedUserInterface` (as VoiceOver asks) — it comes back an error, and
+        // the tree is there a moment later. Without it Chrome's tree was its toolbar alone, 65
+        // elements: Space held in ChatGPT's prompt three times, passed through (24 Oct). Browsers
+        // only: other apps animate their windows differently with it on.
+        if let id = app.bundleIdentifier, chromium.contains(where: { id.hasPrefix($0) }) {
+            AXUIElementSetAttributeValue(el, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+        }
         let ok = AXUIElementSetAttributeValue(el, "AXManualAccessibility" as CFString, kCFBooleanTrue) == .success
         if ok { log.info("AXManualAccessibility enabled for \(app.bundleIdentifier ?? "?", privacy: .public)") }
         return ok
     }
+
+    private static let chromium = ["com.google.Chrome", "com.brave.Browser", "com.microsoft.edgemac", "company.thebrowser.Browser",
+                                   "org.chromium.Chromium", "com.vivaldi.Vivaldi", "com.operasoftware.Opera"]
 
     private static func readAXSelectedText(_ element: AXUIElement) -> String? {
         var value: CFTypeRef?
