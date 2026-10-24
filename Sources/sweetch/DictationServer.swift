@@ -257,9 +257,10 @@ final class DictationServer {
             if let seconds = session["seconds"] as? Double { item["seconds"] = seconds }
             if let to = session["handoff"] as? String { item["handoff"] = to }
             item["heard_on"] = session["heard_on"] as? String ?? "mac"
-            // The model meant to settle it didn't (too slow, or failed): typed as whisper heard it.
+            // The model meant to settle it didn't — too slow, failed, no credentials, or its answer
+            // refused: typed as whisper heard it. (Skipped is settled: every listening agreed.)
             if let s = session["settlement"] as? [String: Any], s["skipped"] == nil,
-               s["timed_out"] != nil || s["reply"] == nil || s["reply"] is NSNull { item["raw"] = true }
+               s["timed_out"] != nil || s["reply"] == nil || s["reply"] is NSNull || s["overruled"] != nil { item["raw"] = true }
             item["recording"] = FileManager.default.fileExists(atPath: dir.appendingPathComponent("recording.wav").path)
             if let before = session["before"] as? [[String: Any]], let first = before.first?["text"] as? String { item["before"] = first }
             list.append(item)

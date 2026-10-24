@@ -161,8 +161,9 @@ struct DictationRow: View {
     }
 }
 
-/// Where a dictation was heard: the Mac (quietly — that's the usual), the phone alone (orange: it
-/// may well be wrong), or the Mac again.
+/// How a dictation was made: heard on the Mac and settled by the model (quietly — the usual),
+/// heard on the Mac but not settled — raw, unpunctuated — or on the phone alone (both orange:
+/// worth hearing again), or heard again.
 struct HeardBadge: View {
     let item: DictationItem
 
@@ -180,7 +181,7 @@ struct HeardBadge: View {
         } else if item.heardOn == "mac-again" {
             Label("heard again", systemImage: "arrow.clockwise").font(.caption2).foregroundStyle(.secondary)
         } else {
-            Label("Mac", systemImage: "checkmark.seal").font(.caption2).foregroundStyle(.secondary)
+            Label("settled", systemImage: "checkmark.seal").font(.caption2).foregroundStyle(.secondary)
         }
     }
 }
