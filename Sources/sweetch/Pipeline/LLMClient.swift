@@ -142,12 +142,13 @@ enum LLMClient {
                          messages: [[String: String]],
                          maxTokens: Int = 600,
                          model: LLMModel = .fast,
-                         purpose: String = "other") async throws -> String {
+                         purpose: String = "other",
+                         cache: Bool = false) async throws -> String {
         guard let config else { throw LLMError.notConfigured }
 
         var attempts: [(name: String, call: () async throws -> Answer)] = []
         if config.hasAzure {
-            attempts.append(("azure", { try await callAzure(config: config, system: system, messages: messages,
+            attempts.append(("azure", { try await callAzure(config: config, system: system, messages: anthropic(messages, cache: cache),
                                                             maxTokens: maxTokens, model: model) }))
         }
         if config.hasProxy {
@@ -155,7 +156,7 @@ enum LLMClient {
                                                             maxTokens: maxTokens, model: model) }))
         }
         if config.hasVertex {
-            attempts.append(("vertex", { try await callVertex(config: config, system: system, messages: messages,
+            attempts.append(("vertex", { try await callVertex(config: config, system: system, messages: anthropic(messages, cache: cache),
                                                               maxTokens: maxTokens, model: model) }))
         }
         guard !attempts.isEmpty else { throw LLMError.notConfigured }
@@ -227,7 +228,18 @@ enum LLMClient {
 
     // MARK: - Vertex AI (primary)
 
-    private static func callVertex(config: Config, system: String, messages: [[String: String]],
+    /// The messages as Anthropic's API takes them; with `cache`, the last one marked for the cache —
+    /// in a talk each turn then reads everything before it from the cache (a prompt of 512 tokens
+    /// and more, on the 5.5 models).
+    private static func anthropic(_ messages: [[String: String]], cache: Bool) -> [[String: Any]] {
+        var out: [[String: Any]] = messages
+        guard cache, let last = messages.indices.last else { return out }
+        out[last] = ["role": messages[last]["role"] ?? "user",
+                     "content": [["type": "text", "text": messages[last]["content"] ?? "", "cache_control": ["type": "ephemeral"]]]]
+        return out
+    }
+
+    private static func callVertex(config: Config, system: String, messages: [[String: Any]],
                                    maxTokens: Int, model: LLMModel) async throws -> Answer {
         guard let project = config.vertexProject,
               let location = config.vertexLocation,
@@ -262,7 +274,7 @@ enum LLMClient {
 
     // MARK: - Azure AI Foundry (primary)
 
-    private static func callAzure(config: Config, system: String, messages: [[String: String]],
+    private static func callAzure(config: Config, system: String, messages: [[String: Any]],
                                  maxTokens: Int, model: LLMModel) async throws -> Answer {
         guard let resource = config.azureResource, let key = config.azureKey,
               let url = URL(string: "https://\(resource).services.ai.azure.com/anthropic/v1/messages") else {

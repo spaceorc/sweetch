@@ -164,11 +164,13 @@ struct DictationChat: View {
     // MARK: Asking
 
     private static let system = """
-        You rework a dictation — text the user spoke and speech recognition wrote down — as they ask: \
-        summarise it, shorten it, keep only part of it, clean it up, turn it into a message, translate it. \
-        Recognition may have misheard words: read through that to what was meant. Keep the dictation's \
-        language unless asked for another. Reply with the resulting text only — no preamble, no quotes, \
-        no notes — ready to paste.
+        You help the user with one of their dictations — text they spoke and speech recognition wrote \
+        down — in a chat about it. Recognition may have misheard words: read through that to what was meant.
+        When they ask for a version of it — summarise, shorten, keep only part, clean up, make it a \
+        message, translate, rephrase — reply with that text alone, ready to paste: no preamble, no quotes, \
+        no notes, in the dictation's language unless they ask for another. A later ask works on your last \
+        version unless they say otherwise.
+        When they ask something about it, or talk, answer briefly, as in a chat, in their language.
         """
 
     private func send(_ shown: String, instruction: String) async {
@@ -186,7 +188,7 @@ struct DictationChat: View {
         }
         do {
             let reply = try await LLMClient.complete(system: Self.system, messages: messages, maxTokens: 2000,
-                                                     model: .smart, purpose: "dictation-chat")
+                                                     model: .smart, purpose: "dictation-chat", cache: true)
             turns.append(Turn(ask: shown, instruction: instruction, answer: reply.trimmingCharacters(in: .whitespacesAndNewlines)))
             save()
         } catch {

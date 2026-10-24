@@ -67,6 +67,25 @@ if CommandLine.arguments.contains("--count-stats") {
     }
     exit(0)
 }
+// `sweetch --chat-probe <text file>`: two turns of the iPhone's talk about a dictation, cached as
+// it caches — what each cost goes to llm-usage/ as usual (purpose "chat-probe").
+if let i = CommandLine.arguments.firstIndex(of: "--chat-probe"), i + 1 < CommandLine.arguments.count {
+    let text = (try? String(contentsOfFile: CommandLine.arguments[i + 1], encoding: .utf8)) ?? ""
+    let done = DispatchSemaphore(value: 0)
+    Task {
+        var messages = [["role": "user", "content": "The dictation:\n\n\(text)\n\nSummarise it in a few sentences."]]
+        for next in ["Shorter.", "Now in English."] {
+            let reply = (try? await LLMClient.complete(system: "Rework the dictation as asked; reply with the text alone.",
+                                                       messages: messages, maxTokens: 800, model: .smart,
+                                                       purpose: "chat-probe", cache: true)) ?? "(failed)"
+            print("→ \(reply.prefix(120))")
+            messages += [["role": "assistant", "content": reply], ["role": "user", "content": next]]
+        }
+        done.signal()
+    }
+    done.wait()
+    exit(0)
+}
 // `sweetch --render-main <section> out.png`: Sweetch's window, a section of it, into a PNG.
 if let i = CommandLine.arguments.firstIndex(of: "--render-main"), i + 2 < CommandLine.arguments.count {
     let a = CommandLine.arguments
