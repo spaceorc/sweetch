@@ -82,6 +82,7 @@ final class Dictation: ObservableObject {
                 try start(waitingForScreenshot: waitingForScreenshot)
             } catch {
                 problem = error.localizedDescription
+                noteAction("failed", source: source, ["error": error.localizedDescription])
                 microphoneOff()
                 await endActivity(showing: .init(phase: .failed, text: error.localizedDescription))
                 throw error
@@ -98,7 +99,8 @@ final class Dictation: ObservableObject {
     private func start(waitingForScreenshot: Bool) throws {
         // The Action Button while the keyboard is incognito (by hand, or in a private tab): this
         // one is too — no screenshot, nothing to the Mac, nothing kept.
-        if !screen, SharedState.keyboardIncognito { incognito = true }
+        // Not in the app's own talk: its field is the app's, not private whatever the keyboard last said.
+        if !screen, !inApp, SharedState.keyboardIncognito { incognito = true }
         problem = nil
         preview = ""
         try microphoneOn()
@@ -189,10 +191,12 @@ final class Dictation: ObservableObject {
     }
 
     /// What started or stopped a recording, and how long after the last one ended — to the Mac's log.
-    func noteAction(_ action: String, source: String) {
+    func noteAction(_ action: String, source: String, _ more: [String: Any] = [:]) {
         guard !incognito else { return }
-        let event: [String: Any] = ["e": "phone-dictation", "t": Date().timeIntervalSince1970, "run": "app", "action": action,
-                                    "source": source, "phase": "\(phase)", "since_last_end": lastEnded.map { Date().timeIntervalSince($0) } ?? -1]
+        var event: [String: Any] = ["e": "phone-dictation", "t": Date().timeIntervalSince1970, "run": "app", "action": action,
+                                    "source": source, "phase": "\(phase)", "since_last_end": lastEnded.map { Date().timeIntervalSince($0) } ?? -1,
+                                    "in_app": inApp, "screen": screen]
+        event.merge(more) { _, b in b }
         Task { await PhoneLog.note([event]) }
     }
     private var lastEnded: Date?
@@ -229,7 +233,10 @@ final class Dictation: ObservableObject {
             let text = await Self.hearPrivately(recording) ?? apple ?? ""
             lastSeconds = Date().timeIntervalSince(started)
             last = text
-            if !text.isEmpty { PhoneServer.shared.publish(text, id: nil) }
+            if inApp, !screen {
+                if !text.isEmpty { insertion = text }
+                inApp = false
+            } else if !text.isEmpty { PhoneServer.shared.publish(text, id: nil) }
             try? FileManager.default.removeItem(at: recording)
             self.recording = nil
             server = nil
@@ -300,6 +307,8 @@ final class Dictation: ObservableObject {
         }
         try? FileManager.default.removeItem(at: recording)
         self.recording = nil
+        noteAction("heard", source: "stop", ["chars": last?.count ?? -1, "problem": problem ?? "",
+                                            "by": lastItem?.heardOn ?? (problem == nil ? "?" : "none")])
         // Dictated in the app's own talk: to its field.
         if inApp, !screen {
             if let last, !last.isEmpty { insertion = last }

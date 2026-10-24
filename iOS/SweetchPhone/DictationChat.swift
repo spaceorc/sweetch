@@ -15,6 +15,8 @@ struct DictationChat: View {
     @State private var hearing = false
     @State private var problem: String?
     @FocusState private var typing: Bool
+    /// A dictation was started here: its problem, if any, is shown here.
+    @State private var dictating = false
     @ObservedObject private var recorder = Dictation.shared
     @Environment(\.dismiss) private var dismiss
 
@@ -50,6 +52,9 @@ struct DictationChat: View {
                         }
                         if asking { ProgressView().frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 8) }
                         if let problem { Text(problem).font(.footnote).foregroundStyle(.red) }
+                        if let failed = recorder.problem, recorder.phase == .idle, dictating {
+                            Text("Dictation: \(failed)").font(.footnote).foregroundStyle(.red)
+                        }
                         Color.clear.frame(height: 1).id("end")
                     }
                     .padding()
@@ -216,6 +221,7 @@ struct DictationChat: View {
         recorder.keyboard = context
         recorder.inApp = true
         recorder.insertionFor = item.id
+        dictating = true
         Task { _ = try? await recorder.toggle(waitingForScreenshot: false, source: "chat-mic") }
     }
 

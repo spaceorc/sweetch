@@ -103,6 +103,16 @@ struct ContentView: View {
         .fullScreenCover(isPresented: $dictation.screen) { DictationScreen() }
         // "Talk about it" on the dictation screen: the talk, once the screen is down.
         .sheet(item: $talking) { item in DictationChat(item: item) }
+        // `--chat-dictate`: the newest dictation's talk up, and a dictation in it — to try it in the simulator.
+        .task {
+            guard ProcessInfo.processInfo.arguments.contains("--chat-dictate") else { return }
+            await DictationHistory.shared.refresh()
+            talking = DictationHistory.shared.items.first
+            try? await Task.sleep(for: .seconds(2))
+            NotificationCenter.default.post(name: .dictateInApp, object: nil)
+            try? await Task.sleep(for: .seconds(6))
+            await Dictation.shared.stop(reason: "chat-stop")
+        }
         .onChange(of: dictation.screen) { _, up in
             guard !up, let item = dictation.talkAbout else { return }
             dictation.talkAbout = nil

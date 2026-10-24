@@ -245,6 +245,7 @@ final class KeyboardModel {
         // Before anything is noted: a private tab's field is incognito from its first moment.
         privateFieldDeclined = false
         privateField = looksPrivate()
+        share()   // what the app reads now — not what a private tab left days ago
         KeyLog.paused = incognito
         KeyLog.decide()
         HostMemory.shared.paused = incognito
@@ -1999,7 +2000,7 @@ final class KeyboardModel {
     private var privateFieldDeclined = false
     var incognito: Bool { incognitoPicked || privateField }
     /// The app learns of it too (SharedState): a dictation the Action Button starts now is incognito.
-    private func share() { SharedState.keyboardIncognito = incognito }
+    func share() { SharedState.keyboardIncognito = incognito }
     /// Incognito turned off with text in the field: what's in it was typed unseen, so the field's
     /// own changes (a send clearing it, what it held) stay unlogged and unremembered until it's
     /// emptied or another field comes — words typed from now on are logged as usual.
