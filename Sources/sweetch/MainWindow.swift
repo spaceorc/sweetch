@@ -36,7 +36,9 @@ enum Appearance: String, CaseIterable {
 
 /// Which section the window shows — set from outside too (the menu's "All dictations").
 final class MainNavigation: ObservableObject {
-    @Published var section: MainView.Section? = .overview
+    @Published var section: MainView.Section? = .overview {
+        didSet { if section != oldValue { UILog.record("open", ["page": section.map { String(describing: $0) } ?? "none"]) } }
+    }
     /// The dictation to show when History opens.
     @Published var dictation: URL?
 }
@@ -48,6 +50,7 @@ final class MainNavigation: ObservableObject {
 final class MainWindow: NSObject, NSWindowDelegate {
     private let window: NSWindow
     private let navigation = MainNavigation()
+    private var clicks: Any?
     var onClose: (() -> Void)?
 
     init(actions: AppActions, section: MainView.Section = .overview) {
@@ -65,6 +68,13 @@ final class MainWindow: NSObject, NSWindowDelegate {
         window.isReleasedWhenClosed = false
         window.delegate = self
         window.center()
+        // Every click in the window, for finding later what was clicked and did nothing (UILog).
+        clicks = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] event in
+            if let self, event.window === self.window {
+                UILog.click(event, in: self.window, page: self.navigation.section.map { String(describing: $0) } ?? "none")
+            }
+            return event
+        }
     }
 
     func show(_ section: MainView.Section? = nil) {
@@ -73,7 +83,11 @@ final class MainWindow: NSObject, NSWindowDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    func windowWillClose(_ notification: Notification) { onClose?() }
+    func windowWillClose(_ notification: Notification) {
+        if let clicks { NSEvent.removeMonitor(clicks) }
+        clicks = nil
+        onClose?()
+    }
 
     /// `sweetch --render-main <section> <out.png> [width height]`: the window, dark, drawn into a
     /// PNG once its numbers have loaded — for looking at a section without putting it on screen.
