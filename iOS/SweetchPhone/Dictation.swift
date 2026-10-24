@@ -40,6 +40,20 @@ final class Dictation: ObservableObject {
     /// dictated in (`insertionFor`, the dictation it's about), now or when it's open again.
     @Published var insertion: String?
     var insertionFor: String?
+    /// `insertionFor` a field of the app's other than a talk: the keyboard types it there.
+    static let anyField = "field"
+
+    /// The keyboard's microphone in a field of the app's own (not a talk — that one dictates
+    /// itself): heard in place, no screen; the field gets it through the keyboard.
+    func dictateInField() {
+        guard phase == .idle, !screen else { return }
+        var context = SharedState.inAppContext ?? [:]
+        context["host_app"] = "Sweetch"
+        keyboard = context
+        inApp = true
+        insertionFor = Self.anyField
+        Task { _ = try? await toggle(waitingForScreenshot: false, source: "field-mic") }
+    }
     /// What the keyboard knew when its microphone opened the dictation: the context, in place of a
     /// screenshot. Taken by the next dictation.
     var keyboard: [String: Any]?
@@ -233,10 +247,13 @@ final class Dictation: ObservableObject {
             let text = await Self.hearPrivately(recording) ?? apple ?? ""
             lastSeconds = Date().timeIntervalSince(started)
             last = text
-            if inApp, !screen {
+            if inApp, !screen, insertionFor != Self.anyField {
                 if !text.isEmpty { insertion = text }
                 inApp = false
-            } else if !text.isEmpty { PhoneServer.shared.publish(text, id: nil) }
+            } else if !text.isEmpty {
+                PhoneServer.shared.publish(text, id: nil)
+                inApp = false
+            }
             try? FileManager.default.removeItem(at: recording)
             self.recording = nil
             server = nil
@@ -309,9 +326,13 @@ final class Dictation: ObservableObject {
         self.recording = nil
         noteAction("heard", source: "stop", ["chars": last?.count ?? -1, "problem": problem ?? "",
                                             "by": lastItem?.heardOn ?? (problem == nil ? "?" : "none")])
-        // Dictated in the app's own talk: to its field.
+        // Dictated in the app's own talk: to its field. In another field of the app's: to the
+        // keyboard there, as from the dictation screen (from the Mac too — the keyboard drops the
+        // second of the same words).
         if inApp, !screen {
-            if let last, !last.isEmpty { insertion = last }
+            if let last, !last.isEmpty {
+                if insertionFor == Self.anyField { PhoneServer.shared.publish(last, id: lastItem?.id) } else { insertion = last }
+            }
             inApp = false
         }
         await endActivity(showing: .init(phase: problem == nil || last != nil ? .done : .failed,

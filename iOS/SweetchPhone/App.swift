@@ -101,6 +101,28 @@ struct ContentView: View {
         }
         .tint(Color(red: 0.25, green: 0.72, blue: 0.62))
         .fullScreenCover(isPresented: $dictation.screen) { DictationScreen() }
+        // The keyboard's microphone in a field of the app's own (a talk handles its own).
+        .onReceive(NotificationCenter.default.publisher(for: .dictateInApp)) { _ in
+            if SharedState.appScreen?["screen"] as? String == "dictation-chat" { return }
+            dictation.dictateInField()
+        }
+        // That dictation, over the keyboard: what's heard so far, and Stop.
+        .overlay(alignment: .bottom) {
+            if dictation.inApp, dictation.insertionFor == Dictation.anyField, dictation.phase != .idle {
+                HStack(spacing: 12) {
+                    Image(systemName: "waveform").foregroundStyle(.red)
+                    Text(dictation.phase == .listening ? (dictation.preview.isEmpty ? "Listening…" : dictation.preview) : "Hearing…")
+                        .lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
+                    Button { Task { await dictation.stop(reason: "field-stop") } } label: {
+                        Image(systemName: "stop.circle.fill").font(.system(size: 30)).foregroundStyle(.red)
+                    }
+                    .disabled(dictation.phase != .listening)
+                }
+                .padding(.horizontal, 16).padding(.vertical, 10)
+                .background(.regularMaterial, in: Capsule())
+                .padding(.horizontal, 12).padding(.bottom, 8)
+            }
+        }
         // "Talk about it" on the dictation screen: the talk, once the screen is down.
         .sheet(item: $talking) { item in DictationChat(item: item) }
         // `--chat-dictate`: the newest dictation's talk up, and a dictation in it — to try it in the simulator.

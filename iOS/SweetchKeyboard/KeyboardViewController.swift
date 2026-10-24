@@ -2052,9 +2052,14 @@ final class KeyboardModel {
     }
 
     func openDictation() {
-        // In sweetch's own talk about a dictation: the app dictates there itself, in place.
-        if !incognito, let process = hostProcess, process == SharedState.appProcess, SharedState.appScreen != nil {
+        // In sweetch itself, any field: the app dictates there itself, in place — no screen to open
+        // over it, nothing to swipe back to. What's heard comes back to this field as usual (or the
+        // talk about a dictation puts it in its own).
+        if !incognito, let process = hostProcess, process == SharedState.appProcess {
             KeyLog.note("open-dictation", ["in_app": true])
+            var context = dictationContext()
+            context["host_app"] = "Sweetch"
+            SharedState.inAppContext = (try? JSONSerialization.data(withJSONObject: context)) != nil ? context : nil
             SharedState.askDictateInApp()
             return
         }

@@ -34,6 +34,12 @@ enum SharedState {
     /// dictates in its own talk. A Darwin notification: the keyboard can't call the app otherwise.
     static let dictateInApp = "com.spaceorc.sweetch.dictate-in-app"
 
+    /// What the keyboard knew of the field, for a dictation the app makes in its own field.
+    static var inAppContext: [String: Any]? {
+        get { defaults?.dictionary(forKey: "inAppContext") }
+        set { defaults?.set(newValue, forKey: "inAppContext") }
+    }
+
     static func askDictateInApp() {
         CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
                                              CFNotificationName(dictateInApp as CFString), nil, nil, true)
