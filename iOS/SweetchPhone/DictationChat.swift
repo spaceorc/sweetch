@@ -74,16 +74,12 @@ struct DictationChat: View {
         .onAppear {
             load()
             publishScreen()
+            takeInsertion()   // heard after the talk was closed
         }
         .onDisappear { SharedState.appScreen = nil }
         .onReceive(NotificationCenter.default.publisher(for: .dictateInApp)) { _ in dictateHere() }
         // Dictated in the talk's own field (the keyboard's microphone): put there, to edit or send.
-        .onChange(of: recorder.insertion) { _, text in
-            guard let text else { return }
-            recorder.insertion = nil
-            input = input.isEmpty ? text : input + " " + text
-            typing = true
-        }
+        .onChange(of: recorder.insertion) { _, _ in takeInsertion() }
         .onChange(of: turns) { _, _ in publishScreen() }
     }
 
@@ -201,6 +197,15 @@ struct DictationChat: View {
         .background(.bar)
     }
 
+    /// What was dictated here, into the field — to edit or send.
+    private func takeInsertion() {
+        guard let text = recorder.insertion, recorder.insertionFor == nil || recorder.insertionFor == item.id else { return }
+        recorder.insertion = nil
+        recorder.insertionFor = nil
+        input = input.isEmpty ? text : input + " " + text
+        typing = true
+    }
+
     /// A dictation here, into the field: the chat's own microphone, or the keyboard's in it. The
     /// keyboard goes down; the Mac is told it's this talk, about this dictation.
     private func dictateHere() {
@@ -210,6 +215,7 @@ struct DictationChat: View {
         context["sweetch_screen"] = SharedState.appScreen
         recorder.keyboard = context
         recorder.inApp = true
+        recorder.insertionFor = item.id
         Task { _ = try? await recorder.toggle(waitingForScreenshot: false, source: "chat-mic") }
     }
 

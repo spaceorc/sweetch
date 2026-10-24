@@ -36,8 +36,10 @@ final class Dictation: ObservableObject {
     /// The screen was opened by the keyboard in sweetch's own talk about a dictation: nothing to
     /// swipe back to — what's heard is put in the talk's field from here (`insertion`).
     @Published var inApp = false
-    /// Heard for the talk's field: taken by the talk, which puts it in its field.
+    /// Heard for the talk's field: taken by the talk, which puts it in its field — the talk it was
+    /// dictated in (`insertionFor`, the dictation it's about), now or when it's open again.
     @Published var insertion: String?
+    var insertionFor: String?
     /// What the keyboard knew when its microphone opened the dictation: the context, in place of a
     /// screenshot. Taken by the next dictation.
     var keyboard: [String: Any]?
@@ -241,7 +243,11 @@ final class Dictation: ObservableObject {
         defer { server = nil }
         let started = Date()
         do {
-            guard !Self.phoneOnly, let mac = await server?.value else { throw Failure("the Mac is out of reach") }
+            // No Mac when it started (the phone just woken, the network not up yet — 24 Oct, a talk's
+            // dictation heard on the phone alone): asked again now, seconds later.
+            var found = await server?.value
+            if found == nil, !Self.phoneOnly { found = await Server.reachable() }
+            guard !Self.phoneOnly, let mac = found else { throw Failure("the Mac is out of reach") }
             let audio = try Data(contentsOf: recording)
             let text: String
             var id: String?
