@@ -198,6 +198,10 @@ final class KeyboardModel {
     private var attachedMark: String?
     /// The space the user asked back with ⌫: the next mark goes after it, as typed.
     private var keepSpace = false
+    /// Where the user took a mark back off its word (the text before the cursor then): the same
+    /// mark there again — even after the space deleted and typed anew — stays after the space.
+    /// «пришло :(» took four tries on 24 Oct.
+    private var refusedAttach: (context: String, mark: String)?
     private var lastShiftAt = Date.distantPast
     private var word = ""
     private let lastSeqKey = "lastSeq"
@@ -374,19 +378,35 @@ final class KeyboardModel {
         // left the cursor: put somewhere else by hand, a space before a mark is meant («:» typed
         // after a space in the middle of the text, 23 Oct).
         let untouched = proxy?.documentContextBeforeInput == ownCursor
+        // «(» right after «:» or «;» put to the word is a smiley: to the word too, «пришло:(» —
+        // as «)» is; not «пришло: (» (24 Oct, twice).
+        if typed == "(", let mark = attachedMark, ":;".contains(mark), untouched,
+           proxy?.documentContextBeforeInput?.hasSuffix(mark + " ") == true {
+            deleteBackward()
+            insert("( ")
+            spaceIsOurs = true
+            attachedMark = "("
+            log("type", ["char": typed, "smiley": true])
+            if !layout.isLetters { layout = letters }
+            afterTyping()
+            return
+        }
         attachedMark = nil
         // A closing quote too: «»», «”», or «"» with one open before it — «"рекламный "» after a
         // picked word, retyped by hand on 23 Oct. An opening one stays after its space.
         let context = proxy?.documentContextBeforeInput ?? ""
         let closingQuote = "»”".contains(typed) || (typed == "\"" && context.filter { $0 == "\"" }.count % 2 == 1)
-        if spaceIsOurs || spaceEndedWord, !keepSpace, untouched, ".,!?:;)".contains(typed) || closingQuote, context.hasSuffix(" ") {
+        let refused = refusedAttach.map { $0.context == context && $0.mark == typed } ?? false
+        if spaceIsOurs || spaceEndedWord, !keepSpace, !refused, untouched, ".,!?:;)".contains(typed) || closingQuote, context.hasSuffix(" ") {
             spaceEndedWord = false
             deleteBackward()
             insert(typed + " ")
             spaceIsOurs = true
             attachedMark = typed
             log("type", ["char": typed, "before_our_space": true])
-            if !layout.isLetters { layout = letters }
+            // After «:» or «;» a smiley's bracket may come next: the symbols stay — back on the
+            // letters, the tap meant for «(» typed «р» (24 Oct, twice).
+            if !layout.isLetters, !":;".contains(typed) { layout = letters }
             afterTyping()
             return
         }
@@ -470,6 +490,7 @@ final class KeyboardModel {
             attachedMark = nil
             deleteBackward(); deleteBackward()
             insert(" ")
+            refusedAttach = (proxy?.documentContextBeforeInput ?? "", mark)
             spaceIsOurs = false
             spaceEndedWord = false
             keepSpace = true
