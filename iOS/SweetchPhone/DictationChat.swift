@@ -48,9 +48,13 @@ struct DictationChat: View {
                         dictation
                         ForEach(turns) { turn in
                             ask(turn.ask)
-                            answer(turn.answer)
+                            if turn.answer.isEmpty {
+                                // Asked, the answer coming.
+                                if asking { ProgressView().frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 8) }
+                            } else {
+                                answer(turn.answer)
+                            }
                         }
-                        if asking { ProgressView().frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 8) }
                         if let problem { Text(problem).font(.footnote).foregroundStyle(.red) }
                         if let failed = recorder.problem, recorder.phase == .idle, dictating {
                             Text("Dictation: \(failed)").font(.footnote).foregroundStyle(.red)
@@ -91,7 +95,7 @@ struct DictationChat: View {
     /// What the keyboard tells the Mac a dictation into this chat is about: this one.
     private func publishScreen() {
         var screen: [String: Any] = ["screen": "dictation-chat", "about_id": item.id, "about": String(original.prefix(3000))]
-        if let last = turns.last?.answer { screen["last"] = String(last.prefix(1500)) }
+        if let last = turns.last(where: { !$0.answer.isEmpty })?.answer { screen["last"] = String(last.prefix(1500)) }
         SharedState.appScreen = screen
     }
 
@@ -240,22 +244,26 @@ struct DictationChat: View {
     private func send(_ shown: String, instruction: String) async {
         guard !instruction.isEmpty else { return }
         typing = false
-        asking = true
         problem = nil
-        defer { asking = false }
         // The talk so far, each ask working on what came last: the dictation, then each version.
-        let asks = turns.map { $0.instruction ?? $0.ask } + [instruction]
+        let done = turns.filter { !$0.answer.isEmpty }
+        let asks = done.map { $0.instruction ?? $0.ask } + [instruction]
         var messages: [[String: String]] = [["role": "user", "content": "The dictation:\n\n\(original)\n\n\(asks[0])"]]
-        for (turn, next) in zip(turns, asks.dropFirst()) {
+        for (turn, next) in zip(done, asks.dropFirst()) {
             messages.append(["role": "assistant", "content": turn.answer])
             messages.append(["role": "user", "content": next])
         }
+        // The ask shows at once; its answer under it when it comes.
+        turns = done + [Turn(ask: shown, instruction: instruction, answer: "")]
+        asking = true
+        defer { asking = false }
         do {
             let reply = try await LLMClient.complete(system: Self.system, messages: messages, maxTokens: 2000,
                                                      model: .smart, purpose: "dictation-chat", cache: true)
-            turns.append(Turn(ask: shown, instruction: instruction, answer: reply.trimmingCharacters(in: .whitespacesAndNewlines)))
+            turns[turns.count - 1].answer = reply.trimmingCharacters(in: .whitespacesAndNewlines)
             save()
         } catch {
+            turns.removeLast()
             problem = LLMClient.isConfigured ? error.localizedDescription : "No model credentials on the phone yet — open the app once with a Mac in reach."
         }
     }

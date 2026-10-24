@@ -249,11 +249,12 @@ final class DictationServer {
             let entry = DictationsWindow.Entry(dir: dir, date: f.date(from: dir.lastPathComponent) ?? .distantPast, session: [:])
             let session = entry.json("session.json")
             guard !session.isEmpty, session["cancelled"] as? Bool != true, session["error"] == nil else { continue }
-            // Dictated into sweetch's own fields — its talk about a dictation, its search, its
-            // settings: input to sweetch, not a dictation of the user's; kept, not listed.
-            if let context = (try? Data(contentsOf: dir.appendingPathComponent("context.json")))
-                .flatMap({ try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }),
-               context["app"] as? String == "Sweetch" || (context["keyboard"] as? [String: Any])?["sweetch_screen"] != nil { continue }
+            // Dictated into sweetch's own fields: into a talk about a dictation — part of that talk,
+            // kept there, not listed; into its search, its settings — listed apart ("in_app").
+            let context = (try? Data(contentsOf: dir.appendingPathComponent("context.json")))
+                .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            if (context?["keyboard"] as? [String: Any])?["sweetch_screen"] != nil { continue }
+            let inApp = context?["app"] as? String == "Sweetch"
             let full = DictationsWindow.Entry(dir: dir, date: entry.date, session: session)
             let text = full.said
             guard !text.isEmpty, text != full.summary || session["inserted"] != nil || session["text"] != nil else { continue }
@@ -262,6 +263,7 @@ final class DictationServer {
             if let seconds = session["seconds"] as? Double { item["seconds"] = seconds }
             if let to = session["handoff"] as? String { item["handoff"] = to }
             item["heard_on"] = session["heard_on"] as? String ?? "mac"
+            if inApp { item["in_app"] = true }
             // The model meant to settle it didn't — too slow, failed, no credentials, or its answer
             // refused: typed as whisper heard it. (Skipped is settled: every listening agreed.)
             if let s = session["settlement"] as? [String: Any], s["skipped"] == nil,

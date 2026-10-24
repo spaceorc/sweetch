@@ -20,6 +20,8 @@ struct DictationItem: Identifiable, Hashable {
     let before: String?
     /// Heard on the Mac, but the model didn't settle it: as whisper heard it, unpunctuated.
     let raw: Bool
+    /// Dictated into a field of sweetch's own (its search, its settings): input to the app.
+    let inApp: Bool
 
     /// Heard without a Mac: likely worse.
     var heardOnPhone: Bool { heardOn == "phone" || heardOn == "apple" }
@@ -38,6 +40,7 @@ struct DictationItem: Identifiable, Hashable {
         local = json["local"] as? Bool ?? false
         before = json["before"] as? String
         raw = json["raw"] as? Bool ?? false
+        inApp = json["in_app"] as? Bool ?? false
     }
 }
 
@@ -196,7 +199,7 @@ struct HistoryView: View {
 
     private var shown: [DictationItem] {
         history.items.filter { item in
-            (device == "All" || (device == "iPhone") == (item.device == "iPhone"))
+            (device == "In app" ? item.inApp : !item.inApp && (device == "All" || (device == "iPhone") == (item.device == "iPhone")))
                 && (query.isEmpty || item.text.localizedCaseInsensitiveContains(query) || item.app.localizedCaseInsensitiveContains(query))
         }
     }
@@ -209,7 +212,7 @@ struct HistoryView: View {
     var body: some View {
         List {
             Section {
-                Picker("Device", selection: $device) { ForEach(["All", "iPhone", "Mac"], id: \.self) { Text($0) } }
+                Picker("Device", selection: $device) { ForEach(["All", "iPhone", "Mac", "In app"], id: \.self) { Text($0) } }
                     .pickerStyle(.segmented)
                     .listRowBackground(Color.clear)
                     .listRowInsets(EdgeInsets())

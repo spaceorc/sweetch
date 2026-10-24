@@ -123,7 +123,7 @@ struct HomeView: View {
             }
             .padding(.bottom, 6)
             if let problem = dictation.problem { Text(problem).font(.footnote).foregroundStyle(.red).padding(.bottom, 6) }
-            ForEach(history.items.prefix(6)) { item in
+            ForEach(history.items.filter { !$0.inApp }.prefix(6)) { item in
                 Divider()
                 DictationRow(item: item, open: { open = item }, copy: { copier.copy(item.text) })
                     .padding(.vertical, 6)
