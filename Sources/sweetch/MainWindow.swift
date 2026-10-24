@@ -37,6 +37,8 @@ enum Appearance: String, CaseIterable {
 /// Which section the window shows — set from outside too (the menu's "All dictations").
 final class MainNavigation: ObservableObject {
     @Published var section: MainView.Section? = .overview
+    /// The dictation to show when History opens.
+    @Published var dictation: URL?
 }
 
 /// Sweetch's own window, for the whole system — the three devices, dictation and typing, what runs
@@ -159,7 +161,7 @@ struct MainView: View {
             .safeAreaInset(edge: .top) { emblem }
             .safeAreaInset(edge: .bottom) {
                 Button { navigation.section = .settings } label: { badge(.settings) }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.plain).clickable()
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 18).padding(.bottom, 14)
             }
@@ -341,6 +343,11 @@ private struct EqualRow: Layout {
 }
 
 private extension View {
+    /// The pointing hand over what can be clicked.
+    func clickable() -> some View {
+        onHover { inside in if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() } }
+    }
+
     func card(padding: CGFloat = 16) -> some View {
         self.padding(padding)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -371,7 +378,7 @@ private struct CardTitle: View {
         HStack {
             Text(title).font(.headline)
             Spacer()
-            if let link, let action { Button(link, action: action).buttonStyle(.link) }
+            if let link, let action { Button(link, action: action).buttonStyle(.link).clickable() }
         }
     }
 }
@@ -480,7 +487,7 @@ private struct OverviewPane: View {
                 .background(on ? AnyShapeStyle(color) : AnyShapeStyle(Color.groupedSecondary), in: Capsule())
                 .overlay(Capsule().strokeBorder(Color.primary.opacity(on ? 0 : 0.12)))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.plain).clickable()
     }
 
     /// How the cards are laid out — "bento" (rows), "masonry", "strip"; SWEETCH_OVERVIEW picks one
@@ -530,7 +537,7 @@ private struct OverviewPane: View {
             .card(padding: 18)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.plain).clickable()
     }
 
     private var macLine: String {
@@ -629,7 +636,7 @@ private struct OverviewPane: View {
             .card()
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.plain).clickable()
     }
 
     // MARK: Today
@@ -652,15 +659,22 @@ private struct OverviewPane: View {
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(recent, id: \.dir) { entry in
                     Divider()
-                    HStack(alignment: .firstTextBaseline, spacing: 12) {
-                        Text(entry.date.formatted(date: .omitted, time: .shortened)).monospacedDigit()
-                            .foregroundStyle(.secondary).frame(width: 48, alignment: .leading)
-                        Text(entry.said).lineLimit(1).truncationMode(.tail)
-                        Spacer(minLength: 8)
-                        Text(entry.app).foregroundStyle(.secondary).lineLimit(1)
+                    Button {
+                        navigation.dictation = entry.dir
+                        navigation.section = .dictations
+                    } label: {
+                        HStack(alignment: .firstTextBaseline, spacing: 12) {
+                            Text(entry.date.formatted(date: .omitted, time: .shortened)).monospacedDigit()
+                                .foregroundStyle(.secondary).frame(width: 48, alignment: .leading)
+                            Text(entry.said).lineLimit(1).truncationMode(.tail)
+                            Spacer(minLength: 8)
+                            Text(entry.app).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        .font(.callout)
+                        .padding(.vertical, 8)
+                        .contentShape(Rectangle())
                     }
-                    .font(.callout)
-                    .padding(.vertical, 8)
+                    .buttonStyle(.plain).clickable()
                 }
             }
         }
@@ -783,7 +797,7 @@ private struct OverviewPane: View {
             .card(padding: 18)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.plain).clickable()
     }
 }
 
@@ -794,6 +808,7 @@ private struct OverviewPane: View {
 private struct DictationsPane: View {
     let actions: AppActions
     @State private var entries: [DictationsWindow.Entry] = []
+    @EnvironmentObject private var navigation: MainNavigation
     @State private var selected: URL?
     @State private var query = ""
     @State private var source = "All"
@@ -873,6 +888,10 @@ private struct DictationsPane: View {
 
     private func reload() {
         entries = Self.load(limit: 1000)
+        if let wanted = navigation.dictation {
+            selected = wanted
+            navigation.dictation = nil
+        }
         if selected == nil || !entries.contains(where: { $0.dir == selected }) { selected = entries.first?.dir }
     }
 
@@ -1312,7 +1331,7 @@ private struct ScreenshotsPane: View {
                         }
                         .card(padding: 10)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.plain).clickable()
                 }
             }
         }
