@@ -76,6 +76,7 @@ struct DictationChat: View {
             publishScreen()
         }
         .onDisappear { SharedState.appScreen = nil }
+        .onReceive(NotificationCenter.default.publisher(for: .dictateInApp)) { _ in dictateHere() }
         // Dictated in the talk's own field (the keyboard's microphone): put there, to edit or send.
         .onChange(of: recorder.insertion) { _, text in
             guard let text else { return }
@@ -161,11 +162,29 @@ struct DictationChat: View {
                 .padding(.horizontal)
             }
             HStack(spacing: 8) {
+                if recorder.inApp, recorder.phase != .idle {
+                    // Dictating here: what's heard so far, the keyboard down.
+                    Text(recorder.phase == .listening ? (recorder.preview.isEmpty ? "Listening…" : recorder.preview) : "Hearing…")
+                        .lineLimit(3).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 12).padding(.vertical, 8)
+                        .background(Color.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    Button { Task { await recorder.stop(reason: "chat-stop") } } label: {
+                        Image(systemName: recorder.phase == .listening ? "stop.circle.fill" : "hourglass.circle.fill")
+                            .font(.system(size: 30)).foregroundStyle(.red)
+                    }
+                    .disabled(recorder.phase != .listening)
+                } else {
                 TextField("Ask about it — «only about the release»", text: $input, axis: .vertical)
                     .lineLimit(1...4)
                     .focused($typing)
                     .padding(.horizontal, 12).padding(.vertical, 8)
                     .background(Color.groupedSecondary, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                Button { dictateHere() } label: {
+                    Image(systemName: "mic.circle.fill").font(.system(size: 30))
+                }
+                .accessibilityLabel("Dictate")
+                .disabled(asking || recorder.phase != .idle)
                 Button {
                     let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
                     input = ""
@@ -174,11 +193,24 @@ struct DictationChat: View {
                     Image(systemName: "arrow.up.circle.fill").font(.system(size: 30))
                 }
                 .disabled(asking || input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
             }
             .padding(.horizontal)
         }
         .padding(.vertical, 8)
         .background(.bar)
+    }
+
+    /// A dictation here, into the field: the chat's own microphone, or the keyboard's in it. The
+    /// keyboard goes down; the Mac is told it's this talk, about this dictation.
+    private func dictateHere() {
+        guard recorder.phase == .idle else { return }
+        typing = false
+        var context: [String: Any] = ["host_app": "Sweetch", "field_before": input]
+        context["sweetch_screen"] = SharedState.appScreen
+        recorder.keyboard = context
+        recorder.inApp = true
+        Task { _ = try? await recorder.toggle(waitingForScreenshot: false, source: "chat-mic") }
     }
 
     // MARK: Asking

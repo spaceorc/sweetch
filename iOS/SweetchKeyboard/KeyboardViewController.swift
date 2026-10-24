@@ -2051,6 +2051,12 @@ final class KeyboardModel {
     }
 
     func openDictation() {
+        // In sweetch's own talk about a dictation: the app dictates there itself, in place.
+        if !incognito, let process = hostProcess, process == SharedState.appProcess, SharedState.appScreen != nil {
+            KeyLog.note("open-dictation", ["in_app": true])
+            SharedState.askDictateInApp()
+            return
+        }
         UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.dictationOpenedKey)
         observeField()
         rememberField(now: true)

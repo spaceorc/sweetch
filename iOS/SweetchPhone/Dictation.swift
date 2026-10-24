@@ -294,6 +294,11 @@ final class Dictation: ObservableObject {
         }
         try? FileManager.default.removeItem(at: recording)
         self.recording = nil
+        // Dictated in the app's own talk: to its field.
+        if inApp, !screen {
+            if let last, !last.isEmpty { insertion = last }
+            inApp = false
+        }
         await endActivity(showing: .init(phase: problem == nil || last != nil ? .done : .failed,
                                          text: last.map { $0.isEmpty ? "Nothing heard" : $0 } ?? problem ?? ""))
     }
@@ -322,7 +327,7 @@ final class Dictation: ObservableObject {
 
     /// The clipboard only takes text from the app in front; in the background the Shortcut copies it.
     private func copyInFront(_ text: String) {
-        if !text.isEmpty, UIApplication.shared.applicationState == .active { UIPasteboard.general.string = text }
+        if !inApp, !text.isEmpty, UIApplication.shared.applicationState == .active { UIPasteboard.general.string = text }
     }
 
     private func heardSoFar(_ text: String) {

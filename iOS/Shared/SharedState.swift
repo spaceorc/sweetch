@@ -30,6 +30,15 @@ enum SharedState {
         set { defaults?.set(newValue, forKey: "appScreen") }
     }
 
+    /// The keyboard's microphone in sweetch itself: not the dictation screen — the app, in front,
+    /// dictates in its own talk. A Darwin notification: the keyboard can't call the app otherwise.
+    static let dictateInApp = "com.spaceorc.sweetch.dictate-in-app"
+
+    static func askDictateInApp() {
+        CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
+                                             CFNotificationName(dictateInApp as CFString), nil, nil, true)
+    }
+
     /// A dictation heard on the phone itself: its text, its folder, and when (in milliseconds, as
     /// the app's loopback server numbers what it publishes).
     static func publishHeard(_ text: String, id: String?, seq: Int) {

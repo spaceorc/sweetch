@@ -14,6 +14,10 @@ struct SweetchPhoneApp: App {
             Task { await PhoneLog.note([event]) }
         }
         SharedState.appProcess = ProcessInfo.processInfo.processIdentifier   // the keyboard knows it's in sweetch
+        // The keyboard's microphone in the app's own talk: to the talk, as a notification here.
+        CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), nil, { _, _, _, _, _ in
+            DispatchQueue.main.async { NotificationCenter.default.post(name: .dictateInApp, object: nil) }
+        }, SharedState.dictateInApp as CFString, nil, .deliverImmediately)
         LivePreview.prepare()
         Credentials.load()
         PhoneServer.shared.start()   // the keyboard hears from here what the phone heard itself
@@ -208,6 +212,11 @@ struct SettingsView: View {
             }
             .navigationTitle("Settings")
     }
+}
+
+extension Notification.Name {
+    /// The keyboard's microphone tapped in the app's own talk about a dictation.
+    static let dictateInApp = Notification.Name("sweetch.dictate-in-app")
 }
 
 /// The statistics' numbers on the iPhone: counted on a Mac that answers.
