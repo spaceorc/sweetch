@@ -80,8 +80,12 @@ struct DictationChat: View {
             HStack(spacing: 6) {
                 Image(systemName: item.device == "iPhone" ? "iphone" : "laptopcomputer")
                 if !item.app.isEmpty { Text(item.app) }
-                if item.heardOnPhone, heard == nil { Text("· heard on the phone").foregroundStyle(.orange) }
-                if heard != nil || item.heardOn == "mac-again" { Text("· heard again") }
+                Spacer()
+                if heard != nil {
+                    Label("heard again", systemImage: "arrow.clockwise").font(.caption2)
+                } else {
+                    HeardBadge(item: item)
+                }
             }
             .font(.caption).foregroundStyle(.secondary)
             Text(original).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)

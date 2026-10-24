@@ -9,6 +9,7 @@ struct HomeView: View {
     @State private var mac: Server??
     @State private var today: [String: Any] = [:]
     @State private var week: [String: Any] = [:]
+    @State private var open: DictationItem?
 
     private static let mint = Color(red: 0.25, green: 0.72, blue: 0.62)
 
@@ -28,6 +29,7 @@ struct HomeView: View {
         .refreshable { await load() }
         .task { await load() }
         .overlay(alignment: .bottom) { CopiedToast(copier: copier) }
+        .sheet(item: $open) { item in DictationChat(item: item) }
     }
 
     private func load() async {
@@ -117,18 +119,18 @@ struct HomeView: View {
             HStack {
                 Text("Last dictations").font(.headline)
                 Spacer()
-                Text("tap to copy").font(.caption).foregroundStyle(.secondary)
+                NavigationLink("All") { HistoryView() }.font(.subheadline)
             }
             .padding(.bottom, 6)
             if let problem = dictation.problem { Text(problem).font(.footnote).foregroundStyle(.red).padding(.bottom, 6) }
             ForEach(history.items.prefix(6)) { item in
                 Divider()
-                Button { copier.copy(item.text) } label: {
-                    DictationRow(item: item).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
-                        .contentShape(Rectangle())
-                }
-                .foregroundStyle(.primary)
-                .contextMenu { ShareLink(item: item.text) }
+                DictationRow(item: item, open: { open = item }, copy: { copier.copy(item.text) })
+                    .padding(.vertical, 6)
+                    .contextMenu {
+                        Button("Copy", systemImage: "doc.on.doc") { copier.copy(item.text) }
+                        ShareLink(item: item.text)
+                    }
             }
             if history.items.isEmpty {
                 Text(dictation.last ?? "None yet.").foregroundStyle(.secondary).padding(.vertical, 8)

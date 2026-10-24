@@ -123,21 +123,57 @@ final class Copier: ObservableObject {
 /// A dictation in a list: what was said, when, into what.
 struct DictationRow: View {
     let item: DictationItem
+    /// Opens the dictation; the copy button beside copies it at once.
+    var open: () -> Void
+    var copy: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(item.text).lineLimit(3).multilineTextAlignment(.leading)
-            HStack(spacing: 6) {
-                Image(systemName: item.device == "iPhone" ? "iphone" : "laptopcomputer")
-                Text(item.date.formatted(Calendar.current.isDateInToday(item.date) ? .dateTime.hour().minute()
-                                         : .dateTime.day().month().hour().minute()))
-                if !item.app.isEmpty, item.app != "iPhone" { Text("· \(item.app)") }
-                if item.heardOnPhone { Text("· heard on the phone").foregroundStyle(.orange) }
-                if item.heardOn == "mac-again" { Text("· heard again") }
+        HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(item.text.isEmpty ? "Nothing heard" : item.text).lineLimit(3).multilineTextAlignment(.leading)
+                    .foregroundStyle(item.text.isEmpty ? .secondary : .primary)
+                HStack(spacing: 6) {
+                    // Where it was said…
+                    Image(systemName: item.device == "iPhone" ? "iphone" : "laptopcomputer")
+                    Text(item.date.formatted(Calendar.current.isDateInToday(item.date) ? .dateTime.hour().minute()
+                                             : .dateTime.day().month().hour().minute()))
+                    if !item.app.isEmpty, item.app != "iPhone" { Text("· \(item.app)").lineLimit(1) }
+                    Spacer(minLength: 4)
+                    // …and where it was heard.
+                    HeardBadge(item: item)
+                }
+                .font(.caption).foregroundStyle(.secondary)
             }
-            .font(.caption).foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .onTapGesture(perform: open)
+            Button(action: copy) {
+                Image(systemName: "doc.on.doc").font(.system(size: 15)).frame(width: 36, height: 36)
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("Copy")
+            .disabled(item.text.isEmpty)
         }
         .padding(.vertical, 2)
+    }
+}
+
+/// Where a dictation was heard: the Mac (quietly — that's the usual), the phone alone (orange: it
+/// may well be wrong), or the Mac again.
+struct HeardBadge: View {
+    let item: DictationItem
+
+    var body: some View {
+        if item.heardOnPhone {
+            Label(item.local ? "phone only · not sent" : "phone only", systemImage: "exclamationmark.triangle.fill")
+                .font(.caption2.weight(.semibold)).foregroundStyle(.orange)
+                .padding(.horizontal, 7).padding(.vertical, 2)
+                .background(Color.orange.opacity(0.15), in: Capsule())
+        } else if item.heardOn == "mac-again" {
+            Label("heard again", systemImage: "arrow.clockwise").font(.caption2).foregroundStyle(.secondary)
+        } else {
+            Label("Mac", systemImage: "checkmark.seal").font(.caption2).foregroundStyle(.secondary)
+        }
     }
 }
 
@@ -176,8 +212,7 @@ struct HistoryView: View {
             ForEach(days, id: \.0) { day, items in
                 Section(day.formatted(Calendar.current.isDateInToday(day) ? .dateTime.weekday(.wide) : .dateTime.weekday(.wide).day().month(.wide))) {
                     ForEach(items) { item in
-                        Button { open = item } label: { DictationRow(item: item) }
-                            .foregroundStyle(.primary)
+                        DictationRow(item: item, open: { open = item }, copy: { copier.copy(item.text) })
                             .contextMenu {
                                 Button("Copy", systemImage: "doc.on.doc") { copier.copy(item.text) }
                                 ShareLink(item: item.text)
