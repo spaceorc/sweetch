@@ -202,6 +202,12 @@ final class KeyboardModel {
     /// mark there again — even after the space deleted and typed anew — stays after the space.
     /// «пришло :(» took four tries on 24 Oct.
     private var refusedAttach: (context: String, mark: String)?
+    /// «:» or «;» typed after a space the keyboard put in, left where typed for now: a smiley may
+    /// be coming («пришло :(»). The space after it is what tells — then it goes to the word,
+    /// «пришло: ». The text before the cursor with the mark typed.
+    private var pendingMark: (context: String, mark: String)?
+    /// A mark the space after it put to its word: ⌫ next puts it back where it was typed.
+    private var deferredAttach: String?
     private var lastShiftAt = Date.distantPast
     private var word = ""
     private let lastSeqKey = "lastSeq"
@@ -328,7 +334,7 @@ final class KeyboardModel {
         }
         rememberField(now: false)
         // The cursor moved, or the text changed, not by the keyboard: its spaces are the user's.
-        if proxy?.documentContextBeforeInput != ownCursor { spaceIsOurs = false; spaceEndedWord = false; attachedMark = nil }
+        if proxy?.documentContextBeforeInput != ownCursor { spaceIsOurs = false; spaceEndedWord = false; attachedMark = nil; deferredAttach = nil }
         log("host-change")
         autoCapitalise()
         fieldChanged()
@@ -378,35 +384,33 @@ final class KeyboardModel {
         // left the cursor: put somewhere else by hand, a space before a mark is meant («:» typed
         // after a space in the middle of the text, 23 Oct).
         let untouched = proxy?.documentContextBeforeInput == ownCursor
-        // «(» right after «:» or «;» put to the word is a smiley: to the word too, «пришло:(» —
-        // as «)» is; not «пришло: (» (24 Oct, twice).
-        if typed == "(", let mark = attachedMark, ":;".contains(mark), untouched,
-           proxy?.documentContextBeforeInput?.hasSuffix(mark + " ") == true {
-            deleteBackward()
-            insert("( ")
-            spaceIsOurs = true
-            attachedMark = "("
-            log("type", ["char": typed, "smiley": true])
-            if !layout.isLetters { layout = letters }
-            afterTyping()
-            return
-        }
         attachedMark = nil
         // A closing quote too: «»», «”», or «"» with one open before it — «"рекламный "» after a
         // picked word, retyped by hand on 23 Oct. An opening one stays after its space.
         let context = proxy?.documentContextBeforeInput ?? ""
         let closingQuote = "»”".contains(typed) || (typed == "\"" && context.filter { $0 == "\"" }.count % 2 == 1)
         let refused = refusedAttach.map { $0.context == context && $0.mark == typed } ?? false
-        if spaceIsOurs || spaceEndedWord, !keepSpace, !refused, untouched, ".,!?:;)".contains(typed) || closingQuote, context.hasSuffix(" ") {
+        pendingMark = nil
+        deferredAttach = nil
+        // «:» and «;» begin smileys: left where typed until the space after them says it's a mark
+        // (see space()) — the user's idea, 24 Oct.
+        if spaceIsOurs || spaceEndedWord, !keepSpace, !refused, untouched, ":;".contains(typed), context.hasSuffix(" ") {
+            spaceIsOurs = false
+            spaceEndedWord = false
+            insert(typed)
+            pendingMark = (proxy?.documentContextBeforeInput ?? "", typed)
+            log("type", ["char": typed, "mark_pending": true])
+            fieldChanged()
+            return
+        }
+        if spaceIsOurs || spaceEndedWord, !keepSpace, !refused, untouched, ".,!?)".contains(typed) || closingQuote, context.hasSuffix(" ") {
             spaceEndedWord = false
             deleteBackward()
             insert(typed + " ")
             spaceIsOurs = true
             attachedMark = typed
             log("type", ["char": typed, "before_our_space": true])
-            // After «:» or «;» a smiley's bracket may come next: the symbols stay — back on the
-            // letters, the tap meant for «(» typed «р» (24 Oct, twice).
-            if !layout.isLetters, !":;".contains(typed) { layout = letters }
+            if !layout.isLetters { layout = letters }
             afterTyping()
             return
         }
@@ -439,6 +443,20 @@ final class KeyboardModel {
         autoFixed = nil
         offered = nil
         spaceEndedWord = false
+        let before0 = proxy?.documentContextBeforeInput ?? ""
+        // A space after a «:» left where typed: it was a mark — to the word, the space after it.
+        if let pending = pendingMark, before0 == pending.context, before0.hasSuffix(" " + pending.mark) {
+            pendingMark = nil
+            deleteBackward(); deleteBackward()
+            insert(pending.mark + " ")
+            deferredAttach = pending.mark
+            log("space", ["mark_attached": pending.mark])
+            if !layout.isLetters { layout = letters }
+            afterTyping()
+            return
+        }
+        pendingMark = nil
+        deferredAttach = nil
         noteWordEnd(" ")
         let before = proxy?.documentContextBeforeInput ?? ""
         if spaceIsOurs, before.hasSuffix(" ") {
@@ -484,6 +502,20 @@ final class KeyboardModel {
     }
 
     func backspace() {
+        pendingMark = nil
+        // Right after a space put «:» to its word: back as it was typed, «пришло :», and it stays.
+        if let mark = deferredAttach, proxy?.documentContextBeforeInput?.hasSuffix(mark + " ") == true {
+            deferredAttach = nil
+            deleteBackward(); deleteBackward()
+            insert(" " + mark)
+            refusedAttach = (String((proxy?.documentContextBeforeInput ?? "").dropLast()), mark)
+            spaceIsOurs = false
+            spaceEndedWord = false
+            log("mark-attach-undone", ["mark": mark, "deferred": true])
+            afterTyping()
+            return
+        }
+        deferredAttach = nil
         // Right after a mark took a space's place: the space back, the mark gone — the next mark
         // stays after the space.
         if let mark = attachedMark, proxy?.documentContextBeforeInput?.hasSuffix(mark + " ") == true {
