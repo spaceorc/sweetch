@@ -18,6 +18,8 @@ struct DictationItem: Identifiable, Hashable {
     let local: Bool
     /// What it said before it was heard again.
     let before: String?
+    /// Heard on the Mac, but the model didn't settle it: as whisper heard it, unpunctuated.
+    let raw: Bool
 
     /// Heard without a Mac: likely worse.
     var heardOnPhone: Bool { heardOn == "phone" || heardOn == "apple" }
@@ -35,6 +37,7 @@ struct DictationItem: Identifiable, Hashable {
         recording = json["recording"] as? Bool ?? false
         local = json["local"] as? Bool ?? false
         before = json["before"] as? String
+        raw = json["raw"] as? Bool ?? false
     }
 }
 
@@ -166,6 +169,11 @@ struct HeardBadge: View {
     var body: some View {
         if item.heardOnPhone {
             Label(item.local ? "phone only · not sent" : "phone only", systemImage: "exclamationmark.triangle.fill")
+                .font(.caption2.weight(.semibold)).foregroundStyle(.orange)
+                .padding(.horizontal, 7).padding(.vertical, 2)
+                .background(Color.orange.opacity(0.15), in: Capsule())
+        } else if item.raw {
+            Label("Mac · raw", systemImage: "exclamationmark.triangle.fill")
                 .font(.caption2.weight(.semibold)).foregroundStyle(.orange)
                 .padding(.horizontal, 7).padding(.vertical, 2)
                 .background(Color.orange.opacity(0.15), in: Capsule())

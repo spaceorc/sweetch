@@ -309,7 +309,13 @@ enum Hearing {
 
     // MARK: - Settling
 
-    private static let settleTimeout: TimeInterval = 1.5
+    /// How long the model may take, and how much it may write, for versions this long: a short
+    /// dictation 1.5 s, as ever; a long one more — the model writes the whole text back, and with
+    /// 1.5 s and 400 tokens 95% of dictations over 600 characters went unsettled, typed without
+    /// their punctuation (24 Oct). Capped: past it the bare version still comes.
+    static func settleLimits(longest: Int) -> (seconds: TimeInterval, tokens: Int) {
+        (min(1.5 + Double(max(0, longest - 200)) / 250, 8), 400 + longest * 2 / 3)
+    }
 
     /// A reply that may land after the wait for it gave up.
     private final class Box: @unchecked Sendable {
@@ -425,13 +431,14 @@ enum Hearing {
 
         var settlement: [String: Any] = ["input": block]
         guard LLMClient.isConfigured else { return (nil, settlement) }
+        let (settleTimeout, maxTokens) = settleLimits(longest: versions.map(\.text.count).max() ?? 0)
         let started = Date()
         let done = DispatchSemaphore(value: 0)
         let reply = Box()
         Task {
             defer { done.signal() }
             do {
-                reply.value = try await LLMClient.complete(system: system, messages: [["role": "user", "content": block]], maxTokens: 400, purpose: "settle")
+                reply.value = try await LLMClient.complete(system: system, messages: [["role": "user", "content": block]], maxTokens: maxTokens, purpose: "settle")
             } catch {
                 log.error("dictation: settling failed: \(String(describing: error), privacy: .public)")
             }
